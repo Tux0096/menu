@@ -1,0 +1,3 @@
+# robots.txt генерируется автоматически /lib/common.js/generateRobots
+User-agent: *
+Disallow: /

@@ -1,0 +1,183 @@
+@import "vars";
+
+@mixin MobHeadline1 {
+  font-weight: 700;
+  font-size:   extClamp(36);
+  line-height: 1.11;
+}
+
+@mixin MobHeadline2 {
+
+  font-weight: 700;
+  font-size:   extClamp(32);
+  line-height: 1.25;
+}
+
+
+
+@mixin MobHeadline4 {
+  font-weight: 700;
+  font-size:   extClamp(20);
+  line-height: 1.2;
+}
+
+@mixin MobHeadline5 {
+  font-weight: 700;
+  font-size:   extClamp(18);
+  line-height: 1.22;
+}
+
+@mixin MobSubTitle {
+  font-weight: 400;
+  font-size:   extClamp(16);
+  line-height: 1.25;
+
+}
+
+@mixin MobBody {
+  font-weight: 400;
+  font-size:   extClamp(15);
+  line-height: 1.33;
+}
+
+@mixin MobBodyBold {
+  font-weight: 700;
+  font-size:   extClamp(15);
+  line-height: 1.33;
+
+}
+
+@mixin MobCaption {
+  font-weight: 400;
+  font-size:   extClamp(13);
+  line-height: 1.23
+
+}
+
+@mixin MobCaptionBold {
+  font-weight: 700;
+  font-size:   extClamp(13);
+  line-height: 1.23;
+}
+
+@mixin MobMicro {
+  font-weight: 400;
+  font-size:   extClamp(11);
+  line-height: 1.18;
+}
+
+@mixin MobMicroBold {
+  font-weight: 700;
+  font-size:   extClamp(11);
+  line-height: 1.18;
+}
+
+
+@mixin WebHeadline1 {
+  font-weight: 700;
+  font-size:   extClamp(44);
+  line-height: 1.09;
+}
+
+@mixin WebHeadline2 {
+  font-weight: 700;
+  font-size:   extClamp(36);
+  line-height: 1.11;
+}
+
+@mixin WebHeadline3 {
+  font-weight: 700;
+  font-size:   extClamp(32);
+  line-height: 1.12;
+}
+
+@mixin WebHeadline4 {
+  font-weight: 700;
+  font-size:   extClamp(28);
+  line-height: 1.14;
+}
+
+@mixin WebHeadline5 {
+  font-weight: 700;
+  font-size:   extClamp(24);
+  line-height: 1.17;
+}
+
+@mixin WebHeadline6 {
+  font-weight: 700;
+  font-size:   extClamp(20);
+  line-height: 1.2;
+}
+
+@mixin WebSubTitle {
+  font-weight: 400;
+  font-size:   extClamp(17);
+  line-height: 1.41;
+}
+
+@mixin WebBody {
+  font-weight: 400;
+  font-size:   extClamp(15);
+  line-height: 1.33;
+}
+
+@mixin WebBodyBold {
+  font-weight: 700;
+  font-size:   extClamp(15);
+  line-height: 1.33;
+}
+
+@mixin WebCaption {
+  font-weight: 400;
+  font-size:   extClamp(13);
+  line-height: 1.23;
+}
+
+@mixin WebCaptionBold {
+  font-weight: 700;
+  font-size:   extClamp(13);
+  line-height: 1.23;
+}
+
+@mixin WebMicro {
+  font-weight: 400;
+  font-size:   extClamp(11);
+  line-height: 1.27;
+}
+
+@mixin WebMicroBold {
+  font-weight: 700;
+  font-size:   extClamp(11);
+  line-height: 1.27;
+}
+
+
+@function getRelativeUnit($size) {
+  $res: calc($size / 320) * 100vw;
+  @return #{$res};
+}
+
+@function getSizeByWidth($size, $width) {
+  $res: $size * calc($width / 320);
+  @return #{$res}px;
+}
+
+
+@function extClamp($n, $w:$page-content-width) {
+  $size: if(unit($n) == 'px', calc($n / 1px), $n);
+  $width: if(unit($w) == 'px', calc($w / 1px), $w);
+  $res1: getRelativeUnit($size);
+  $res2: getSizeByWidth($size, $width);
+  @return clamp(#{$size}px, #{$res1}, #{$res2});
+}
+
+@function extClampNegative($n, $w:$page-content-width) {
+  $size: if(unit($n) == 'px', calc($n / 1px), $n);
+  $width: if(unit($w) == 'px', calc($w / 1px), $w);
+  $res1: getRelativeUnit($size);
+  $res2: getSizeByWidth($size, $width);
+  @return calc(clamp(#{$size}px, #{$res1}, #{$res2}) * -1);
+}
+
+
+

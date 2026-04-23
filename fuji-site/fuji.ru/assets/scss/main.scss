@@ -1,0 +1,479 @@
+@import "./normalize.css";
+@import "../fonts/Stolzl/stylesheet.css";
+@import "../fonts/Wix-Madefor-Display/stylesheet.css";
+@import "../fonts/Avenir-Next-Cyr/stylesheet.css";
+@import "../fonts/NauryzRedKeds/stylesheet.css";
+@import "./advent-fonts.scss";
+
+@import "vue-multiselect/dist/vue-multiselect.min.css";
+
+
+html {
+  box-sizing: border-box;
+  scroll-behavior: smooth;
+}
+
+html, body {
+  width: 100%;
+  max-width: 100vw;
+  background: #993ca6;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+
+body {
+  font-family: 'Wix Madefor Display', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+  font-size: extClamp(10);
+  font-weight: 400;
+  font-style: normal;
+  line-height: 120%;
+  margin: 0;
+  padding: 0;
+  color: var(---Main-Black);
+  background-color: var(---Main-White);
+
+  @media screen and (min-width: 768px) {
+    font-size: 16px;
+
+  }
+
+}
+
+::-webkit-scrollbar {
+  width: 2px;
+
+}
+
+::-webkit-scrollbar-track {
+  border-radius: 16px;
+  background: var(---Primary-LightGray, #f5f5f5);
+
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 16px;
+  background: var(---Primary-Gray, #969696);
+}
+
+img {
+  width: auto;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+a {
+  text-decoration: none;
+}
+
+h1 {
+  font-size: max(16px, min(5vw, 28.8px));
+  font-weight: 600;
+  font-style: normal;
+  line-height: 100%;
+  color: var(---Main-Black, #292929);
+  font-feature-settings: "liga" off, "clig" off;
+
+
+  @media screen and (min-width: 768px) {
+    font-size: 32px;
+    font-weight: 500;
+    line-height: 100%;
+  }
+
+  @media screen and (min-width: 1280px) {
+
+  }
+}
+
+
+.scroll-hidden {
+  overflow: hidden;
+}
+
+.line {
+  height: 1px;
+  background: var(---Extra-LightGray, #e8e8e8);
+}
+
+.visually-hidden {
+  position: absolute;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+}
+
+.page-content {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: $page-content-width;
+  margin: 0 auto;
+  padding: 0 extClamp(16) 0;
+
+  @media screen and (min-width: 768px) {
+    max-width: 768px;
+    padding: 0 24px 0;
+  }
+
+  @media screen and (min-width: 1280px) {
+    max-width: 1440px;
+    padding: 0 60px 0;
+  }
+
+}
+
+p {
+  margin: extClamp(10) 0;
+
+  &:first-child {
+    margin-top: 0;
+  }
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+
+  @media screen and (min-width: 768px) {
+    margin: 1em 0;
+  }
+
+  @media screen and (min-width: 1280px) {
+
+  }
+}
+
+
+.multi-ordered-list ul,
+.multi-ordered-list ol {
+  padding: 0;
+  list-style: none;
+  counter-reset: item;
+}
+
+.multi-ordered-list ul li,
+.multi-ordered-list ol li {
+  position: relative;
+  margin-top: extClamp(10);
+
+  @media screen and (min-width: 768px) {
+    margin-top: 10px;
+  }
+
+  @media screen and (min-width: 1280px) {
+
+  }
+
+}
+
+.multi-ordered-list ul li:before,
+.multi-ordered-list ol li:before {
+  float: left;
+  margin-right: 10px;
+  content: counters(item, ".") " ";
+  counter-increment: item;
+  text-align: right;
+}
+
+
+.is-hidden {
+  display: none !important;
+}
+
+
+.page-enter-active,
+.page-leave-active {
+  transition: opacity 0.1s;
+}
+
+.page-enter,
+.page-leave-to {
+  opacity: 0;
+}
+
+
+.not-work-text {
+  font-size: extClamp(16);
+  font-weight: 500;
+  line-height: 120%;
+  display: flex;
+  flex-direction: column;
+  text-align: center;
+  color: var(---Main-Black, #292929);
+  gap: extClamp(10);
+
+  @media screen and (min-width: 768px) {
+    font-size: 30px;
+    font-weight: 500;
+    gap: 10px;
+  }
+
+  @media screen and (min-width: 1280px) {
+    font-size: 24px;
+    gap: 20px;
+  }
+
+  // .not-work-text__bottom
+  &__bottom {
+    font-size: extClamp(10);
+    font-weight: 500;
+    line-height: 120%;
+    text-align: center;
+    text-align: center;
+    color: var(---Main-Purple, #993ca6);
+
+    @media screen and (min-width: 768px) {
+      font-size: 24px;
+    }
+
+    @media screen and (min-width: 1280px) {
+      font-size: 16px;
+    }
+  }
+}
+
+
+.safe-top {
+  padding-top: var(--safe-area-inset-top, 0);
+}
+
+.safe-left {
+  padding-left: var(--safe-area-inset-left, 0);
+}
+
+.safe-right {
+  padding-right: var(--safe-area-inset-rigth, 0);
+}
+
+.safe-bottom {
+  padding-bottom: var(--safe-area-inset-bottom, 0);
+}
+
+.layout__notifications {
+  left: 50% !important;
+  width: calc(100% - 20px) !important;
+  max-width: $notifications-width !important;
+  transform: translateX(-50%);
+
+
+  .vue-notification-wrapper {
+    overflow: visible;
+    width: 100%;
+    max-width: $notifications-width;
+  }
+
+  .custom-vue-notification {
+    font-size: extClamp(12);
+    font-weight: 600;
+    line-height: 120%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: extClamp(10);
+    padding: extClamp(16) extClamp(16);
+    color: var(---Main-White, #fff);
+    border: none;
+    border-radius: extClamp(6);
+    background: var(---Extra-DarkGreen, #21ac37);
+
+
+    @media screen and (min-width: 768px) {
+      font-size: 16px;
+      margin-bottom: 10px;
+      padding: 20px 10px;
+      border-radius: 20px;
+      box-shadow: 0p 6px 20px 0 rgba(84, 84, 84, 0.22);
+    }
+
+    @media screen and (min-width: 1280px) {
+
+    }
+
+
+    .notification-content {
+      position: relative;
+      display: flex;
+      align-items: center;
+      gap: extClamp(5);
+
+      @media screen and (min-width: 768px) {
+        gap: 10px;
+      }
+
+      @media screen and (min-width: 1280px) {
+
+      }
+
+      .notification-content__icon {
+        width: extClamp(14);
+        height: extClamp(14);
+
+        @media screen and (min-width: 768px) {
+          width: 40px;
+          height: 40px;
+        }
+
+        @media screen and (min-width: 1280px) {
+
+        }
+      }
+    }
+
+    &.warn {
+      color: #f48a06;
+      background: #f48a06;
+    }
+
+    &.error {
+      background: var(---Extra-SpicyRed, #ff003d);
+    }
+
+    &.success {
+      background: var(---Extra-DarkGreen, #21ac37);
+    }
+  }
+}
+
+// fis swiper bug in additional items
+.swiper-wrapper {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  box-sizing: content-box;
+  width: 100%;
+  height: 100%;
+  transition-property: transform;
+}
+
+.page-content__title {
+  font-size: extClamp(18);
+  font-weight: 600;
+  line-height: 120%;
+  margin-top: extClamp(16);
+  color: var(---Main-Black, #292929);
+
+  @media screen and (min-width: 768px) {
+    font-size: 24px;
+    font-weight: 400;
+    margin-bottom: 20px;
+  }
+
+  @media screen and (min-width: 1280px) {
+    font-size: 36px;
+    line-height: 100%;
+    margin-bottom: 40px;
+  }
+}
+
+.page-user-agreement {
+
+  h2 {
+    margin-top: 1em;
+    margin-bottom: 1em;
+  }
+}
+
+.page-loyalty-program,
+.page-oferta {
+
+  h2 {
+    margin-top: 1em;
+    margin-bottom: 1em;
+  }
+
+  .table-container {
+    overflow-x: auto;
+  }
+
+  table {
+    font-family: sans-serif;
+    font-size: 0.9em;
+    width: 100%;
+    min-width: 400px;
+    margin: extClamp(25) 0;
+    border-collapse: collapse;
+    box-shadow: 0 0 extClamp(20) rgba(0, 0, 0, 0.15);
+
+    @media screen and (min-width: 768px) {
+      margin: 25px 0;
+      box-shadow: 0 0 20px rgba(0, 0, 0, 0.15);
+    }
+
+    @media screen and (min-width: 1280px) {
+
+    }
+  }
+
+  th,
+  td {
+    padding: extClamp(12) extClamp(15);
+
+    @media screen and (min-width: 768px) {
+      padding: 12px 15px;
+    }
+
+    @media screen and (min-width: 1280px) {
+
+    }
+  }
+
+  th {
+    text-align: left;
+    color: #fff;
+    background-color: #993ca6;
+  }
+
+  tr {
+    border-bottom: 1px solid #ddd;
+  }
+
+  tr:nth-of-type(even) {
+    background-color: #f3f3f3;
+  }
+
+  tr:last-of-type {
+    border-bottom: 2px solid #993ca6;
+  }
+
+  a {
+    font-weight: 700;
+    color: #993ca6;
+  }
+
+}
+
+.filter-empty {
+  font-weight: 700;
+  text-align: center;
+}
+
+.rub {
+  font-size: 0.835em;
+  text-transform: uppercase;
+}
+
+[id*=cp-scrollable] > iframe {
+  margin-top: var(--safe-area-inset-top, 0) !important;
+}
+
+.modal-cart-items-error {
+  font-size: extClamp(13);
+  padding: 0 extClamp(15);
+
+  @media screen and (min-width: 768px) {
+    font-size: 13px;
+    padding: 0 15px;
+  }
+
+  @media screen and (min-width: 1280px) {
+
+  }
+}
+

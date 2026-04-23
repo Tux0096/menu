@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none">
+  <defs>
+    <radialGradient id="paint0_radial_animated_2" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(12 12) rotate(90) scale(12)">
+      <stop stop-color="white"/>
+      <stop offset="1" stop-color="#FF5E5E" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g style="mix-blend-mode:color-dodge">
+    <rect width="24" height="24" fill="black"/>
+    <circle cx="12" cy="12" r="12" fill="url(#paint0_radial_animated_2)">
+      <animate attributeName="r" values="1;12;1" dur="2s" begin="1s" repeatCount="indefinite" calcMode="spline" keySplines="0.4 0 0.2 1; 0.4 0 0.2 1"/>
+      <animate attributeName="opacity" values="0.5;1;0.5" dur="2s" begin="1s" repeatCount="indefinite" calcMode="spline" keySplines="0.4 0 0.2 1; 0.4 0 0.2 1"/>
+    </circle>
+  </g>
+</svg>

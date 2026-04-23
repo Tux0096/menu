@@ -1,0 +1,36 @@
+
+************************************************
+<b><i>Заказ с сайта **fuji**!</i></b>
+
+Заказ #{{order.id}} от {{ order.formatDate }}
+
+<b>Тип доставки:</b> {{order.deliveryTypeHTML}}
+<b>Ресторан:</b> {{order.restaurantName}}
+<b>Тип оплаты:</b> {{order.paymentTypeHTML}}
+<b>Сумма заказа:</b> {{order.total}}
+<b>Кол-во персон:</b> {{order.personsCount}}
+
+----------------------------------------------
+
+<b>Клиент:</b> {{order.user.name}}
+<b>Телефон:</b> {{order.user.phone}}
+
+{{#unless order.isSelfService}}
+  ----------------------------------------------
+  <b>Город:</b> {{order.address.city}}
+  <b>Улица:</b> {{order.address.street}}
+  <b>Дом:</b> {{order.address.home}}
+  {{#if order.address.apartment}}<b>Квартира:</b> {{order.address.apartment}}{{/if}}
+  {{#if order.address.entrance}}<b>Подъезд:</b> {{order.address.entrance}}{{/if}}
+  {{#if order.address.floor}}<b>Этаж:</b> {{order.address.floor}}{{/if}}
+  {{#if order.address.housing}}<b>Корпус:</b> {{order.address.housing}}{{/if}}
+  {{#if order.address.doorphone}}<b>Домофон:</b> {{order.address.doorphone}}{{/if}}
+{{/unless}}
+
+<b>Комментарий:</b> {{order.comment}}
+
+<b>-----Состав-----</b>
+{{order.itemsHTML}}
+************************************************
+
+

@@ -1,0 +1,10 @@
+@font-face {
+  font-family: 'NauryzRedKeds';
+  src: url('NauryzRedKeds.woff2') format('woff2'),
+  url('NauryzRedKeds.woff') format('woff');
+  font-weight: bold;
+  font-style: normal;
+  font-display: swap;
+}
+
+

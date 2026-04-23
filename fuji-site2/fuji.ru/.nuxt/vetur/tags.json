@@ -1,0 +1,317 @@
+{
+  "DelayHydration": {
+    "description": "Auto imported from node_modules/nuxt-delay-hydration/dist/runtime/components/DelayHydration.vue"
+  },
+  "HydrationStatus": {
+    "description": "Auto imported from node_modules/nuxt-delay-hydration/dist/runtime/components/HydrationStatus.vue"
+  },
+  "AllergensSelector": {
+    "description": "Auto imported from components/AllergensSelector.vue"
+  },
+  "AppAddressList": {
+    "description": "Auto imported from components/AppAddressList.vue"
+  },
+  "AppApplicationLinks": {
+    "description": "Auto imported from components/AppApplicationLinks.vue"
+  },
+  "AppAuth": {
+    "description": "Auto imported from components/AppAuth.vue"
+  },
+  "AppCalling": {
+    "description": "Auto imported from components/AppCalling.vue"
+  },
+  "AppCheckoutAddress": {
+    "description": "Auto imported from components/AppCheckoutAddress.vue"
+  },
+  "AppCitySelector": {
+    "description": "Auto imported from components/AppCitySelector.vue"
+  },
+  "AppCloseButton": {
+    "description": "Auto imported from components/AppCloseButton.vue"
+  },
+  "AppContent": {
+    "description": "Auto imported from components/AppContent.vue"
+  },
+  "AppDeliveryFilter": {
+    "description": "Auto imported from components/AppDeliveryFilter.vue"
+  },
+  "AppDeliverySelected": {
+    "description": "Auto imported from components/AppDeliverySelected.vue"
+  },
+  "AppDownCounter": {
+    "description": "Auto imported from components/AppDownCounter.vue"
+  },
+  "AppExternalLink": {
+    "description": "Auto imported from components/AppExternalLink.vue"
+  },
+  "AppFreeCall": {
+    "description": "Auto imported from components/AppFreeCall.vue"
+  },
+  "AppLike": {
+    "description": "Auto imported from components/AppLike.vue"
+  },
+  "AppMainMenu": {
+    "description": "Auto imported from components/AppMainMenu.vue"
+  },
+  "AppMainTextBlock": {
+    "description": "Auto imported from components/AppMainTextBlock.vue"
+  },
+  "AppMobileApp": {
+    "description": "Auto imported from components/AppMobileApp.vue"
+  },
+  "AppPromoCode": {
+    "description": "Auto imported from components/AppPromoCode.vue"
+  },
+  "AppQty": {
+    "description": "Auto imported from components/AppQty.vue"
+  },
+  "AppReservation": {
+    "description": "Auto imported from components/AppReservation.vue"
+  },
+  "AppRestaurant": {
+    "description": "Auto imported from components/AppRestaurant.vue"
+  },
+  "AppRestaurantList": {
+    "description": "Auto imported from components/AppRestaurantList.vue"
+  },
+  "AppSlider": {
+    "description": "Auto imported from components/AppSlider.vue"
+  },
+  "AppSnackGift": {
+    "description": "Auto imported from components/AppSnackGift.vue"
+  },
+  "AppSocialLinks": {
+    "description": "Auto imported from components/AppSocialLinks.vue"
+  },
+  "AppTags": {
+    "description": "Auto imported from components/AppTags.vue"
+  },
+  "AppUpdate": {
+    "description": "Auto imported from components/AppUpdate.vue"
+  },
+  "AppVacancyForm": {
+    "description": "Auto imported from components/AppVacancyForm.vue"
+  },
+  "MainMenu": {
+    "description": "Auto imported from components/MainMenu.vue"
+  },
+  "MobileBottomFilterBtn": {
+    "description": "Auto imported from components/MobileBottomFilterBtn.vue"
+  },
+  "MobileBottomMenuBtn": {
+    "description": "Auto imported from components/MobileBottomMenuBtn.vue"
+  },
+  "MobileBottomPersonalBtn": {
+    "description": "Auto imported from components/MobileBottomPersonalBtn.vue"
+  },
+  "MobileBottomStoriesBtn": {
+    "description": "Auto imported from components/MobileBottomStoriesBtn.vue"
+  },
+  "TheFooter": {
+    "description": "Auto imported from components/TheFooter.vue"
+  },
+  "TheHeader": {
+    "description": "Auto imported from components/TheHeader.vue"
+  },
+  "TheMobileBottomMenu": {
+    "description": "Auto imported from components/TheMobileBottomMenu.vue"
+  },
+  "TheModals": {
+    "description": "Auto imported from components/TheModals.vue"
+  },
+  "UserEditForm": {
+    "description": "Auto imported from components/UserEditForm.vue"
+  },
+  "Address": {
+    "description": "Auto imported from components/Address/Address.vue"
+  },
+  "BaseAddressItem": {
+    "description": "Auto imported from components/Base/BaseAddressItem.vue"
+  },
+  "BaseButton": {
+    "description": "Auto imported from components/Base/BaseButton.vue"
+  },
+  "BaseCheckbox": {
+    "description": "Auto imported from components/Base/BaseCheckbox.vue"
+  },
+  "BaseCloseButton": {
+    "description": "Auto imported from components/Base/BaseCloseButton.vue"
+  },
+  "BaseGradientButton": {
+    "description": "Auto imported from components/Base/BaseGradientButton.vue"
+  },
+  "BaseInput": {
+    "description": "Auto imported from components/Base/BaseInput.vue"
+  },
+  "BasePopupInformation": {
+    "description": "Auto imported from components/Base/BasePopupInformation.vue"
+  },
+  "BaseRadio": {
+    "description": "Auto imported from components/Base/BaseRadio.vue"
+  },
+  "BaseSelect": {
+    "description": "Auto imported from components/Base/BaseSelect.vue"
+  },
+  "BaseTextarea": {
+    "description": "Auto imported from components/Base/BaseTextarea.vue"
+  },
+  "CartAdditionalItems": {
+    "description": "Auto imported from components/Cart/AdditionalItems.vue"
+  },
+  "CartAdditionalItemV1": {
+    "description": "Auto imported from components/Cart/AdditionalItemV1.vue"
+  },
+  "CartAdditionalItemV2": {
+    "description": "Auto imported from components/Cart/AdditionalItemV2.vue"
+  },
+  "Cart": {
+    "description": "Auto imported from components/Cart/Cart.vue"
+  },
+  "CartBlock": {
+    "description": "Auto imported from components/Cart/CartBlock.vue"
+  },
+  "CartEmpty": {
+    "description": "Auto imported from components/Cart/CartEmpty.vue"
+  },
+  "CartItem": {
+    "description": "Auto imported from components/Cart/CartItem.vue"
+  },
+  "CartPopover": {
+    "description": "Auto imported from components/Cart/CartPopover.vue"
+  },
+  "CartSauceSelection": {
+    "description": "Auto imported from components/Cart/CartSauceSelection.vue"
+  },
+  "CartSauceSelectionItem": {
+    "description": "Auto imported from components/Cart/CartSauceSelectionItem.vue"
+  },
+  "CheckoutHeader": {
+    "description": "Auto imported from components/Checkout/CheckoutHeader.vue"
+  },
+  "CheckoutPanel": {
+    "description": "Auto imported from components/Checkout/CheckoutPanel.vue"
+  },
+  "CatalogItemModsMany": {
+    "description": "Auto imported from components/CatalogItemMods/CatalogItemModsMany.vue"
+  },
+  "CatalogItemModsManyItem": {
+    "description": "Auto imported from components/CatalogItemMods/CatalogItemModsManyItem.vue"
+  },
+  "CatalogItemModsOne": {
+    "description": "Auto imported from components/CatalogItemMods/CatalogItemModsOne.vue"
+  },
+  "CatalogItemMods": {
+    "description": "Auto imported from components/CatalogItemMods/index.vue"
+  },
+  "CatalogAddToCartButton": {
+    "description": "Auto imported from components/Catalog/AddToCartButton.vue"
+  },
+  "CatalogDetailItem": {
+    "description": "Auto imported from components/Catalog/CatalogDetailItem.vue"
+  },
+  "CatalogHeaderCategories": {
+    "description": "Auto imported from components/Catalog/CatalogHeaderCategories.vue"
+  },
+  "CatalogItem": {
+    "description": "Auto imported from components/Catalog/CatalogItem.vue"
+  },
+  "CatalogItemMod": {
+    "description": "Auto imported from components/Catalog/CatalogItemMod.vue"
+  },
+  "CatalogMenu": {
+    "description": "Auto imported from components/Catalog/CatalogMenu.vue"
+  },
+  "CatalogPriceButton": {
+    "description": "Auto imported from components/Catalog/CatalogPriceButton.vue"
+  },
+  "CatalogSection": {
+    "description": "Auto imported from components/Catalog/CatalogSection.vue"
+  },
+  "CitySelection": {
+    "description": "Auto imported from components/CitySelection/CitySelection.vue"
+  },
+  "CitySelectionItem": {
+    "description": "Auto imported from components/CitySelection/CitySelectionItem.vue"
+  },
+  "Error": {
+    "description": "Auto imported from components/Error/index.vue"
+  },
+  "FilterComponentIndex": {
+    "description": "Auto imported from components/FilterComponent/FilterComponentIndex.vue"
+  },
+  "FilterComponentSearch": {
+    "description": "Auto imported from components/FilterComponent/FilterComponentSearch.vue"
+  },
+  "FilterComponentSelector": {
+    "description": "Auto imported from components/FilterComponent/FilterComponentSelector.vue"
+  },
+  "HistoryOrderItem": {
+    "description": "Auto imported from components/History/HistoryOrderItem.vue"
+  },
+  "HistoryOrderItems": {
+    "description": "Auto imported from components/History/HistoryOrderItems.vue"
+  },
+  "Modal": {
+    "description": "Auto imported from components/Modal/Modal.vue"
+  },
+  "ModalConfirm": {
+    "description": "Auto imported from components/Modal/ModalConfirm.vue"
+  },
+  "ModalThanks": {
+    "description": "Auto imported from components/Modal/ModalThanks.vue"
+  },
+  "ModalOneTimeMarchModal": {
+    "description": "Auto imported from components/Modal/OneTimeMarchModal.vue"
+  },
+  "OrderStatusStepper": {
+    "description": "Auto imported from components/Order/StatusStepper.vue"
+  },
+  "PersonalEmptyPage": {
+    "description": "Auto imported from components/Personal/EmptyPage.vue"
+  },
+  "PersonalPromoCard": {
+    "description": "Auto imported from components/Personal/PromoCard.vue"
+  },
+  "SliderMain": {
+    "description": "Auto imported from components/Slider/SliderMain.vue"
+  },
+  "StoriesBullet": {
+    "description": "Auto imported from components/Stories/StoriesBullet.vue"
+  },
+  "StoriesIndex": {
+    "description": "Auto imported from components/Stories/StoriesIndex.vue"
+  },
+  "ActionsAdventCalendarToolbar": {
+    "description": "Auto imported from components/Actions/Advent2025/AdventCalendarToolbar.vue"
+  },
+  "ActionsAdvent2025BrandHeader": {
+    "description": "Auto imported from components/Actions/Advent2025/BrandHeader.vue"
+  },
+  "ActionsAdvent2025CalendarScreen": {
+    "description": "Auto imported from components/Actions/Advent2025/CalendarScreen.vue"
+  },
+  "ActionsAdvent2025DayItem": {
+    "description": "Auto imported from components/Actions/Advent2025/DayItem.vue"
+  },
+  "ActionsAdvent2025IntroScreen": {
+    "description": "Auto imported from components/Actions/Advent2025/IntroScreen.vue"
+  },
+  "ActionsAdvent2025PromoModal": {
+    "description": "Auto imported from components/Actions/Advent2025/PromoModal.vue"
+  },
+  "ActionsFMPromosFMPromoItem": {
+    "description": "Auto imported from components/Actions/FMPromos/FMPromoItem.vue"
+  },
+  "ActionsFMPromosModal": {
+    "description": "Auto imported from components/Actions/FMPromos/FMPromosModal.vue"
+  },
+  "ActionsNYNYCalendarModal": {
+    "description": "Auto imported from components/Actions/NY/NYCalendarModal.vue"
+  },
+  "BaseTimeSelection": {
+    "description": "Auto imported from components/Base/BaseTimeSelection/BaseTimeSelection.vue"
+  },
+  "BaseTimeSelectionItem": {
+    "description": "Auto imported from components/Base/BaseTimeSelection/BaseTimeSelectionItem.vue"
+  }
+}

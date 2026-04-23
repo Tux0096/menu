@@ -1,0 +1,630 @@
+[
+  {
+    "name": "icons-list",
+    "path": "/_icons",
+    "component": "C:\\Users\\Алексей\\OneDrive\\Рабочий стол\\menu\\fuji-site2\\fuji.ru\\node_modules\\@nuxtjs\\svg-sprite\\dist\\runtime\\components\\icons-list.vue",
+    "url": "/_icons",
+    "_name": "_5b4be908"
+  },
+  {
+    "name": "about",
+    "path": "/about",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\about.vue",
+    "chunkName": "pages/about",
+    "url": "/about",
+    "_name": "_78e58288"
+  },
+  {
+    "name": "advent",
+    "path": "/advent",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\advent.vue",
+    "chunkName": "pages/advent",
+    "url": "/advent",
+    "_name": "_4e94d76d"
+  },
+  {
+    "name": "advent-2025",
+    "path": "/advent-2025",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\advent-2025\\\\index.vue",
+    "chunkName": "pages/advent-2025/index",
+    "url": "/advent-2025",
+    "_name": "_3841a4d1"
+  },
+  {
+    "name": "cart",
+    "path": "/cart",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\cart.vue",
+    "chunkName": "pages/cart",
+    "url": "/cart",
+    "_name": "_ea240b16"
+  },
+  {
+    "name": "catalog",
+    "path": "/catalog",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\catalog\\\\index.vue",
+    "chunkName": "pages/catalog/index",
+    "url": "/catalog",
+    "_name": "_223021ae"
+  },
+  {
+    "name": "checkout",
+    "path": "/checkout",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\checkout.vue",
+    "chunkName": "pages/checkout",
+    "url": "/checkout",
+    "_name": "_3712a31b"
+  },
+  {
+    "name": "complete",
+    "path": "/complete",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\complete.vue",
+    "chunkName": "pages/complete",
+    "url": "/complete",
+    "_name": "_711954e4"
+  },
+  {
+    "name": "complete-error",
+    "path": "/complete-error",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\complete-error.vue",
+    "chunkName": "pages/complete-error",
+    "url": "/complete-error",
+    "_name": "_5d943589"
+  },
+  {
+    "name": "delivery",
+    "path": "/delivery",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\delivery.vue",
+    "chunkName": "pages/delivery",
+    "url": "/delivery",
+    "_name": "_08896ac9"
+  },
+  {
+    "name": "happy-hours",
+    "path": "/happy-hours",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\happy-hours\\\\index.vue",
+    "chunkName": "pages/happy-hours/index",
+    "url": "/happy-hours",
+    "_name": "_0043a9c5"
+  },
+  {
+    "name": "legal",
+    "path": "/legal",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\legal.vue",
+    "chunkName": "pages/legal",
+    "url": "/legal",
+    "_name": "_45b64bb4"
+  },
+  {
+    "name": "legal-information",
+    "path": "/legal-information",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\legal-information.vue",
+    "chunkName": "pages/legal-information",
+    "url": "/legal-information",
+    "_name": "_28918113"
+  },
+  {
+    "name": "loyalty-program",
+    "path": "/loyalty-program",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\loyalty-program\\\\index.vue",
+    "chunkName": "pages/loyalty-program/index",
+    "url": "/loyalty-program",
+    "_name": "_22f1036c"
+  },
+  {
+    "name": "menu",
+    "path": "/menu",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\menu\\\\index.vue",
+    "chunkName": "pages/menu/index",
+    "url": "/menu",
+    "_name": "_7a2f74ce"
+  },
+  {
+    "name": "new-year-promo",
+    "path": "/new-year-promo",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\new-year-promo.vue",
+    "chunkName": "pages/new-year-promo",
+    "url": "/new-year-promo",
+    "_name": "_26d742e1"
+  },
+  {
+    "name": "oferta",
+    "path": "/oferta",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\oferta\\\\index.vue",
+    "chunkName": "pages/oferta/index",
+    "url": "/oferta",
+    "_name": "_2260b008"
+  },
+  {
+    "name": "personal",
+    "path": "/personal",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\personal\\\\index.vue",
+    "chunkName": "pages/personal/index",
+    "url": "/personal",
+    "_name": "_62c7b3cd"
+  },
+  {
+    "name": "promo",
+    "path": "/promo",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\promo\\\\index.vue",
+    "chunkName": "pages/promo/index",
+    "url": "/promo",
+    "_name": "_70e89e38"
+  },
+  {
+    "name": "push-notifications-rules",
+    "path": "/push-notifications-rules",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\push-notifications-rules.vue",
+    "chunkName": "pages/push-notifications-rules",
+    "url": "/push-notifications-rules",
+    "_name": "_6a6957f4"
+  },
+  {
+    "name": "receive-advertising-information",
+    "path": "/receive-advertising-information",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\receive-advertising-information.vue",
+    "chunkName": "pages/receive-advertising-information",
+    "url": "/receive-advertising-information",
+    "_name": "_b3d29b58"
+  },
+  {
+    "name": "restaurant",
+    "path": "/restaurant",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\restaurant.vue",
+    "chunkName": "pages/restaurant",
+    "url": "/restaurant",
+    "_name": "_99619b5c"
+  },
+  {
+    "name": "rule",
+    "path": "/rule",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\rule.vue",
+    "chunkName": "pages/rule",
+    "url": "/rule",
+    "_name": "_8fe86f5e"
+  },
+  {
+    "name": "terminal",
+    "path": "/terminal",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\terminal\\\\index.vue",
+    "chunkName": "pages/terminal/index",
+    "url": "/terminal",
+    "_name": "_34e18a11"
+  },
+  {
+    "name": "user-agreement",
+    "path": "/user-agreement",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\user-agreement.vue",
+    "chunkName": "pages/user-agreement",
+    "url": "/user-agreement",
+    "_name": "_a604bcc6"
+  },
+  {
+    "name": "vacancies",
+    "path": "/vacancies",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\vacancies.vue",
+    "chunkName": "pages/vacancies",
+    "url": "/vacancies",
+    "_name": "_644ac9d4"
+  },
+  {
+    "name": "advent-2025-legal",
+    "path": "/advent-2025/legal",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\advent-2025\\\\legal.vue",
+    "chunkName": "pages/advent-2025/legal",
+    "url": "/advent-2025/legal",
+    "_name": "_354ad990"
+  },
+  {
+    "name": "catalog-search",
+    "path": "/catalog/search",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\catalog\\\\search.vue",
+    "chunkName": "pages/catalog/search",
+    "url": "/catalog/search",
+    "_name": "_60da2508"
+  },
+  {
+    "name": "loyalty-program-app-1",
+    "path": "/loyalty-program/app-1",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\loyalty-program\\\\app-1.vue",
+    "chunkName": "pages/loyalty-program/app-1",
+    "url": "/loyalty-program/app-1",
+    "_name": "_33793f7d"
+  },
+  {
+    "name": "oferta-app-1",
+    "path": "/oferta/app-1",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\oferta\\\\app-1.vue",
+    "chunkName": "pages/oferta/app-1",
+    "url": "/oferta/app-1",
+    "_name": "_33c1692f"
+  },
+  {
+    "name": "personal-address",
+    "path": "/personal/address",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\personal\\\\address.vue",
+    "chunkName": "pages/personal/address",
+    "url": "/personal/address",
+    "_name": "_6c72f92f"
+  },
+  {
+    "name": "personal-favorite",
+    "path": "/personal/favorite",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\personal\\\\favorite.vue",
+    "chunkName": "pages/personal/favorite",
+    "url": "/personal/favorite",
+    "_name": "_341f1df1"
+  },
+  {
+    "name": "personal-history",
+    "path": "/personal/history",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\personal\\\\history.vue",
+    "chunkName": "pages/personal/history",
+    "url": "/personal/history",
+    "_name": "_58f41c62"
+  },
+  {
+    "name": "personal-promotions",
+    "path": "/personal/promotions",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\personal\\\\promotions\\\\index.vue",
+    "chunkName": "pages/personal/promotions/index",
+    "url": "/personal/promotions",
+    "_name": "_2297f4c6"
+  },
+  {
+    "name": "terminal-cart",
+    "path": "/terminal/cart",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\terminal\\\\cart.vue",
+    "chunkName": "pages/terminal/cart",
+    "url": "/terminal/cart",
+    "_name": "_2a61b59e"
+  },
+  {
+    "name": "terminal-complete",
+    "path": "/terminal/complete",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\terminal\\\\complete.vue",
+    "chunkName": "pages/terminal/complete",
+    "url": "/terminal/complete",
+    "_name": "_adee7b6c"
+  },
+  {
+    "name": "index",
+    "path": "/",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\index.vue",
+    "chunkName": "pages/index",
+    "url": "/",
+    "_name": "_cec54566"
+  },
+  {
+    "name": "personal-promotions-id",
+    "path": "/personal/promotions/:id",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\personal\\\\promotions\\\\_id.vue",
+    "chunkName": "pages/personal/promotions/_id",
+    "_name": "_6fd0cb45"
+  },
+  {
+    "name": "catalog-section",
+    "path": "/catalog/:section",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\catalog\\\\_section\\\\index.vue",
+    "chunkName": "pages/catalog/_section/index",
+    "_name": "_79cab7c8"
+  },
+  {
+    "name": "menu-slug",
+    "path": "/menu/:slug",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\menu\\\\_slug\\\\index.vue",
+    "chunkName": "pages/menu/_slug/index",
+    "_name": "_ea98c388"
+  },
+  {
+    "name": "menu-slug-cart",
+    "path": "/menu/:slug/cart",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\menu\\\\_slug\\\\cart.vue",
+    "chunkName": "pages/menu/_slug/cart",
+    "_name": "_2fa45fa6"
+  },
+  {
+    "name": "catalog-section-product_id",
+    "path": "/catalog/:section/:product_id",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\catalog\\\\_section\\\\_product_id.vue",
+    "chunkName": "pages/catalog/_section/_product_id",
+    "_name": "_2cb25480"
+  },
+  {
+    "name": "terminal",
+    "path": "/terminal",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\terminal\\\\index.vue",
+    "meta": {
+      "layout": "terminal"
+    },
+    "url": "/terminal",
+    "_name": "_34e18a11"
+  },
+  {
+    "name": "terminal-city",
+    "path": "/:city/terminal",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\terminal\\\\index.vue",
+    "meta": {
+      "layout": "terminal"
+    },
+    "_name": "_34e18a11"
+  },
+  {
+    "name": "terminal-cart",
+    "path": "/terminal/cart",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\terminal\\\\cart.vue",
+    "meta": {
+      "layout": "terminal"
+    },
+    "url": "/terminal/cart",
+    "_name": "_2a61b59e"
+  },
+  {
+    "name": "terminal-city-cart",
+    "path": "/:city/terminal/cart",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\terminal\\\\cart.vue",
+    "meta": {
+      "layout": "terminal"
+    },
+    "_name": "_2a61b59e"
+  },
+  {
+    "name": "terminal-complete",
+    "path": "/terminal/complete",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\terminal\\\\complete.vue",
+    "meta": {
+      "layout": "terminal"
+    },
+    "url": "/terminal/complete",
+    "_name": "_adee7b6c"
+  },
+  {
+    "name": "terminal-city-complete",
+    "path": "/:city/terminal/complete",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\terminal\\\\complete.vue",
+    "meta": {
+      "layout": "terminal"
+    },
+    "_name": "_adee7b6c"
+  },
+  {
+    "name": "menu-index",
+    "path": "/menu",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\menu\\\\index.vue",
+    "meta": {
+      "layout": "menu-select"
+    },
+    "url": "/menu",
+    "_name": "_7a2f74ce"
+  },
+  {
+    "name": "menu-restaurant",
+    "path": "/menu/:slug",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\menu\\\\_slug\\\\index.vue",
+    "meta": {
+      "layout": "menu"
+    },
+    "_name": "_ea98c388"
+  },
+  {
+    "name": "menu-restaurant-cart",
+    "path": "/menu/:slug/cart",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\menu\\\\_slug\\\\cart.vue",
+    "meta": {
+      "layout": "menu"
+    },
+    "_name": "_2fa45fa6"
+  },
+  {
+    "name": "city-index",
+    "path": "/:city",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\index",
+    "_name": "_2d8a4d35"
+  },
+  {
+    "name": "city-catalog",
+    "path": "/:city/catalog",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\catalog",
+    "_name": "_bd121088"
+  },
+  {
+    "name": "city-catalog-search",
+    "path": "/:city/catalog/search",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\catalog\\\\search",
+    "_name": "_53156638"
+  },
+  {
+    "name": "city-catalog-section",
+    "path": "/:city/catalog/:section",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\catalog\\\\_section",
+    "_name": "_4945a43c"
+  },
+  {
+    "name": "city-catalog-detail-product",
+    "path": "/:city/catalog/:section_id/:product_id",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\catalog\\\\_section\\\\_product_id",
+    "_name": "_6b6e5430"
+  },
+  {
+    "name": "city-about",
+    "path": "/:city/about",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\about",
+    "_name": "_2d1447f0"
+  },
+  {
+    "name": "city-legal",
+    "path": "/:city/legal",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\legal",
+    "_name": "_2db0871c"
+  },
+  {
+    "name": "city-cart",
+    "path": "/:city/cart",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\cart",
+    "_name": "_4bc7be5d"
+  },
+  {
+    "name": "city-checkout",
+    "path": "/:city/checkout",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\checkout",
+    "_name": "_3392abfa"
+  },
+  {
+    "name": "city-complete",
+    "path": "/:city/complete",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\complete",
+    "_name": "_66e08df6"
+  },
+  {
+    "name": "city-complete-error",
+    "path": "/:city/complete-error",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\complete-error",
+    "_name": "_9562b91e"
+  },
+  {
+    "name": "city-delivery",
+    "path": "/:city/delivery",
+    "alias": "/delivery",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\delivery",
+    "_name": "_889f0e9e"
+  },
+  {
+    "name": "city-restaurant",
+    "path": "/:city/restaurant",
+    "alias": "/restaurant",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\restaurant",
+    "_name": "_30dd268c"
+  },
+  {
+    "name": "city-vacancies",
+    "path": "/:city/vacancies",
+    "alias": "/vacancies",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\vacancies",
+    "_name": "_c50dd588"
+  },
+  {
+    "name": "city-promo",
+    "path": "/:city/promo",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\promo",
+    "_name": "_2deeed72"
+  },
+  {
+    "name": "city-rule",
+    "path": "/:city/rule",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\rule",
+    "_name": "_4bceda39"
+  },
+  {
+    "name": "city-legal-information",
+    "path": "/:city/legal-information",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\legal-information",
+    "_name": "_240343fb"
+  },
+  {
+    "name": "city-personal",
+    "path": "/:city/personal",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\personal",
+    "_name": "_b5f4fa06"
+  },
+  {
+    "name": "city-personal-address",
+    "path": "/:city/personal/address",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\personal\\\\address",
+    "_name": "_41bd2a17"
+  },
+  {
+    "name": "city-personal-favorite",
+    "path": "/:city/personal/favorite",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\personal\\\\favorite",
+    "_name": "_7d2dffd9"
+  },
+  {
+    "name": "city-personal-history",
+    "path": "/:city/personal/history",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\personal\\\\history",
+    "_name": "_85351a92"
+  },
+  {
+    "name": "city-push-notifications-rules",
+    "path": "/:city/push-notifications-rules",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\push-notifications-rules",
+    "_name": "_27589948"
+  },
+  {
+    "name": "city-receive-advertising-information",
+    "path": "/:city/receive-advertising-information",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\receive-advertising-information",
+    "_name": "_4e8d3dbc"
+  },
+  {
+    "name": "city-oferta",
+    "path": "/:city/oferta",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\oferta",
+    "_name": "_e4e753a4"
+  },
+  {
+    "name": "city-oferta-app-1",
+    "path": "/:city/oferta/app-1",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\oferta\\\\app-1",
+    "_name": "_51c39a17"
+  },
+  {
+    "name": "city-loyalty-program",
+    "path": "/:city/loyalty-program",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\loyalty-program",
+    "_name": "_429b64a0"
+  },
+  {
+    "name": "city-loyalty-program-app-1",
+    "path": "/:city/loyalty-program/app-1",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\loyalty-program\\\\app-1",
+    "_name": "_308ec765"
+  },
+  {
+    "name": "city-user-agreement",
+    "path": "/:city/user-agreement",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\user-agreement",
+    "_name": "_d24d8cf6"
+  },
+  {
+    "name": "new-year-promo",
+    "path": "/:city/new-year-promo",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\new-year-promo",
+    "_name": "_5fc3c66e"
+  },
+  {
+    "name": "fm-promos",
+    "path": "/:city/advent",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\advent",
+    "_name": "_7593d755"
+  },
+  {
+    "name": "happy-hours",
+    "path": "/:city/happy-hours",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\happy-hours",
+    "_name": "_f330cff6"
+  },
+  {
+    "name": "promotions",
+    "path": "/:city/personal/promotions",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\personal\\\\promotions",
+    "_name": "_079a332d"
+  },
+  {
+    "name": "promotions-detail",
+    "path": "/:city/personal/promotions/:id",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\personal\\\\promotions\\\\_id",
+    "_name": "_01d3772d"
+  },
+  {
+    "name": "advent-2025",
+    "path": "/:city/advent-2025",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\advent-2025\\\\index.vue",
+    "_name": "_3841a4d1"
+  },
+  {
+    "name": "advent-2025-legal",
+    "path": "/:city/advent-2025/legal",
+    "component": "C:\\\\Users\\\\Алексей\\\\OneDrive\\\\Рабочий стол\\\\menu\\\\fuji-site2\\\\fuji.ru\\\\pages\\\\advent-2025\\\\legal.vue",
+    "_name": "_354ad990"
+  }
+]
