@@ -1,12 +1,14 @@
 /**
- * Sync real menu from iiko → PostgreSQL
+ * Sync menu from iiko → PostgreSQL.
+ * For every restaurant in the DB we fetch nomenclature using its own organization_id
+ * and store products tagged to that restaurant.
  *
  * Usage:
- *   node db/sync-iiko.js
+ *   node db/sync-iiko.js                       # sync all restaurants
+ *   node db/sync-iiko.js leningradskaya        # sync one restaurant by slug
  *
  * Requires in .env:
  *   IIKO_API_LOGIN=<your-api-login>
- *   IIKO_ORGANIZATION_ID=05b015ec-87d0-4f5a-a7d1-3eecfe2c4fc2  (default, can override)
  */
 
 import dotenv from 'dotenv';
@@ -16,12 +18,8 @@ import { default as pool } from './pool.js';
 
 const IIKO_URL = 'https://api-ru.iiko.services';
 
-// Organization used for nomenclature loading (from iiko-adapter config comments)
-const ORGANIZATION_ID =
-  process.env.IIKO_ORGANIZATION_ID || '05b015ec-87d0-4f5a-a7d1-3eecfe2c4fc2';
-
-// Category IDs (iiko UUIDs) that should be shown in the menu.
-// Taken from fuji-api/api.fuji.ru/setting/config/catalogMenu.js
+// Категории, которые показываем в меню. Эти UUID одинаковые для всех ресторанов
+// (брались из общей номенклатуры fuji-api/setting/config/catalogMenu.js).
 const CATALOG_MENU = [
   { id: '8d2d0a59-1518-465e-b241-10c425f57a99', name: 'Комбо', slug: 'kombo', order: 1 },
   { id: '7d003f20-bacd-4aee-8c61-c395f3811bb2', name: 'Роллы', slug: 'rolly', order: 2 },
@@ -58,42 +56,31 @@ const CATALOG_MENU = [
 ];
 
 const CATALOG_IDS = new Set(CATALOG_MENU.map(c => c.id));
-const CATALOG_MAP = new Map(CATALOG_MENU.map(c => [c.id, c]));
 
 async function getToken() {
   const apiLogin = process.env.IIKO_API_LOGIN;
   if (!apiLogin) {
     throw new Error(
-      'IIKO_API_LOGIN not set in .env\n' +
-      'Add: IIKO_API_LOGIN=<your-login> to menu-api/.env'
+      'IIKO_API_LOGIN не задан в .env\n' +
+      'Добавь в menu-api/.env: IIKO_API_LOGIN=<твой-ключ>'
     );
   }
-  console.log('Getting iiko token...');
+  console.log('Получаем токен iiko...');
   const res = await axios.post(`${IIKO_URL}/api/1/access_token`, { apiLogin });
   return res.data.token;
 }
 
-async function getNomenclature(token) {
-  console.log(`Fetching nomenclature for org ${ORGANIZATION_ID}...`);
+async function getNomenclature(token, organizationId) {
   const res = await axios.post(
     `${IIKO_URL}/api/1/nomenclature`,
-    { organizationId: ORGANIZATION_ID },
+    { organizationId },
     { headers: { Authorization: `Bearer ${token}` } }
   );
   return res.data;
 }
 
-async function sync() {
-  const token = await getToken();
-  const { groups, products } = await getNomenclature(token);
-
-  console.log(`iiko returned: ${groups.length} groups, ${products.length} products`);
-
-  // Build a lookup from iiko group data (name, imageLinks, etc.)
-  const iikoGroupMap = new Map(groups.map(g => [g.id, g]));
-
-  // Categories to insert: use CATALOG_MENU order/slugs but enrich with iiko data (images)
-  const categoriesToInsert = CATALOG_MENU.map(cat => {
+async function ensureCategoriesMerged(client, iikoGroupMap) {
+  const categoriesToInsert = CATALOG_MENU.map((cat) => {
     const iikoGroup = iikoGroupMap.get(cat.id);
     const imageUrl = iikoGroup?.imageLinks?.[0] ?? null;
     return {
@@ -106,8 +93,51 @@ async function sync() {
     };
   });
 
-  // Filter relevant products: parentGroup must be in CATALOG_IDS, price > 0
-  const relevantProducts = products.filter(p => {
+  const parents = categoriesToInsert.filter((c) => !c.parent_id);
+  const children = categoriesToInsert.filter((c) => c.parent_id);
+
+  for (const cat of [...parents, ...children]) {
+    await client.query(
+      `INSERT INTO categories (id, name, slug, parent_id, sort_order, image_url, is_visible)
+       VALUES ($1, $2, $3, $4, $5, $6, true)
+       ON CONFLICT (id) DO UPDATE SET
+         name = EXCLUDED.name,
+         slug = EXCLUDED.slug,
+         parent_id = EXCLUDED.parent_id,
+         sort_order = EXCLUDED.sort_order,
+         image_url = COALESCE(EXCLUDED.image_url, categories.image_url)`,
+      [cat.id, cat.name, cat.slug, cat.parent_id, cat.sort_order, cat.image_url]
+    );
+  }
+}
+
+async function syncRestaurant(restaurant, token) {
+  const { id: restaurantId, slug, organization_id: organizationId, name } = restaurant;
+
+  if (!organizationId) {
+    console.log(`  ! ${slug}: organization_id не задан, пропускаем`);
+    return { products: 0 };
+  }
+
+  console.log(`→ ${name} (${slug})`);
+  console.log(`  organizationId: ${organizationId}`);
+
+  let nomenclature;
+  try {
+    nomenclature = await getNomenclature(token, organizationId);
+  } catch (e) {
+    const status = e.response?.status;
+    const data = e.response?.data;
+    console.log(`  ! ошибка iiko (${status}): ${JSON.stringify(data) || e.message}`);
+    return { products: 0, error: e.message };
+  }
+
+  const { groups = [], products = [] } = nomenclature;
+  console.log(`  iiko вернул: ${groups.length} групп, ${products.length} продуктов`);
+
+  const iikoGroupMap = new Map(groups.map((g) => [g.id, g]));
+
+  const relevantProducts = products.filter((p) => {
     if (!CATALOG_IDS.has(p.parentGroup)) return false;
     if (p.isDeleted) return false;
     if (p.isIncludedInMenu === false) return false;
@@ -116,30 +146,16 @@ async function sync() {
     return true;
   });
 
-  console.log(`Relevant products: ${relevantProducts.length}`);
+  console.log(`  релевантных продуктов: ${relevantProducts.length}`);
 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    // Clear in FK-safe order
-    await client.query('DELETE FROM products');
-    await client.query('DELETE FROM categories');
+    await ensureCategoriesMerged(client, iikoGroupMap);
 
-    // Insert parents first, then children (avoid FK violation)
-    const parents = categoriesToInsert.filter(c => !c.parent_id);
-    const children = categoriesToInsert.filter(c => c.parent_id);
+    await client.query(`DELETE FROM products WHERE restaurant_id = $1`, [restaurantId]);
 
-    for (const cat of [...parents, ...children]) {
-      await client.query(
-        `INSERT INTO categories (id, name, slug, parent_id, sort_order, image_url, is_visible)
-         VALUES ($1, $2, $3, $4, $5, $6, true)`,
-        [cat.id, cat.name, cat.slug, cat.parent_id, cat.sort_order, cat.image_url]
-      );
-    }
-    console.log(`Inserted ${categoriesToInsert.length} categories`);
-
-    // Insert products
     let inserted = 0;
     for (const [i, p] of relevantProducts.entries()) {
       const imageUrl = p.imageLinks?.[0] ?? null;
@@ -148,13 +164,26 @@ async function sync() {
 
       await client.query(
         `INSERT INTO products
-           (id, name, slug, description, price, weight, image_url, category_id,
-            sort_order, is_published, energy, proteins, fats, carbs)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+           (iiko_id, restaurant_id, name, slug, description, price, weight, image_url,
+            category_id, sort_order, is_published, energy, proteins, fats, carbs)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+         ON CONFLICT (restaurant_id, iiko_id) DO UPDATE SET
+           name = EXCLUDED.name,
+           description = EXCLUDED.description,
+           price = EXCLUDED.price,
+           weight = EXCLUDED.weight,
+           image_url = EXCLUDED.image_url,
+           category_id = EXCLUDED.category_id,
+           sort_order = EXCLUDED.sort_order,
+           energy = EXCLUDED.energy,
+           proteins = EXCLUDED.proteins,
+           fats = EXCLUDED.fats,
+           carbs = EXCLUDED.carbs`,
         [
           p.id,
+          restaurantId,
           p.name,
-          p.name,          // slug = name; frontend doesn't route by product slug
+          p.name,
           p.description ?? null,
           price,
           weight,
@@ -172,18 +201,56 @@ async function sync() {
     }
 
     await client.query('COMMIT');
-    console.log(`✓ Sync complete: ${inserted} products, ${categoriesToInsert.length} categories`);
+    console.log(`  ✓ записано ${inserted} продуктов`);
+    return { products: inserted };
   } catch (e) {
     await client.query('ROLLBACK');
     throw e;
   } finally {
     client.release();
   }
+}
 
+async function getRestaurants(slugFilter) {
+  const sql = slugFilter
+    ? `SELECT id, slug, name, organization_id FROM restaurants WHERE slug = $1`
+    : `SELECT id, slug, name, organization_id FROM restaurants ORDER BY sort_order, name`;
+  const args = slugFilter ? [slugFilter] : [];
+  const { rows } = await pool.query(sql, args);
+  return rows;
+}
+
+async function main() {
+  const slugArg = process.argv[2];
+  const restaurants = await getRestaurants(slugArg);
+
+  if (restaurants.length === 0) {
+    console.log(`Нет ресторанов${slugArg ? ` со slug=${slugArg}` : ''}.`);
+    process.exit(1);
+  }
+
+  const token = await getToken();
+  console.log('');
+
+  let totalProducts = 0;
+  let failed = 0;
+  for (const r of restaurants) {
+    try {
+      const res = await syncRestaurant(r, token);
+      totalProducts += res.products || 0;
+      if (res.error) failed++;
+    } catch (e) {
+      failed++;
+      console.error(`  ! ошибка по ${r.slug}: ${e.message}`);
+    }
+    console.log('');
+  }
+
+  console.log(`✓ Готово. Ресторанов: ${restaurants.length}, всего продуктов: ${totalProducts}, ошибок: ${failed}`);
   await pool.end();
 }
 
-sync().catch(e => {
+main().catch((e) => {
   console.error('Sync failed:', e.message);
   process.exit(1);
 });

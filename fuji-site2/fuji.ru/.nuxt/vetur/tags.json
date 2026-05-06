@@ -125,36 +125,6 @@
   "Address": {
     "description": "Auto imported from components/Address/Address.vue"
   },
-  "BaseAddressItem": {
-    "description": "Auto imported from components/Base/BaseAddressItem.vue"
-  },
-  "BaseButton": {
-    "description": "Auto imported from components/Base/BaseButton.vue"
-  },
-  "BaseCheckbox": {
-    "description": "Auto imported from components/Base/BaseCheckbox.vue"
-  },
-  "BaseCloseButton": {
-    "description": "Auto imported from components/Base/BaseCloseButton.vue"
-  },
-  "BaseGradientButton": {
-    "description": "Auto imported from components/Base/BaseGradientButton.vue"
-  },
-  "BaseInput": {
-    "description": "Auto imported from components/Base/BaseInput.vue"
-  },
-  "BasePopupInformation": {
-    "description": "Auto imported from components/Base/BasePopupInformation.vue"
-  },
-  "BaseRadio": {
-    "description": "Auto imported from components/Base/BaseRadio.vue"
-  },
-  "BaseSelect": {
-    "description": "Auto imported from components/Base/BaseSelect.vue"
-  },
-  "BaseTextarea": {
-    "description": "Auto imported from components/Base/BaseTextarea.vue"
-  },
   "CartAdditionalItems": {
     "description": "Auto imported from components/Cart/AdditionalItems.vue"
   },
@@ -185,23 +155,41 @@
   "CartSauceSelectionItem": {
     "description": "Auto imported from components/Cart/CartSauceSelectionItem.vue"
   },
+  "BaseAddressItem": {
+    "description": "Auto imported from components/Base/BaseAddressItem.vue"
+  },
+  "BaseButton": {
+    "description": "Auto imported from components/Base/BaseButton.vue"
+  },
+  "BaseCheckbox": {
+    "description": "Auto imported from components/Base/BaseCheckbox.vue"
+  },
+  "BaseCloseButton": {
+    "description": "Auto imported from components/Base/BaseCloseButton.vue"
+  },
+  "BaseGradientButton": {
+    "description": "Auto imported from components/Base/BaseGradientButton.vue"
+  },
+  "BaseInput": {
+    "description": "Auto imported from components/Base/BaseInput.vue"
+  },
+  "BasePopupInformation": {
+    "description": "Auto imported from components/Base/BasePopupInformation.vue"
+  },
+  "BaseRadio": {
+    "description": "Auto imported from components/Base/BaseRadio.vue"
+  },
+  "BaseSelect": {
+    "description": "Auto imported from components/Base/BaseSelect.vue"
+  },
+  "BaseTextarea": {
+    "description": "Auto imported from components/Base/BaseTextarea.vue"
+  },
   "CheckoutHeader": {
     "description": "Auto imported from components/Checkout/CheckoutHeader.vue"
   },
   "CheckoutPanel": {
     "description": "Auto imported from components/Checkout/CheckoutPanel.vue"
-  },
-  "CatalogItemModsMany": {
-    "description": "Auto imported from components/CatalogItemMods/CatalogItemModsMany.vue"
-  },
-  "CatalogItemModsManyItem": {
-    "description": "Auto imported from components/CatalogItemMods/CatalogItemModsManyItem.vue"
-  },
-  "CatalogItemModsOne": {
-    "description": "Auto imported from components/CatalogItemMods/CatalogItemModsOne.vue"
-  },
-  "CatalogItemMods": {
-    "description": "Auto imported from components/CatalogItemMods/index.vue"
   },
   "CatalogAddToCartButton": {
     "description": "Auto imported from components/Catalog/AddToCartButton.vue"
@@ -236,6 +224,18 @@
   "Error": {
     "description": "Auto imported from components/Error/index.vue"
   },
+  "CatalogItemModsMany": {
+    "description": "Auto imported from components/CatalogItemMods/CatalogItemModsMany.vue"
+  },
+  "CatalogItemModsManyItem": {
+    "description": "Auto imported from components/CatalogItemMods/CatalogItemModsManyItem.vue"
+  },
+  "CatalogItemModsOne": {
+    "description": "Auto imported from components/CatalogItemMods/CatalogItemModsOne.vue"
+  },
+  "CatalogItemMods": {
+    "description": "Auto imported from components/CatalogItemMods/index.vue"
+  },
   "FilterComponentIndex": {
     "description": "Auto imported from components/FilterComponent/FilterComponentIndex.vue"
   },
@@ -251,26 +251,14 @@
   "HistoryOrderItems": {
     "description": "Auto imported from components/History/HistoryOrderItems.vue"
   },
-  "Modal": {
-    "description": "Auto imported from components/Modal/Modal.vue"
-  },
-  "ModalConfirm": {
-    "description": "Auto imported from components/Modal/ModalConfirm.vue"
-  },
-  "ModalThanks": {
-    "description": "Auto imported from components/Modal/ModalThanks.vue"
-  },
-  "ModalOneTimeMarchModal": {
-    "description": "Auto imported from components/Modal/OneTimeMarchModal.vue"
-  },
-  "OrderStatusStepper": {
-    "description": "Auto imported from components/Order/StatusStepper.vue"
-  },
   "PersonalEmptyPage": {
     "description": "Auto imported from components/Personal/EmptyPage.vue"
   },
   "PersonalPromoCard": {
     "description": "Auto imported from components/Personal/PromoCard.vue"
+  },
+  "OrderStatusStepper": {
+    "description": "Auto imported from components/Order/StatusStepper.vue"
   },
   "SliderMain": {
     "description": "Auto imported from components/Slider/SliderMain.vue"
@@ -298,6 +286,18 @@
   },
   "ActionsAdvent2025PromoModal": {
     "description": "Auto imported from components/Actions/Advent2025/PromoModal.vue"
+  },
+  "Modal": {
+    "description": "Auto imported from components/Modal/Modal.vue"
+  },
+  "ModalConfirm": {
+    "description": "Auto imported from components/Modal/ModalConfirm.vue"
+  },
+  "ModalThanks": {
+    "description": "Auto imported from components/Modal/ModalThanks.vue"
+  },
+  "ModalOneTimeMarchModal": {
+    "description": "Auto imported from components/Modal/OneTimeMarchModal.vue"
   },
   "ActionsFMPromosFMPromoItem": {
     "description": "Auto imported from components/Actions/FMPromos/FMPromoItem.vue"

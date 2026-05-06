@@ -28,41 +28,54 @@ async function initSchema() {
 
   const { default: pool } = await import('./pool.js');
 
+  // Drop and recreate everything for a clean dev state
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS cities (
+    DROP TABLE IF EXISTS products CASCADE;
+    DROP TABLE IF EXISTS categories CASCADE;
+    DROP TABLE IF EXISTS restaurants CASCADE;
+    DROP TABLE IF EXISTS cities CASCADE;
+    DROP TABLE IF EXISTS settings CASCADE;
+  `);
+
+  await pool.query(`
+    CREATE TABLE cities (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name VARCHAR(100) NOT NULL,
       slug VARCHAR(100) UNIQUE NOT NULL,
       created_at TIMESTAMP DEFAULT NOW()
     );
 
-    CREATE TABLE IF NOT EXISTS restaurants (
+    CREATE TABLE restaurants (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       name VARCHAR(200),
       address VARCHAR(300) NOT NULL,
       city_id UUID REFERENCES cities(id),
       slug VARCHAR(200) UNIQUE NOT NULL,
       terminal_id VARCHAR(200) UNIQUE,
+      terminal_group_id VARCHAR(200),
+      organization_id VARCHAR(200),
       phone VARCHAR(50),
+      sort_order INTEGER DEFAULT 0,
       is_disabled BOOLEAN DEFAULT FALSE,
       work_hours JSONB DEFAULT '[]',
       created_at TIMESTAMP DEFAULT NOW()
     );
 
-    CREATE TABLE IF NOT EXISTS categories (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    CREATE TABLE categories (
+      id UUID PRIMARY KEY,
       name VARCHAR(200) NOT NULL,
       slug VARCHAR(200) NOT NULL,
       parent_id UUID REFERENCES categories(id),
       sort_order INTEGER DEFAULT 0,
       image_url TEXT,
       is_visible BOOLEAN DEFAULT TRUE,
-      city_slug VARCHAR(100) DEFAULT 'samara',
       created_at TIMESTAMP DEFAULT NOW()
     );
 
-    CREATE TABLE IF NOT EXISTS products (
+    CREATE TABLE products (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      iiko_id UUID,
+      restaurant_id UUID REFERENCES restaurants(id) ON DELETE CASCADE,
       name VARCHAR(300) NOT NULL,
       slug VARCHAR(300),
       description TEXT,
@@ -77,10 +90,14 @@ async function initSchema() {
       proteins NUMERIC(8,2),
       fats NUMERIC(8,2),
       carbs NUMERIC(8,2),
-      created_at TIMESTAMP DEFAULT NOW()
+      created_at TIMESTAMP DEFAULT NOW(),
+      UNIQUE (restaurant_id, iiko_id)
     );
 
-    CREATE TABLE IF NOT EXISTS settings (
+    CREATE INDEX idx_products_restaurant ON products(restaurant_id);
+    CREATE INDEX idx_products_category ON products(category_id);
+
+    CREATE TABLE settings (
       id SERIAL PRIMARY KEY,
       name VARCHAR(100) UNIQUE NOT NULL,
       value JSONB,

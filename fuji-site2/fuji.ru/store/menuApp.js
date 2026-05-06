@@ -87,7 +87,7 @@ export const actions = {
     try {
       const [restaurant, catalogData] = await Promise.all([
         this.$axios.$get(`${apiUrl}/api/v1/restaurants/${slug}`),
-        this.$axios.$get(`${apiUrl}/api/v1/catalog`),
+        this.$axios.$get(`${apiUrl}/api/v1/restaurants/${slug}/catalog`),
       ]);
 
       commit('setRestaurant', restaurant);

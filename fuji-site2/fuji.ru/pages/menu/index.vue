@@ -22,45 +22,31 @@
     </div>
 
     <div
-      v-else-if="groupedRestaurants.length"
-      class="restaurant-select__groups"
+      v-else-if="restaurants.length"
+      class="restaurant-select__grid"
     >
-      <div
-        v-for="group in groupedRestaurants"
-        :key="group.city"
-        class="restaurant-select__city-group"
+      <nuxt-link
+        v-for="(restaurant, index) in restaurants"
+        :key="restaurant.slug"
+        :to="`/menu/${restaurant.slug}`"
+        class="restaurant-card"
       >
-        <h2 class="restaurant-select__city-name">
-          {{ group.city }}
-        </h2>
-        <div class="restaurant-select__grid">
-          <nuxt-link
-            v-for="restaurant in group.restaurants"
-            :key="restaurant.slug"
-            :to="`/menu/${restaurant.slug}`"
-            class="restaurant-card"
-          >
-            <div class="restaurant-card__icon">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
-                <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" fill="#993ca6" />
-              </svg>
-            </div>
-            <div class="restaurant-card__info">
-              <span class="restaurant-card__name">{{ restaurant.name || restaurant.address }}</span>
-              <span class="restaurant-card__address">{{ restaurant.address }}</span>
-              <span
-                v-if="restaurant.phone"
-                class="restaurant-card__phone"
-              >{{ restaurant.phone }}</span>
-            </div>
-            <div class="restaurant-card__arrow">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
-                <path d="M9 18l6-6-6-6" stroke="#993ca6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-              </svg>
-            </div>
-          </nuxt-link>
+        <div class="restaurant-card__icon">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z" fill="#993ca6" />
+          </svg>
         </div>
-      </div>
+        <div class="restaurant-card__info">
+          <span class="restaurant-card__address">{{ restaurant.address }}</span>
+          <span
+            v-if="restaurant.phone"
+            class="restaurant-card__phone"
+          >{{ restaurant.phone }}</span>
+        </div>
+        <div class="restaurant-card__index">
+          {{ index + 1 }}
+        </div>
+      </nuxt-link>
     </div>
 
     <div
@@ -83,18 +69,6 @@ export default {
       restaurants: [],
       loading: true,
     };
-  },
-
-  computed: {
-    groupedRestaurants() {
-      const groups = {};
-      this.restaurants.forEach((r) => {
-        const city = r.city_name || 'Прочие';
-        if (!groups[city]) groups[city] = [];
-        groups[city].push(r);
-      });
-      return Object.entries(groups).map(([city, restaurants]) => ({ city, restaurants }));
-    },
   },
 
   async mounted() {
@@ -156,26 +130,11 @@ export default {
     animation: spin 0.8s linear infinite;
   }
 
-  &__groups {
-    max-width: 960px;
-    margin: 0 auto;
-    display: flex;
-    flex-direction: column;
-    gap: 32px;
-  }
-
-  &__city-name {
-    font-size: 20px;
-    font-weight: 700;
-    color: #993ca6;
-    margin-bottom: 16px;
-    padding-bottom: 8px;
-    border-bottom: 2px solid #f0e6f7;
-  }
-
   &__grid {
+    max-width: 1100px;
+    margin: 0 auto;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
     gap: 16px;
   }
 
@@ -188,10 +147,11 @@ export default {
 }
 
 .restaurant-card {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 20px;
+  padding: 20px 56px 20px 20px;
   background: #fff;
   border-radius: 16px;
   box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
@@ -220,10 +180,10 @@ export default {
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 4px;
   }
 
-  &__name {
+  &__address {
     font-size: 15px;
     font-weight: 700;
     color: #292929;
@@ -232,23 +192,26 @@ export default {
     text-overflow: ellipsis;
   }
 
-  &__address {
-    font-size: 13px;
-    color: #969696;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
   &__phone {
-    font-size: 12px;
+    font-size: 13px;
     color: #993ca6;
     font-weight: 500;
   }
 
-  &__arrow {
-    flex-shrink: 0;
-    opacity: 0.5;
+  &__index {
+    position: absolute;
+    top: 16px;
+    right: 16px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: #993ca6;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    font-weight: 700;
   }
 }
 
