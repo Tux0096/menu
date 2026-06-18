@@ -15,10 +15,10 @@ const KEYWORD_GROUPS = [
   { tags: ['легк', 'лёгк', 'диет', 'легкое'], boost: ['салат', 'овощ', 'сашими'] },
   { tags: ['сыт', 'больш', 'max', 'макс', 'компан'], boost: ['max', 'больш', 'комбо', 'сет'] },
   { tags: ['жар', 'тёпл', 'тепл', 'запеч'], boost: ['жар', 'тепл', 'запеч', 'темпур'] },
-  { tags: ['вкус', 'вкусн', 'хочу', 'поесть', 'голод', 'перекус', 'что-ниб', 'что ниб', 'посовет', 'подбери', 'не знаю'], boost: [] },
+  { tags: ['вкус', 'вкусн', 'хочу', 'поесть', 'голод', 'перекус', 'что-ниб', 'что ниб', 'посовет', 'подбери', 'не знаю', 'настроен', 'попроб', 'сегодня'], boost: [] },
 ];
 
-const VAGUE_HINTS = ['вкус', 'хочу', 'что-ниб', 'что ниб', 'посовет', 'подбери', 'голод', 'перекус', 'не знаю', 'сюрприз'];
+const VAGUE_HINTS = ['вкус', 'хочу', 'что-ниб', 'что ниб', 'посовет', 'подбери', 'голод', 'перекус', 'не знаю', 'сюрприз', 'настроен', 'попроб', 'сегодня'];
 
 function tokenize(text) {
   return String(text || '')
@@ -41,8 +41,8 @@ function scoreProduct(product, queryTokens, queryLower, learningBoosts) {
 
   for (const token of queryTokens) {
     if (token.length < 2) continue;
-    if (name.includes(token)) score += 4;
-    else if (desc.includes(token)) score += 2;
+    if (name.includes(token)) score += 6;
+    else if (desc.includes(token)) score += 3;
     else if (haystack.includes(token)) score += 1;
   }
 

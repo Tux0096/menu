@@ -132,9 +132,10 @@ export default {
 
   &__main {
     min-height: calc(100vh - 80px);
-    padding-bottom: calc(extClamp(70) + env(safe-area-inset-bottom));
+    padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
     background: #fff;
     color: var(---Main-Black, #292929);
+    overflow-x: hidden;
   }
 }
 </style>

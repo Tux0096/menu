@@ -1,8 +1,7 @@
 import pool from '../db/pool.js';
 import { QR_RESTAURANT_SLUG } from '../lib/qr-config.js';
-import { getLearningBoosts, logAiQuery, recordAiFeedback } from './ai-learning.js';
-import { suggestDishes } from '../services/ai-suggest.js';
-import { fetchLegacyCatalog } from './catalog-proxy.js';
+import { logAiQuery, recordAiFeedback } from './ai-learning.js';
+import { getWelcomeSuggestions, suggestForQuery } from './ai-suggest.js';
 import {
   addItemsToOrder,
   createTableOrder,
@@ -155,28 +154,20 @@ export async function aiSuggest(restaurantSlug, query) {
     throw err;
   }
 
-  const catalog = await fetchLegacyCatalog(restaurant.terminal_id);
-  const products = (catalog.products || []).filter(
-    (p) => p.price > 0 && p.isPublished !== false,
-  );
+  const suggestions = await suggestForQuery(query, 6);
+  await logAiQuery(QR_RESTAURANT_SLUG, query, suggestions);
+  return { query, suggestions };
+}
 
-  const learningBoosts = await getLearningBoosts(query);
-  const suggestions = await suggestDishes(products, query, 6, learningBoosts);
-
-  const mapped = suggestions.map((s) => ({
-    productId: s.product.id,
-    iikoId: s.product.id,
-    name: s.product.name,
-    slug: s.product.slug,
-    price: parseFloat(s.product.price),
-    image: s.product.image || null,
-    reason: s.reason,
-    score: s.score,
-  }));
-
-  await logAiQuery(QR_RESTAURANT_SLUG, query, mapped);
-
-  return { query, suggestions: mapped };
+export async function aiWelcome() {
+  const restaurant = await getRestaurantBySlug(QR_RESTAURANT_SLUG);
+  if (!restaurant) {
+    const err = new Error('Ресторан не найден');
+    err.status = 404;
+    throw err;
+  }
+  const suggestions = await getWelcomeSuggestions(4);
+  return { suggestions };
 }
 
 export async function saveAiFeedback(query, productId, action = 'add') {

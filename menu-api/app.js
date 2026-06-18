@@ -5,6 +5,7 @@ import cors from 'cors';
 import pool from './db/pool.js';
 import {
   aiSuggest,
+  aiWelcome,
   enterTableSession,
   payTableOrder,
   pullOrderFromIiko,
@@ -470,6 +471,14 @@ app.post('/api/v1/ai/suggest', async (req, res) => {
       return res.status(400).json({ error: 'restaurantSlug и query обязательны' });
     }
     res.json(await aiSuggest(restaurantSlug, query));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.get('/api/v1/ai/welcome', async (req, res) => {
+  try {
+    res.json(await aiWelcome());
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });
   }

@@ -182,6 +182,21 @@ export const actions = {
     }
   },
 
+  async fetchWelcomeSuggestions({ commit }) {
+    commit('setAiLoading', true);
+    try {
+      const { data } = await this.$axios.get(
+        `${this.$config.FRONT_API_URL}/api/v1/ai/welcome`,
+        { timeout: 10000 },
+      );
+      commit('setAiSuggestions', data.suggestions || []);
+    } catch (e) {
+      commit('setAiSuggestions', []);
+    } finally {
+      commit('setAiLoading', false);
+    }
+  },
+
   async fetchAiSuggestions({ state, commit }, query) {
     if (!state.restaurantSlug || !query?.trim()) return;
     commit('setAiLoading', true);
@@ -190,10 +205,16 @@ export const actions = {
       const { data } = await this.$axios.post(
         `${this.$config.FRONT_API_URL}/api/v1/ai/suggest`,
         { restaurantSlug: state.restaurantSlug, query: query.trim() },
+        { timeout: 12000 },
       );
       commit('setAiSuggestions', data.suggestions || []);
     } catch (e) {
       commit('setAiSuggestions', []);
+      this._vm?.$notify?.({
+        group: 'messages',
+        type: 'error',
+        text: 'Не удалось подобрать блюда — попробуйте другой запрос',
+      });
     } finally {
       commit('setAiLoading', false);
     }

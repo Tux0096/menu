@@ -1,5 +1,8 @@
 <template>
-  <div class="welcome-page page-content">
+  <div
+    class="welcome-page page-content"
+    :class="{ 'welcome-page--has-cart': cartCount > 0 && !isPaid }"
+  >
     <div class="welcome-page__hero">
       <h1 class="welcome-page__brand">
         Фуджи <span class="welcome-page__brand-ai">AI</span>
@@ -24,6 +27,19 @@
     >
       💳 Оплатить счёт
     </button>
+
+    <div class="welcome-page__prompts">
+      <button
+        v-for="chip in quickPrompts"
+        :key="chip"
+        type="button"
+        class="welcome-page__prompt"
+        :disabled="loading"
+        @click="runPrompt(chip)"
+      >
+        {{ chip }}
+      </button>
+    </div>
 
     <AiThinkingLoader v-if="loading" />
 
@@ -142,7 +158,6 @@
 
     <div
       class="welcome-page__input-wrap"
-      :class="{ 'welcome-page__input-wrap--with-cart': cartCount > 0 && !isPaid }"
     >
       <form
         class="welcome-page__form"
@@ -178,6 +193,12 @@ export default {
   data() {
     return {
       query: '',
+      quickPrompts: [
+        'Хочу что-то вкусное',
+        'Лёгкое блюдо',
+        'Острое',
+        'На компанию',
+      ],
     };
   },
 
@@ -238,9 +259,15 @@ export default {
     this.$store.commit('tableSession/setActiveTab', 'welcome');
     this.$store.commit('tableSession/setWelcomeShown', true);
     this.$store.dispatch('tableSession/trackActivity');
+    this.$store.dispatch('tableSession/fetchWelcomeSuggestions');
   },
 
   methods: {
+    async runPrompt(text) {
+      this.query = text;
+      await this.$store.dispatch('tableSession/fetchAiSuggestions', text);
+      await this.$store.dispatch('tableSession/trackActivity');
+    },
     qtyById(productId) {
       const item = (this.$store.getters['cart/cartItems'] || []).find(
         (i) => i.product?.id === productId,
@@ -358,9 +385,22 @@ export default {
 }
 
 .welcome-page {
-  min-height: calc(100vh - 160px);
-  padding: extClamp(16) extClamp(16) 200px;
+  --qr-nav-h: calc(64px + env(safe-area-inset-bottom, 0px));
+  --qr-input-h: 76px;
+  --qr-cart-h: 68px;
+  min-height: calc(100vh - 140px);
+  max-width: 100%;
+  padding: 12px 12px calc(var(--qr-nav-h) + var(--qr-input-h) + 20px);
   color: var(---Main-Black, #292929);
+  overflow-x: hidden;
+
+  &--has-cart {
+    padding-bottom: calc(var(--qr-nav-h) + var(--qr-input-h) + var(--qr-cart-h) + 20px);
+  }
+
+  @media screen and (min-width: 768px) {
+    padding: 16px 16px calc(var(--qr-nav-h) + var(--qr-input-h) + 24px);
+  }
 
   &__hero {
     display: flex;
@@ -412,14 +452,37 @@ export default {
     display: block;
     width: 100%;
     margin-bottom: 10px;
-    padding: extClamp(12) extClamp(16);
+    padding: 12px 16px;
     border: 1px solid var(---Main-Purple, #993ca6);
-    border-radius: extClamp(12);
+    border-radius: 12px;
     background: var(---Primary-LightPurple, #f5ecf6);
     color: var(---Main-Purple, #993ca6);
-    font-size: extClamp(12);
+    font-size: 14px;
     font-weight: 600;
     cursor: pointer;
+  }
+
+  &__prompts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: center;
+    margin-bottom: 16px;
+  }
+
+  &__prompt {
+    padding: 8px 12px;
+    border: 1px solid var(---Primary-Gray, #969696);
+    border-radius: 999px;
+    background: #fff;
+    color: var(---Main-Black, #292929);
+    font-size: 12px;
+    line-height: 1.2;
+    cursor: pointer;
+
+    &:disabled {
+      opacity: 0.5;
+    }
   }
 
   &__suggestions {
@@ -442,18 +505,18 @@ export default {
 
   &__product {
     display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: extClamp(12);
+    align-items: flex-start;
+    gap: 10px;
+    padding: 12px;
     border: 1px solid var(---Primary-Gray, #969696);
-    border-radius: extClamp(12);
+    border-radius: 12px;
     background: #fff;
   }
 
   &__product-image-wrap {
     flex-shrink: 0;
-    width: 72px;
-    height: 72px;
+    width: 64px;
+    height: 64px;
     overflow: hidden;
     border-radius: extClamp(8);
     background: var(---Primary-LightGray, #f5f5f5);
@@ -537,19 +600,19 @@ export default {
 
   &__order-bar {
     position: fixed;
-    right: extClamp(16);
-    bottom: calc(extClamp(70) + env(safe-area-inset-bottom));
-    left: extClamp(16);
+    right: 12px;
+    bottom: calc(var(--qr-nav-h) + var(--qr-input-h) + 8px);
+    left: 12px;
     z-index: 11;
     display: flex;
     align-items: center;
     gap: 10px;
     max-width: $page-content-width;
     margin: 0 auto;
-    padding: extClamp(12);
-    border-radius: extClamp(12);
+    padding: 10px 12px;
+    border-radius: 12px;
     background: #fff;
-    box-shadow: 0 extClamp(4) extClamp(24) rgba(41, 41, 41, 0.12);
+    box-shadow: 0 4px 24px rgba(41, 41, 41, 0.12);
   }
 
   &__order-summary {
@@ -605,36 +668,37 @@ export default {
 
   &__input-wrap {
     position: fixed;
-    right: extClamp(16);
-    bottom: calc(extClamp(70) + env(safe-area-inset-bottom));
-    left: extClamp(16);
+    right: 12px;
+    bottom: var(--qr-nav-h);
+    left: 12px;
     z-index: 10;
     max-width: $page-content-width;
     margin: 0 auto;
-
-    &--with-cart {
-      bottom: calc(extClamp(130) + env(safe-area-inset-bottom));
-    }
   }
 
   &__form {
     display: flex;
     gap: 8px;
     padding: 8px;
-    border-radius: extClamp(12);
+    border-radius: 12px;
     background: #fff;
-    box-shadow: 0 extClamp(4) extClamp(24) rgba(41, 41, 41, 0.12);
+    box-shadow: 0 4px 24px rgba(41, 41, 41, 0.12);
     border: 1px solid var(---Primary-Gray, #969696);
+
+    @media screen and (max-width: 360px) {
+      flex-direction: column;
+    }
   }
 
   &__input {
     flex: 1;
-    padding: extClamp(12) extClamp(14);
+    min-width: 0;
+    padding: 12px 14px;
     border: none;
-    border-radius: extClamp(10);
+    border-radius: 10px;
     background: var(---Primary-LightGray, #f5f5f5);
     color: var(---Main-Black, #292929);
-    font-size: extClamp(12);
+    font-size: 16px;
 
     &::placeholder {
       color: rgba(41, 41, 41, 0.4);
@@ -642,12 +706,13 @@ export default {
   }
 
   &__submit {
-    padding: extClamp(12) extClamp(18);
+    flex-shrink: 0;
+    padding: 12px 16px;
     border: none;
-    border-radius: extClamp(10);
+    border-radius: 10px;
     background: var(---Main-Purple, #993ca6);
     color: #fff;
-    font-size: extClamp(12);
+    font-size: 14px;
     font-weight: 600;
     white-space: nowrap;
     cursor: pointer;
