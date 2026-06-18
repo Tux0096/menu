@@ -10,6 +10,7 @@
     "db:init": "node db/init.js",
     "db:seed": "node db/seed.js",
     "db:sync": "node db/sync-iiko.js",
+    "db:migrate": "node db/migrate-table-orders.js",
     "iiko:list": "node db/list-iiko-orgs.js"
   },
   "dependencies": {

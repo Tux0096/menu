@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48" fill="none">
+  <g clip-path="url(#clip0_38_8912)">
+    <path
+      d="M26.5541 32.3884V15.6909C32.096 15.8725 36.8889 18.5571 36.8889 24.0627C36.8889 29.5221 32.4689 32.2516 26.8749 32.3884M21.5114 32.3884C15.9694 32.2516 11.1111 29.5221 11.1111 24.0627C11.1111 18.5571 15.9173 15.8725 21.5114 15.6909V32.3884ZM26.8749 11.6875H21.1772C12.3709 11.8691 6 15.8725 6 24.0627C6 32.2063 12.3709 36.2554 21.1772 36.4375H26.8749C35.6801 36.2554 42 32.2063 42 24.0627C42 15.8725 35.6801 11.8691 26.8749 11.6875Z"
+      fill="white"/>
+  </g>
+  <rect x="1" y="1" width="46" height="46" rx="23" stroke="url(#paint0_linear_38_8912)" stroke-width="2"/>
+  <defs>
+    <linearGradient id="paint0_linear_38_8912" x1="24" y1="0" x2="24" y2="48" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#DB9DEE"/>
+      <stop offset="1" stop-color="#6F81B4"/>
+      <animate attributeName="x1" values="24;48;24;0;24" dur="3s" repeatCount="indefinite"/>
+      <animate attributeName="y1" values="0;24;48;24;0" dur="3s" repeatCount="indefinite"/>
+      <animate attributeName="x2" values="24;0;24;48;24" dur="3s" repeatCount="indefinite"/>
+      <animate attributeName="y2" values="48;24;0;24;48" dur="3s" repeatCount="indefinite"/>
+    </linearGradient>
+    <clipPath id="clip0_38_8912">
+      <rect width="48" height="48" rx="24" fill="white"/>
+    </clipPath>
+  </defs>
+</svg>

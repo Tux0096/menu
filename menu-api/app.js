@@ -3,6 +3,15 @@ dotenv.config();
 import express from 'express';
 import cors from 'cors';
 import pool from './db/pool.js';
+import {
+  aiSuggest,
+  enterTableSession,
+  payTableOrder,
+  pullOrderFromIiko,
+  reopenTableForMore,
+  syncTableOrder,
+} from './services/table-order.js';
+import { checkOllamaHealth } from './services/ai-suggest.js';
 
 const app = express();
 const PORT = process.env.PORT || 3101;
@@ -100,6 +109,7 @@ async function getCatalogForRestaurant(restaurantId) {
 
   const mappedProducts = products.map((p) => ({
     id: p.id,
+    iikoId: p.iiko_id,
     name: p.name,
     nameTo: p.name,
     slug: p.slug,
@@ -146,6 +156,8 @@ async function buildSettings() {
     value: r.terminal_id,
     name: r.name,
     slug: r.slug,
+    deliveryTerminalId: r.terminal_id,
+    address: r.address,
   }));
 
   const DELIVERY_TERMINALS = { [SAMARA_ID]: [], [TOLYATTI_ID]: [], [NOVOKUJBYSHEVSK_ID]: [] };
@@ -300,9 +312,30 @@ app.get('/api/v1/city/', async (req, res) => {
   }
 });
 
-// Глобальный каталог нужен только для совместимости — на /menu используется
-// /api/v1/restaurants/:slug/catalog
-app.get('/api/v1/catalog', (req, res) => res.json({ products: [], groups: [], stopList: [] }));
+// Глобальный каталог: ?restaurantSlug= или legacy ?deliveryTerminalId=
+app.get('/api/v1/catalog', async (req, res) => {
+  try {
+    const { restaurantSlug, deliveryTerminalId } = req.query;
+    if (restaurantSlug) {
+      const r = await getRestaurantBySlug(restaurantSlug);
+      if (!r) return res.status(404).json({ error: 'Restaurant not found' });
+      return res.json(await getCatalogForRestaurant(r.id));
+    }
+    if (deliveryTerminalId) {
+      const { rows } = await pool.query(
+        `SELECT slug FROM restaurants WHERE terminal_id = $1 LIMIT 1`,
+        [deliveryTerminalId],
+      );
+      if (rows[0]) {
+        const r = await getRestaurantBySlug(rows[0].slug);
+        if (r) return res.json(await getCatalogForRestaurant(r.id));
+      }
+    }
+    res.json({ products: [], groups: [], stopList: [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.get('/api/v1/slide', (req, res) => res.json([]));
 app.get('/api/v1/slide/type/:type', (req, res) => res.json([]));
@@ -310,7 +343,90 @@ app.get('/api/v1/promo', (req, res) => res.json([]));
 app.get('/api/v1/promo/:id', (req, res) => res.status(404).json({ error: 'Not found' }));
 app.get('/api/v1/cladr/*', (req, res) => res.json([]));
 
-app.get('/health', (req, res) => res.json({ ok: true }));
+// ── Стол / QR-заказ ─────────────────────────────────────────────────────────
+app.post('/api/v1/table/enter', async (req, res) => {
+  try {
+    const { restaurantSlug, tableNumber } = req.body || {};
+    if (!restaurantSlug || !tableNumber) {
+      return res.status(400).json({ error: 'restaurantSlug и tableNumber обязательны' });
+    }
+    let session = await enterTableSession(restaurantSlug, tableNumber);
+    const pulled = await pullOrderFromIiko(restaurantSlug, tableNumber);
+    if (pulled?.items?.length) {
+      session = pulled;
+    }
+    res.json(session);
+  } catch (err) {
+    console.error('table/enter:', err);
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.get('/api/v1/table/session/:sessionId', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT s.*, r.slug FROM table_sessions s
+       JOIN restaurants r ON r.id = s.restaurant_id
+       WHERE s.id = $1`,
+      [req.params.sessionId],
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Not found' });
+    const session = await enterTableSession(rows[0].slug, rows[0].table_number);
+    res.json(session);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/ai/suggest', async (req, res) => {
+  try {
+    const { restaurantSlug, query } = req.body || {};
+    if (!restaurantSlug || !query) {
+      return res.status(400).json({ error: 'restaurantSlug и query обязательны' });
+    }
+    res.json(await aiSuggest(restaurantSlug, query));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/table-order/sync', async (req, res) => {
+  try {
+    const { sessionId, items } = req.body || {};
+    if (!sessionId || !Array.isArray(items)) {
+      return res.status(400).json({ error: 'sessionId и items обязательны' });
+    }
+    res.json(await syncTableOrder(sessionId, items));
+  } catch (err) {
+    console.error('table-order/sync:', err);
+    res.status(err.status || 500).json({ error: err.message, details: err.details });
+  }
+});
+
+app.post('/api/v1/table-order/pay', async (req, res) => {
+  try {
+    const { sessionId, paymentType } = req.body || {};
+    if (!sessionId) return res.status(400).json({ error: 'sessionId обязателен' });
+    res.json(await payTableOrder(sessionId, { paymentType }));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/table-order/reopen', async (req, res) => {
+  try {
+    const { sessionId } = req.body || {};
+    if (!sessionId) return res.status(400).json({ error: 'sessionId обязателен' });
+    res.json(await reopenTableForMore(sessionId));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.get('/health', async (req, res) => {
+  const ollama = await checkOllamaHealth();
+  res.json({ ok: true, ollama });
+});
 
 app.listen(PORT, () => {
   console.log(`Menu API running on http://localhost:${PORT}`);

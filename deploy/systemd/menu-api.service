@@ -1,0 +1,16 @@
+[Unit]
+Description=Fuji Menu API
+After=network.target postgresql.service docker.service ollama.service
+Wants=ollama.service
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/menu/menu-api
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/node app.js
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

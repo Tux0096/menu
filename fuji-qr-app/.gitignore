@@ -1,0 +1,75 @@
+# Dependencies
+node_modules/
+.nuxt/
+.nuxt-prod/
+
+# Build outputs
+.output/
+.nitro/
+dist/
+.nuxt-prerender/
+
+# Runtime data
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Environment variables
+.env
+.env.*
+!.env.example
+!.env.production
+!.env.development
+
+# Editor directories and files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+[Tt]humbs.db
+
+# Testing
+coverage/
+.nyc_output/
+
+# Optional npm cache directory
+.npm
+
+# Optional eslint cache
+.eslintcache
+
+# Optional stylelint cache
+.stylelintcache
+
+# Optional REPL history
+.node_repl_history
+
+# Capacitor / iOS — сгенерированный веб-контент (nuxt/cap copy) и служебные файлы Xcode
+ios/App/App/public/
+ios/**/*.xcuserstate
+ios/**/xcuserdata/
+
+# Android — локальные артефакты сборки
+android/.gradle/
+android/app/build/
+android/build/
+
+# Optional lock files (можно добавить в зависимости от используемого пакетного менеджера)
+# package-lock.json (если используете npm)
+# yarn.lock (если используете yarn)
+# pnpm-lock.yaml (если используете pnpm)
