@@ -4,6 +4,36 @@
     class="page-content"
   >
     <div class="page-index">
+      <template v-if="isTableMode">
+        <CatalogHeaderCategories />
+        <div
+          ref="page-index-catalog-categories"
+          class="page-index__catalog-categories"
+        >
+          <portal-target name="catalog-header-categories" />
+        </div>
+        <div id="top-of-catalog" />
+        <template v-if="catalog?.length > 0">
+          <CatalogSection
+            v-for="currentSectionData in catalog"
+            :id="`catalog-section-${currentSectionData.slug}`"
+            :key="currentSectionData.id"
+            :current-section-data="currentSectionData"
+            :has-more="true"
+            class="page-index__catalog-section"
+            group-title-tag="h2"
+            item-title-tag="h3"
+          />
+        </template>
+        <lord-icon
+          v-else
+          :src="`/assets/libs/icon-json/clock.json`"
+          class="page-index__empty-icon"
+          trigger="loop"
+        />
+      </template>
+
+      <template v-else>
       <portal to="header-slider">
         <AppSlider
           v-if="slides.mobile.length"
@@ -56,6 +86,7 @@
         trigger="loop"
       />
       <AppMainTextBlock
+        v-if="!isTableMode"
         class="page-index__text"
       >
         <template #title>
@@ -98,6 +129,7 @@
           особенно любят дети. Конечно же, суши и сашими.
         </p>
       </AppMainTextBlock>
+      </template>
     </div>
   </div>
 </template>
@@ -186,6 +218,10 @@ export default {
       return this.$store.getters['catalog/isCatalogLoad'];
     },
 
+    isTableMode() {
+      return this.$store.getters['tableSession/isActive'];
+    },
+
   },
   beforeDestroy() {
     if (this.observer) {
@@ -193,8 +229,10 @@ export default {
     }
   },
   mounted() {
-    if (this.$store.getters['tableSession/isActive']) {
+    const isTable = this.$store.getters['tableSession/isActive'];
+    if (isTable) {
       this.$store.commit('tableSession/setActiveTab', 'menu');
+      this.$store.dispatch('tableSession/trackActivity');
     }
 
     const safeAreaInsetTop = getComputedStyle(document.documentElement)
@@ -205,34 +243,36 @@ export default {
       safeAreaInsetTopValue = 0;
     }
 
-    const marginTop = 105 + safeAreaInsetTopValue;
-
-    const options = {
-      root: null,
-      rootMargin: `-${marginTop}px 0px 0px 0px`,
-      threshold: 0,
-    };
-
-    this.observer = new IntersectionObserver((entries) => {
-      entries.forEach((entry) => {
-        const isDirectionTop = entry.boundingClientRect?.top < entry.rootBounds?.top;
-
-        this.$store.commit('view/setIsCatalogCategoriesIntersecting', isDirectionTop && !entry.isIntersecting);
-      });
-    }, options);
-
-    this.observer.observe(this.$refs['page-index-catalog-categories']);
-
-    //
+    const marginTop = isTable ? 120 + safeAreaInsetTopValue : 105 + safeAreaInsetTopValue;
 
     this.$nextTick(() => {
-      const slug = this.$route.query.scrollToCatalogSection;
-      setTimeout(() => {
-        const sectionElement = document.getElementById(`catalog-section-${slug}`);
-        if (sectionElement) {
-          scrollToCatalogCategory(sectionElement);
-        }
-      }, 500);
+      const anchor = this.$refs['page-index-catalog-categories'];
+      if (!anchor) return;
+
+      const options = {
+        root: null,
+        rootMargin: `-${marginTop}px 0px 0px 0px`,
+        threshold: 0,
+      };
+
+      this.observer = new IntersectionObserver((entries) => {
+        entries.forEach((entry) => {
+          const isDirectionTop = entry.boundingClientRect?.top < entry.rootBounds?.top;
+          this.$store.commit('view/setIsCatalogCategoriesIntersecting', isDirectionTop && !entry.isIntersecting);
+        });
+      }, options);
+
+      this.observer.observe(anchor);
+
+      if (!isTable) {
+        const slug = this.$route.query.scrollToCatalogSection;
+        setTimeout(() => {
+          const sectionElement = document.getElementById(`catalog-section-${slug}`);
+          if (sectionElement) {
+            scrollToCatalogCategory(sectionElement);
+          }
+        }, 500);
+      }
     });
   },
 

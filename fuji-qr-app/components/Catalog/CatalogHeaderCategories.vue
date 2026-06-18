@@ -110,6 +110,9 @@ export default {
     catalogMenu() {
       return this.$store.getters['setting/CATALOG_MENU'];
     },
+    isTableMode() {
+      return this.$store.getters['tableSession/isActive'];
+    },
   },
   watch: {
     submenu(items) {
@@ -160,6 +163,10 @@ export default {
           const sectionElement = document.getElementById(`catalog-section-${item.slug}`);
           if (sectionElement) {
             scrollToCatalogCategory(sectionElement);
+            return;
+          }
+          if (this.isTableMode) {
+            this.$router.push(`/catalog/${item.slug}`);
           }
         });
 

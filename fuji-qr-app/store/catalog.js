@@ -1,3 +1,5 @@
+import { QR_RESTAURANT_SLUG } from '~/lib/qr-config';
+
 export const state = () => ({
   catalog: [],
   products: [],
@@ -68,7 +70,9 @@ export const actions = {
   async initCatalogForRestaurant({ commit, rootGetters, rootState, dispatch }, restaurantSlug) {
     commit('setSelectedFilters', []);
     commit('setSearchString', '');
-    const slug = restaurantSlug || rootState.tableSession?.restaurantSlug;
+    const slug = rootState.tableSession?.isActive
+      ? QR_RESTAURANT_SLUG
+      : (restaurantSlug || rootState.tableSession?.restaurantSlug);
     if (!slug) {
       return dispatch('initCatalog');
     }
@@ -83,8 +87,8 @@ export const actions = {
   },
 
   async initCatalog({ commit, rootGetters, rootState, dispatch }) {
-    if (rootState.tableSession?.isActive && rootState.tableSession?.restaurantSlug) {
-      return dispatch('initCatalogForRestaurant', rootState.tableSession.restaurantSlug);
+    if (rootState.tableSession?.isActive) {
+      return dispatch('initCatalogForRestaurant', QR_RESTAURANT_SLUG);
     }
     commit('setSelectedFilters', []);
     commit('setSearchString', '');

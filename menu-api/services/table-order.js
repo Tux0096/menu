@@ -1,5 +1,8 @@
 import pool from '../db/pool.js';
+import { QR_RESTAURANT_SLUG } from '../lib/qr-config.js';
+import { getLearningBoosts, logAiQuery, recordAiFeedback } from './ai-learning.js';
 import { suggestDishes } from '../services/ai-suggest.js';
+import { fetchLegacyCatalog } from './catalog-proxy.js';
 import {
   addItemsToOrder,
   createTableOrder,
@@ -55,6 +58,7 @@ async function getSessionItems(sessionId) {
 }
 
 function mapSessionRow(row, restaurant, items) {
+  const workflowStatus = row.workflow_status || 'browsing';
   return {
     sessionId: row.id,
     restaurantSlug: restaurant.slug,
@@ -64,7 +68,14 @@ function mapSessionRow(row, restaurant, items) {
     iikoOrderId: row.iiko_order_id,
     status: row.status,
     paymentStatus: row.payment_status,
+    workflowStatus,
+    guestCount: row.guest_count || 1,
     total: parseFloat(row.total || 0),
+    cartReadyAt: row.cart_ready_at,
+    sentToProductionAt: row.sent_to_production_at,
+    canGuestRemoveItems: !['in_production', 'reorder_pending', 'paid'].includes(workflowStatus),
+    canGuestPay: ['in_production', 'reorder_pending', 'cart_ready', 'waiter_review'].includes(workflowStatus)
+      && row.payment_status !== 'paid',
     items: items.map((i) => ({
       id: i.id,
       productId: i.product_id,
@@ -73,6 +84,8 @@ function mapSessionRow(row, restaurant, items) {
       price: parseFloat(i.price),
       quantity: i.quantity,
       lineTotal: parseFloat(i.line_total),
+      seatNumber: i.seat_number || null,
+      isLocked: i.is_locked,
     })),
   };
 }
@@ -88,7 +101,7 @@ async function findOpenSession(restaurantId, tableNumber) {
 }
 
 export async function enterTableSession(restaurantSlug, tableNumber) {
-  const restaurant = await getRestaurantBySlug(restaurantSlug);
+  const restaurant = await getRestaurantBySlug(QR_RESTAURANT_SLUG);
   if (!restaurant) {
     const err = new Error('Ресторан не найден');
     err.status = 404;
@@ -135,35 +148,40 @@ export async function getSessionById(sessionId) {
 }
 
 export async function aiSuggest(restaurantSlug, query) {
-  const restaurant = await getRestaurantBySlug(restaurantSlug);
+  const restaurant = await getRestaurantBySlug(QR_RESTAURANT_SLUG);
   if (!restaurant) {
     const err = new Error('Ресторан не найден');
     err.status = 404;
     throw err;
   }
 
-  const { rows: products } = await pool.query(
-    `SELECT id, iiko_id, name, slug, description, price, image_url, sort_order, category_id
-     FROM products
-     WHERE restaurant_id = $1 AND is_published = TRUE AND price > 0
-     ORDER BY sort_order`,
-    [restaurant.id],
+  const catalog = await fetchLegacyCatalog(restaurant.terminal_id);
+  const products = (catalog.products || []).filter(
+    (p) => p.price > 0 && p.isPublished !== false,
   );
 
-  const suggestions = await suggestDishes(products, query, 6);
-  return {
-    query,
-    suggestions: suggestions.map((s) => ({
-      productId: s.product.id,
-      iikoId: s.product.iiko_id,
-      name: s.product.name,
-      slug: s.product.slug,
-      price: parseFloat(s.product.price),
-      image: s.product.image_url,
-      reason: s.reason,
-      score: s.score,
-    })),
-  };
+  const learningBoosts = await getLearningBoosts(query);
+  const suggestions = await suggestDishes(products, query, 6, learningBoosts);
+
+  const mapped = suggestions.map((s) => ({
+    productId: s.product.id,
+    iikoId: s.product.id,
+    name: s.product.name,
+    slug: s.product.slug,
+    price: parseFloat(s.product.price),
+    image: s.product.image || null,
+    reason: s.reason,
+    score: s.score,
+  }));
+
+  await logAiQuery(QR_RESTAURANT_SLUG, query, mapped);
+
+  return { query, suggestions: mapped };
+}
+
+export async function saveAiFeedback(query, productId, action = 'add') {
+  await recordAiFeedback(query, productId, action);
+  return { ok: true };
 }
 
 async function upsertSessionItems(sessionId, cartItems) {
@@ -375,8 +393,49 @@ export async function reopenTableForMore(sessionId) {
   return mapSessionRow(rows[0], restaurant, items);
 }
 
+export async function refreshSessionFromIiko(sessionId) {
+  const ctx = await getSessionById(sessionId);
+  if (!ctx) {
+    const err = new Error('Сессия не найдена');
+    err.status = 404;
+    throw err;
+  }
+
+  const { session, restaurant } = ctx;
+  if (!session.iiko_order_id) {
+    return enterTableSession(restaurant.slug, session.table_number);
+  }
+
+  let tableId = session.iiko_table_id;
+  if (!tableId) {
+    tableId = await resolveIikoTableId(restaurant, session.table_number);
+  }
+
+    if (tableId) {
+    try {
+      const orders = await getOrdersByTable([restaurant.organization_id], [tableId]);
+      const orderList = orders?.orders || orders?.orderInfos || [];
+      const stillOpen = orderList.some(
+        (o) => (o.id || o.order?.id) === session.iiko_order_id,
+      );
+      if (!stillOpen) {
+        await pool.query(
+          `UPDATE table_sessions
+           SET status = 'closed', payment_status = 'paid', updated_at = NOW()
+           WHERE id = $1 AND status = 'open'`,
+          [sessionId],
+        );
+      }
+    } catch (e) {
+      console.warn('refreshSessionFromIiko:', e.message);
+    }
+  }
+
+  return enterTableSession(restaurant.slug, session.table_number);
+}
+
 export async function pullOrderFromIiko(restaurantSlug, tableNumber) {
-  const restaurant = await getRestaurantBySlug(restaurantSlug);
+  const restaurant = await getRestaurantBySlug(QR_RESTAURANT_SLUG);
   if (!restaurant) return null;
 
   const tableId = await resolveIikoTableId(restaurant, tableNumber);
@@ -418,3 +477,5 @@ export async function pullOrderFromIiko(restaurantSlug, tableNumber) {
     return null;
   }
 }
+
+export { resolveIikoTableId as resolveIikoTableIdForRestaurant };

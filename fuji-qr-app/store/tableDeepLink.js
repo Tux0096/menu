@@ -1,4 +1,6 @@
-/** QR-режим: ?restaurant=<slug>&table=<номер> */
+/** QR-режим: ?restaurant=<slug>&table=<номер> — ресторан всегда Ново-Садовая. */
+
+import { QR_RESTAURANT_SLUG } from '~/lib/qr-config';
 
 function normalizeQueryPart(value) {
   if (value == null || Array.isArray(value)) {
@@ -36,7 +38,10 @@ export const actions = {
       return { applied: false };
     }
 
-    commit('tableSession/setQrParams', { restaurantSlug, tableNumber }, { root: true });
+    commit('tableSession/setQrParams', {
+      restaurantSlug: QR_RESTAURANT_SLUG,
+      tableNumber,
+    }, { root: true });
     await dispatch('tableSession/enterTable', null, { root: true });
 
     stripTableParamsFromRoute(ctx);

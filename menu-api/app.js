@@ -8,10 +8,32 @@ import {
   enterTableSession,
   payTableOrder,
   pullOrderFromIiko,
+  refreshSessionFromIiko,
   reopenTableForMore,
+  saveAiFeedback,
   syncTableOrder,
 } from './services/table-order.js';
+import {
+  callWaiterExtended,
+  guestPay,
+  listActiveSessions,
+  notifyMenuOpened,
+  refreshSessionWithWorkflow,
+  saveGuestCart,
+  sendOrderToProduction,
+  submitCartToWaiter,
+  submitVisitFeedback,
+  trackGuestActivity,
+  waiterUpdateCart,
+} from './services/table-workflow.js';
+import {
+  listWaiterNotifications,
+  markAllNotificationsRead,
+  markNotificationRead,
+} from './services/waiter-notifications.js';
 import { checkOllamaHealth } from './services/ai-suggest.js';
+import { fetchLegacyCatalog, fetchLegacySettings } from './services/catalog-proxy.js';
+import { QR_RESTAURANT_SLUG } from './lib/qr-config.js';
 
 const app = express();
 const PORT = process.env.PORT || 3101;
@@ -259,17 +281,35 @@ app.get('/api/v1/restaurants/:slug/catalog', async (req, res) => {
   try {
     const r = await getRestaurantBySlug(req.params.slug);
     if (!r) return res.status(404).json({ error: 'Restaurant not found' });
-    res.json(await getCatalogForRestaurant(r.id));
+    try {
+      return res.json(await fetchLegacyCatalog(r.terminal_id));
+    } catch (e) {
+      console.warn('legacy catalog fallback:', e.message);
+      return res.json(await getCatalogForRestaurant(r.id));
+    }
   } catch (err) {
     console.error('catalog error:', err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// ── Заглушки/совместимость для глобального store фронтенда ─────────────────
+// ── Настройки: prod API + локальные рестораны для QR ─────────────────────
 app.get('/api/v1/setting', async (req, res) => {
   try {
-    res.json(await buildSettings());
+    const local = await buildSettings();
+    try {
+      const legacy = await fetchLegacySettings();
+      res.json({
+        ...legacy,
+        RESTAURANT_LIST: local.RESTAURANT_LIST,
+        DELIVERY_TERMINALS: local.DELIVERY_TERMINALS,
+        GLOBAL_SEO_META_TAG: local.GLOBAL_SEO_META_TAG,
+        IS_WITHOUT_RECAPTCHA: true,
+      });
+    } catch (e) {
+      console.warn('legacy settings fallback:', e.message);
+      res.json(local);
+    }
   } catch (err) {
     console.error('settings error:', err);
     res.status(500).json({ error: err.message });
@@ -278,7 +318,7 @@ app.get('/api/v1/setting', async (req, res) => {
 app.get('/api/v1/setting/version', (req, res) => res.json(1));
 app.get('/api/v1/setting/SETTINGS_VERSION', (req, res) => res.json(1));
 app.get('/api/v1/setting/STORE_VERSION', (req, res) => res.json('1.0.0'));
-app.get('/api/v1/setting/MOBILE_APP_VERSION', (req, res) => res.json(1));
+app.get('/api/v1/setting/MOBILE_APP_VERSION', (req, res) => res.json(9));
 app.get('/api/v1/setting/YANDEX_COUNTER_ID', (req, res) => res.json(''));
 app.get('/api/v1/setting/GOOGLE_COUNTER_ID', (req, res) => res.json(''));
 app.get('/api/v1/setting/CHECKOUT_DELIVERY_TEXT', (req, res) =>
@@ -312,23 +352,21 @@ app.get('/api/v1/city/', async (req, res) => {
   }
 });
 
-// Глобальный каталог: ?restaurantSlug= или legacy ?deliveryTerminalId=
+// Глобальный каталог через prod API (полное меню с картинками)
 app.get('/api/v1/catalog', async (req, res) => {
   try {
     const { restaurantSlug, deliveryTerminalId } = req.query;
+    let terminalId = deliveryTerminalId || null;
     if (restaurantSlug) {
       const r = await getRestaurantBySlug(restaurantSlug);
       if (!r) return res.status(404).json({ error: 'Restaurant not found' });
-      return res.json(await getCatalogForRestaurant(r.id));
+      terminalId = r.terminal_id;
     }
-    if (deliveryTerminalId) {
-      const { rows } = await pool.query(
-        `SELECT slug FROM restaurants WHERE terminal_id = $1 LIMIT 1`,
-        [deliveryTerminalId],
-      );
-      if (rows[0]) {
-        const r = await getRestaurantBySlug(rows[0].slug);
-        if (r) return res.json(await getCatalogForRestaurant(r.id));
+    if (terminalId) {
+      try {
+        return res.json(await fetchLegacyCatalog(terminalId));
+      } catch (e) {
+        console.warn('legacy catalog fallback:', e.message);
       }
     }
     res.json({ products: [], groups: [], stopList: [] });
@@ -355,6 +393,7 @@ app.post('/api/v1/table/enter', async (req, res) => {
     if (pulled?.items?.length) {
       session = pulled;
     }
+    session = await notifyMenuOpened(session.sessionId);
     res.json(session);
   } catch (err) {
     console.error('table/enter:', err);
@@ -364,15 +403,61 @@ app.post('/api/v1/table/enter', async (req, res) => {
 
 app.get('/api/v1/table/session/:sessionId', async (req, res) => {
   try {
-    const { rows } = await pool.query(
-      `SELECT s.*, r.slug FROM table_sessions s
-       JOIN restaurants r ON r.id = s.restaurant_id
-       WHERE s.id = $1`,
-      [req.params.sessionId],
-    );
-    if (!rows[0]) return res.status(404).json({ error: 'Not found' });
-    const session = await enterTableSession(rows[0].slug, rows[0].table_number);
-    res.json(session);
+    res.json(await refreshSessionWithWorkflow(req.params.sessionId));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/table/activity', async (req, res) => {
+  try {
+    const { sessionId } = req.body || {};
+    if (!sessionId) return res.status(400).json({ error: 'sessionId обязателен' });
+    res.json(await trackGuestActivity(sessionId));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/table/menu-opened', async (req, res) => {
+  try {
+    const { sessionId } = req.body || {};
+    if (!sessionId) return res.status(400).json({ error: 'sessionId обязателен' });
+    res.json(await notifyMenuOpened(sessionId));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/table/submit-to-waiter', async (req, res) => {
+  try {
+    const { sessionId, items } = req.body || {};
+    if (!sessionId || !Array.isArray(items)) {
+      return res.status(400).json({ error: 'sessionId и items обязательны' });
+    }
+    res.json(await submitCartToWaiter(sessionId, items));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/table/guest-pay', async (req, res) => {
+  try {
+    const { sessionId, method, tipAmount } = req.body || {};
+    if (!sessionId) return res.status(400).json({ error: 'sessionId обязателен' });
+    res.json(await guestPay(sessionId, { method, tipAmount }));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/table/feedback', async (req, res) => {
+  try {
+    const { sessionId, rating, comment } = req.body || {};
+    if (!sessionId || !rating) {
+      return res.status(400).json({ error: 'sessionId и rating обязательны' });
+    }
+    res.json(await submitVisitFeedback(sessionId, { rating, comment }));
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });
   }
@@ -385,6 +470,40 @@ app.post('/api/v1/ai/suggest', async (req, res) => {
       return res.status(400).json({ error: 'restaurantSlug и query обязательны' });
     }
     res.json(await aiSuggest(restaurantSlug, query));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/ai/feedback', async (req, res) => {
+  try {
+    const { query, productId, action } = req.body || {};
+    if (!query || !productId) {
+      return res.status(400).json({ error: 'query и productId обязательны' });
+    }
+    res.json(await saveAiFeedback(query, productId, action));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/table/call-waiter', async (req, res) => {
+  try {
+    const { sessionId, reason } = req.body || {};
+    if (!sessionId) return res.status(400).json({ error: 'sessionId обязателен' });
+    res.json(await callWaiterExtended(sessionId, { reason }));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/table-order/cart', async (req, res) => {
+  try {
+    const { sessionId, items } = req.body || {};
+    if (!sessionId || !Array.isArray(items)) {
+      return res.status(400).json({ error: 'sessionId и items обязательны' });
+    }
+    res.json(await saveGuestCart(sessionId, items));
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });
   }
@@ -420,6 +539,78 @@ app.post('/api/v1/table-order/reopen', async (req, res) => {
     res.json(await reopenTableForMore(sessionId));
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// ── Терминал официанта ──────────────────────────────────────────────────────
+app.get('/api/v1/waiter/notifications', async (req, res) => {
+  try {
+    const restaurant = await pool.query(
+      `SELECT id FROM restaurants WHERE slug = $1 LIMIT 1`,
+      [QR_RESTAURANT_SLUG],
+    );
+    const restaurantId = restaurant.rows[0]?.id;
+    if (!restaurantId) return res.status(404).json({ error: 'Ресторан не найден' });
+    const unreadOnly = req.query.unread === '1';
+    res.json(await listWaiterNotifications(restaurantId, { unreadOnly }));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/waiter/notifications/:id/read', async (req, res) => {
+  try {
+    await markNotificationRead(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/waiter/notifications/read-all', async (req, res) => {
+  try {
+    const restaurant = await pool.query(
+      `SELECT id FROM restaurants WHERE slug = $1 LIMIT 1`,
+      [QR_RESTAURANT_SLUG],
+    );
+    await markAllNotificationsRead(restaurant.rows[0]?.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/v1/waiter/sessions', async (req, res) => {
+  try {
+    res.json(await listActiveSessions());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/v1/waiter/session/:sessionId', async (req, res) => {
+  try {
+    res.json(await refreshSessionWithWorkflow(req.params.sessionId));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/waiter/session/:sessionId/cart', async (req, res) => {
+  try {
+    const { items, guestCount } = req.body || {};
+    if (!Array.isArray(items)) return res.status(400).json({ error: 'items обязателен' });
+    res.json(await waiterUpdateCart(req.params.sessionId, items, { guestCount }));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/v1/waiter/session/:sessionId/send-to-production', async (req, res) => {
+  try {
+    res.json(await sendOrderToProduction(req.params.sessionId));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message, details: err.details });
   }
 });
 

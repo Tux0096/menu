@@ -1,3 +1,4 @@
+import { Capacitor } from '@capacitor/core';
 import {
   AppUpdate,
   AppUpdateAvailability,
@@ -61,6 +62,10 @@ const startPeriodicUpdateCheck = () => {
 };
 
 export default async (context, inject) => {
+  if (Capacitor.getPlatform() === 'web') {
+    inject('checkForUpdates', async () => {});
+    return;
+  }
   await checkForUpdates();
   startPeriodicUpdateCheck();
   inject('checkForUpdates', checkForUpdates);

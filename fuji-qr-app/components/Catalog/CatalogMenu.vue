@@ -1,5 +1,13 @@
 <template>
   <div class="catalog-menu">
+    <button
+      v-if="canGoBack"
+      type="button"
+      class="catalog-menu__back"
+      @click="goBack"
+    >
+      ← Назад
+    </button>
     <div
 
       class="catalog-menu__inner"
@@ -41,32 +49,56 @@ export default {
   data() {
     return {
       menu: this.$store.getters['setting/CATALOG_MENU'],
+      menuStack: [],
     };
   },
 
+  computed: {
+    isTableMode() {
+      return this.$store.getters['tableSession/isActive'];
+    },
+    canGoBack() {
+      return this.menuStack.length > 0;
+    },
+  },
+
   methods: {
-    onMenuItemClick(item) {
-      if (!item.isParent) {
-        this.$store.commit('modal/hideModal');
+    goBack() {
+      if (!this.menuStack.length) return;
+      this.menu = this.menuStack.pop();
+    },
 
-        const normalizedRouteName = normalizeRouteName(this.$route.name);
-
-        if (normalizedRouteName === 'index') {
-          const sectionElement = document.getElementById(`catalog-section-${item.slug}`);
-          if (sectionElement) {
-            this.$nextTick(() => {
-              scrollToCatalogCategory(sectionElement);
-            });
-          }
-        } else {
-          this.$router.push({
-            path: '/',
-            query: { scrollToCatalogSection: item.slug },
-          });
-        }
-
+    openCatalogSection(item) {
+      if (this.isTableMode) {
+        this.$router.push(`/catalog/${item.slug}`);
         return;
       }
+
+      this.$store.commit('modal/hideModal');
+
+      const normalizedRouteName = normalizeRouteName(this.$route.name);
+
+      if (normalizedRouteName === 'index') {
+        const sectionElement = document.getElementById(`catalog-section-${item.slug}`);
+        if (sectionElement) {
+          this.$nextTick(() => {
+            scrollToCatalogCategory(sectionElement);
+          });
+        }
+      } else {
+        this.$router.push({
+          path: '/',
+          query: { scrollToCatalogSection: item.slug },
+        });
+      }
+    },
+
+    onMenuItemClick(item) {
+      if (!item.isParent) {
+        this.openCatalogSection(item);
+        return;
+      }
+      this.menuStack.push(this.menu);
       this.menu = item.children;
     },
 
@@ -79,6 +111,24 @@ export default {
 >
 
 .catalog-menu {
+  // .catalog-menu__back
+  &__back {
+    display: block;
+    margin: 0 0 extClamp(8) extClamp(4);
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(---Main-Purple, #993ca6);
+    font-size: extClamp(13);
+    font-weight: 600;
+    cursor: pointer;
+
+    @media screen and (min-width: 768px) {
+      margin-bottom: 12px;
+      font-size: 14px;
+    }
+  }
+
   // .catalog-menu__inner
   &__inner {
     display: flex;

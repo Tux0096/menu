@@ -1,8 +1,32 @@
 <template>
-  <div class="order-page">
+  <div class="order-page page-content">
     <h1 class="order-page__title">
       Ваш заказ
     </h1>
+
+    <div
+      v-if="workflowLabel"
+      class="order-page__workflow"
+    >
+      {{ workflowLabel }}
+    </div>
+
+    <button
+      type="button"
+      class="order-page__waiter"
+      @click="onCallWaiter"
+    >
+      🔔 Позвать официанта
+    </button>
+
+    <button
+      v-if="canGuestPay && !isPaid"
+      type="button"
+      class="order-page__pay"
+      @click="openPay"
+    >
+      💳 Оплатить счёт — {{ totalPrice }} ₽
+    </button>
 
     <div
       v-if="!cartItems.length"
@@ -19,19 +43,44 @@
     </div>
 
     <template v-else>
+      <div
+        v-if="isInProduction"
+        class="order-page__status order-page__status--open"
+      >
+        Заказ на кухне. Можно добавить позиции — официант подтвердит дозаказ.
+      </div>
+      <div
+        v-else-if="isAwaitingWaiter"
+        class="order-page__status order-page__status--wait"
+      >
+        Корзина передана официанту — ожидайте подхода для сверки заказа.
+      </div>
+      <div
+        v-else-if="isPaid"
+        class="order-page__status order-page__status--closed"
+      >
+        Счёт оплачен. Спасибо за визит!
+      </div>
+
       <ul class="order-page__list">
         <li
           v-for="(item, idx) in cartItems"
           :key="idx"
           class="order-page__item"
+          :class="{ 'order-page__item--locked': item.isLocked }"
         >
           <div class="order-page__item-name">
             {{ item.product.name }}
+            <span
+              v-if="item.isLocked"
+              class="order-page__locked"
+            >на кухне</span>
           </div>
           <div class="order-page__item-row">
             <div class="order-page__qty">
               <button
                 type="button"
+                :disabled="!canDecrease(item)"
                 @click="changeQty(item, -1)"
               >
                 −
@@ -56,31 +105,25 @@
         <span>{{ totalPrice }} ₽</span>
       </div>
 
-      <div
-        v-if="isPaid"
-        class="order-page__paid"
-      >
-        ✓ Заказ оплачен
-      </div>
-
       <div class="order-page__actions">
         <button
           v-if="!isPaid"
           type="button"
           class="order-page__btn order-page__btn--primary"
-          :disabled="syncing"
-          @click="pay"
+          :disabled="orderSubmitting"
+          @click="submitToWaiter"
         >
-          {{ syncing ? 'Отправка...' : 'Оплатить заказ' }}
+          {{ submitLabel }}
         </button>
         <button
           type="button"
           class="order-page__btn order-page__btn--secondary"
           @click="addMore"
         >
-          Дополнить заказ
+          Дополнить из меню
         </button>
         <button
+          v-if="canClear"
           type="button"
           class="order-page__btn order-page__btn--ghost"
           @click="clearOrder"
@@ -98,30 +141,56 @@ export default {
     return ctx.store.getters['tableSession/isActive'] ? 'qr-table' : 'default';
   },
 
-  data() {
-    return {
-      syncing: false,
-    };
-  },
-
   computed: {
     cartItems() {
       return this.$store.getters['cart/cartItems'] || [];
     },
     totalPrice() {
-      return this.cartItems.reduce(
-        (sum, i) => sum + (i.product?.price || 0) * i.quantity,
-        0,
+      return Math.round(
+        this.cartItems.reduce(
+          (sum, i) => sum + (i.product?.price || 0) * i.quantity,
+          0,
+        ),
       );
     },
     isPaid() {
       return this.$store.getters['tableSession/isPaid'];
+    },
+    isInProduction() {
+      return this.$store.getters['tableSession/isInProduction'];
+    },
+    isAwaitingWaiter() {
+      return this.$store.getters['tableSession/isAwaitingWaiter'];
+    },
+    canGuestPay() {
+      return this.$store.getters['tableSession/canGuestPay'];
+    },
+    canGuestRemoveItems() {
+      return this.$store.getters['tableSession/canGuestRemoveItems'];
+    },
+    workflowLabel() {
+      return this.$store.getters['tableSession/workflowLabel'];
+    },
+    orderSubmitting() {
+      return this.$store.state.tableSession.orderSubmitting;
+    },
+    canClear() {
+      if (this.isPaid) return false;
+      if (this.canGuestRemoveItems) return this.cartItems.length > 0;
+      return this.cartItems.some((i) => !i.isLocked);
+    },
+    submitLabel() {
+      if (this.orderSubmitting) return 'Отправка...';
+      if (this.isAwaitingWaiter) return 'Обновить для официанта';
+      if (this.isInProduction) return 'Передать дозаказ';
+      return 'Передать официанту';
     },
   },
 
   mounted() {
     this.$store.commit('tableSession/setActiveTab', 'order');
     this.$store.dispatch('tableSession/refreshSession');
+    this.$store.dispatch('tableSession/trackActivity');
   },
 
   methods: {
@@ -132,7 +201,19 @@ export default {
       this.$store.commit('tableSession/setActiveTab', 'menu');
       this.$router.push('/');
     },
+    canDecrease(item) {
+      if (this.canGuestRemoveItems) return true;
+      return !item.isLocked;
+    },
     async changeQty(item, delta) {
+      if (delta < 0 && item.isLocked && !this.canGuestRemoveItems) {
+        this.$notify({
+          group: 'messages',
+          type: 'error',
+          text: 'Нельзя убрать позицию из принятого заказа. Позовите официанта.',
+        });
+        return;
+      }
       const newQty = item.quantity + delta;
       if (newQty <= 0) {
         const items = this.cartItems.filter((i) => i !== item);
@@ -143,41 +224,40 @@ export default {
         ));
         await this.$store.dispatch('cart/setItems', items);
       }
-      if (this.$store.getters['tableSession/isActive']) {
-        await this.$store.dispatch('tableSession/syncToIiko');
-      }
+      await this.$store.dispatch('tableSession/trackActivity');
     },
-    async pay() {
-      this.syncing = true;
+    async submitToWaiter() {
       try {
-        await this.$store.dispatch('tableSession/syncToIiko');
-        await this.$store.dispatch('tableSession/payOrder');
+        await this.$store.dispatch('tableSession/submitToWaiter');
         this.$notify({
           group: 'messages',
           type: 'success',
-          text: 'Заказ отправлен на оплату',
+          text: 'Корзина передана официанту',
         });
       } catch (e) {
         this.$notify({
           group: 'messages',
           type: 'error',
-          text: e.response?.data?.error || 'Ошибка оплаты',
+          text: e.response?.data?.error || 'Не удалось передать заказ',
         });
-      } finally {
-        this.syncing = false;
       }
     },
-    async addMore() {
-      if (this.isPaid) {
-        await this.$store.dispatch('tableSession/reopenForMore');
-      }
+    addMore() {
       this.goMenu();
     },
     async clearOrder() {
-      await this.$store.dispatch('cart/setItems', []);
-      if (this.$store.getters['tableSession/isActive']) {
-        await this.$store.dispatch('tableSession/syncToIiko');
+      if (!this.canGuestRemoveItems) {
+        const items = this.cartItems.filter((i) => i.isLocked);
+        await this.$store.dispatch('cart/setItems', items);
+      } else {
+        await this.$store.dispatch('cart/setItems', []);
       }
+    },
+    onCallWaiter() {
+      this.$nuxt.$emit('qr-call-waiter');
+    },
+    openPay() {
+      this.$store.commit('tableSession/setShowPaymentModal', true);
     },
   },
 };
@@ -185,19 +265,73 @@ export default {
 
 <style lang="scss" scoped>
 .order-page {
-  padding: 20px 16px 120px;
-  color: #fff;
+  padding: extClamp(16) extClamp(16) 120px;
+  color: var(---Main-Black, #292929);
 
   &__title {
-    margin: 0 0 20px;
-    font-size: 24px;
+    margin: 0 0 12px;
+    font-size: extClamp(20);
     font-weight: 700;
+    color: var(---Main-Purple, #993ca6);
+  }
+
+  &__workflow {
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    border-radius: extClamp(8);
+    background: var(---Primary-LightPurple, #f5ecf6);
+    color: var(---Main-Purple, #993ca6);
+    font-size: extClamp(11);
+  }
+
+  &__waiter, &__pay {
+    display: block;
+    width: 100%;
+    margin-bottom: 12px;
+    padding: extClamp(12) extClamp(16);
+    border: 1px solid var(---Primary-Gray, #969696);
+    border-radius: extClamp(12);
+    background: #fff;
+    color: var(---Main-Black, #292929);
+    font-size: extClamp(12);
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  &__pay {
+    border-color: var(---Main-Purple, #993ca6);
+    background: var(---Primary-LightPurple, #f5ecf6);
+    color: var(---Main-Purple, #993ca6);
   }
 
   &__empty {
     padding: 40px 0;
     text-align: center;
-    opacity: 0.7;
+    opacity: 0.65;
+  }
+
+  &__status {
+    margin-bottom: 16px;
+    padding: extClamp(12);
+    border-radius: extClamp(10);
+    font-size: extClamp(11);
+    line-height: 1.4;
+
+    &--open {
+      background: var(---Primary-LightPurple, #f5ecf6);
+      color: var(---Main-Purple, #993ca6);
+    }
+
+    &--wait {
+      background: #fff;
+      border: 1px solid var(---Primary-Gray, #969696);
+      color: var(---Main-Black, #292929);
+    }
+
+    &--closed {
+      background: var(---Primary-LightGray, #f5f5f5);
+      color: var(---Main-Black, #292929);
+    }
   }
 
   &__list {
@@ -207,13 +341,25 @@ export default {
   }
 
   &__item {
-    padding: 14px 0;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    padding: extClamp(14) 0;
+    border-bottom: 1px solid var(---Primary-LightGray, #f0f0f0);
+
+    &--locked { opacity: 0.85; }
   }
 
   &__item-name {
-    font-size: 15px;
+    font-size: extClamp(13);
     font-weight: 500;
+  }
+
+  &__locked {
+    margin-left: 8px;
+    padding: 2px 6px;
+    border-radius: 6px;
+    background: var(---Primary-LightPurple, #f5ecf6);
+    color: var(---Main-Purple, #993ca6);
+    font-size: 10px;
+    font-weight: 600;
   }
 
   &__item-row {
@@ -231,35 +377,28 @@ export default {
     button {
       width: 32px;
       height: 32px;
-      border: 1px solid rgba(255, 255, 255, 0.2);
+      border: 1px solid var(---Primary-Gray, #969696);
       border-radius: 8px;
-      background: transparent;
-      color: #fff;
+      background: #fff;
+      color: var(---Main-Black, #292929);
       font-size: 18px;
       cursor: pointer;
+
+      &:disabled { opacity: 0.35; cursor: not-allowed; }
     }
   }
 
   &__item-price {
     font-weight: 600;
-    color: #db9dee;
+    color: var(---Main-Purple, #993ca6);
   }
 
   &__total {
     display: flex;
     justify-content: space-between;
     padding: 16px 0;
-    font-size: 18px;
+    font-size: extClamp(16);
     font-weight: 700;
-  }
-
-  &__paid {
-    margin-bottom: 16px;
-    padding: 12px;
-    border-radius: 12px;
-    background: rgba(76, 175, 80, 0.2);
-    color: #81c784;
-    text-align: center;
   }
 
   &__actions {
@@ -269,26 +408,26 @@ export default {
   }
 
   &__btn {
-    padding: 14px;
+    padding: extClamp(14);
     border: none;
-    border-radius: 14px;
-    font-size: 15px;
+    border-radius: extClamp(12);
+    font-size: extClamp(13);
     font-weight: 600;
     cursor: pointer;
 
     &--primary {
-      background: linear-gradient(135deg, #993ca6, #db9dee);
+      background: var(---Main-Purple, #993ca6);
       color: #fff;
     }
 
     &--secondary {
-      background: rgba(255, 255, 255, 0.1);
-      color: #fff;
+      background: var(---Primary-LightPurple, #f5ecf6);
+      color: var(---Main-Purple, #993ca6);
     }
 
     &--ghost {
       background: transparent;
-      color: rgba(255, 255, 255, 0.5);
+      color: rgba(41, 41, 41, 0.5);
     }
 
     &:disabled {

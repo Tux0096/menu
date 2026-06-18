@@ -4,45 +4,112 @@
       group="messages"
       position="top center"
     />
-    <header
-      v-if="isTableMode"
-      class="layout-qr__header"
-    >
-      <div class="layout-qr__brand">
-        Фуджи
-      </div>
-      <div class="layout-qr__meta">
-        <span>{{ restaurantLabel }}</span>
-        <span class="layout-qr__table">{{ tableLabel }}</span>
-      </div>
-    </header>
 
-    <main class="layout-qr__main">
-      <nuxt />
-    </main>
+    <QrTableHeader v-if="isTableMode" />
+
+    <div
+      class="layout-qr__page page"
+      :class="{ 'layout-qr__page--table': isTableMode }"
+    >
+      <main class="layout-qr__main">
+        <nuxt />
+      </main>
+    </div>
 
     <client-only>
       <TheModals />
       <QrBottomNav v-if="isTableMode" />
+      <GuestPaymentModal
+        :visible="showPaymentModal"
+        :total="orderTotal"
+        @close="closePayment"
+      />
+      <VisitFeedbackModal
+        :visible="showFeedbackModal"
+        @done="closeFeedback"
+      />
+      <CallWaiterSheet
+        :visible="showCallWaiter"
+        @close="showCallWaiter = false"
+      />
     </client-only>
   </div>
 </template>
 
 <script>
+import QrTableHeader from '~/components/QrTableHeader.vue';
 import QrBottomNav from '~/components/QrBottomNav.vue';
+import GuestPaymentModal from '~/components/GuestPaymentModal.vue';
+import VisitFeedbackModal from '~/components/VisitFeedbackModal.vue';
+import CallWaiterSheet from '~/components/CallWaiterSheet.vue';
 
 export default {
-  components: { QrBottomNav },
+  components: {
+    QrTableHeader,
+    QrBottomNav,
+    GuestPaymentModal,
+    VisitFeedbackModal,
+    CallWaiterSheet,
+  },
+
+  data() {
+    return { showCallWaiter: false };
+  },
 
   computed: {
     isTableMode() {
       return this.$store.getters['tableSession/isActive'];
     },
-    tableLabel() {
-      return this.$store.getters['tableSession/tableLabel'];
+    showPaymentModal() {
+      return this.$store.state.tableSession.showPaymentModal;
     },
-    restaurantLabel() {
-      return this.$store.getters['tableSession/restaurantLabel'];
+    showFeedbackModal() {
+      return this.$store.state.tableSession.showFeedbackModal;
+    },
+    orderTotal() {
+      return this.$store.state.tableSession.orderTotal
+        || Math.round(
+          (this.$store.getters['cart/cartItems'] || []).reduce(
+            (s, i) => s + (i.product?.price || 0) * i.quantity,
+            0,
+          ),
+        );
+    },
+  },
+
+  watch: {
+    '$store.state.cart.items': {
+      handler() {
+        if (this.isTableMode) {
+          this.$store.dispatch('tableSession/scheduleCartSave');
+        }
+      },
+      deep: true,
+    },
+  },
+
+  mounted() {
+    if (this.isTableMode) {
+      this.$store.dispatch('tableSession/trackActivity');
+      this.$store.dispatch('tableSession/startSessionPolling');
+    }
+    this.$nuxt.$on('qr-call-waiter', this.openCallWaiter);
+  },
+
+  beforeDestroy() {
+    this.$nuxt.$off('qr-call-waiter', this.openCallWaiter);
+    this.$store.dispatch('tableSession/stopSessionPolling');
+  },
+
+  methods: {
+    openCallWaiter() {
+      this.showCallWaiter = true;
+    },
+    closePayment() {
+      this.$store.commit('tableSession/setShowPaymentModal', false);
+    },
+    closeFeedback() {
+      this.$store.commit('tableSession/setShowFeedbackModal', false);
     },
   },
 };
@@ -50,47 +117,24 @@ export default {
 
 <style lang="scss" scoped>
 .layout-qr {
-  display: flex;
-  flex-direction: column;
   min-height: 100vh;
-  background: #0f1114;
-  color: #fff;
+  background: var(---Main-Purple, #993ca6);
 
-  &__header {
-    position: sticky;
-    z-index: 50;
-    top: 0;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 16px;
-    padding-top: calc(12px + env(safe-area-inset-top));
-    background: rgba(15, 17, 20, 0.92);
-    backdrop-filter: blur(12px);
-  }
+  &__page {
+    &--table {
+      padding-top: calc(extClamp(56) + var(--safe-area-inset-top, 0));
 
-  &__brand {
-    font-size: 18px;
-    font-weight: 700;
-    letter-spacing: 0.02em;
-  }
-
-  &__meta {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-end;
-    font-size: 12px;
-    opacity: 0.85;
-  }
-
-  &__table {
-    font-weight: 600;
-    color: #db9dee;
+      @media screen and (min-width: 768px) {
+        padding-top: calc(88px + var(--safe-area-inset-top, 0));
+      }
+    }
   }
 
   &__main {
-    flex: 1;
-    padding-bottom: 100px;
+    min-height: calc(100vh - 80px);
+    padding-bottom: calc(extClamp(70) + env(safe-area-inset-bottom));
+    background: #fff;
+    color: var(---Main-Black, #292929);
   }
 }
 </style>

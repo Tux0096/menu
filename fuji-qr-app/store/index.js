@@ -1,4 +1,5 @@
 import { yaInit } from '@/lib/yandexService';
+import { Capacitor } from '@capacitor/core';
 
 export const state = () => ({
   timeAppLoad: null,
@@ -123,6 +124,9 @@ export const actions = {
     }, CHECK_STORE_VERSION_INTERVAL);
 
     const checkMobileAppVersion = async () => {
+      if (Capacitor.getPlatform() === 'web') {
+        return;
+      }
       const currentVersion = state.mobileAppVersion;
       try {
         const { data: version } = await this.$axios.get(
