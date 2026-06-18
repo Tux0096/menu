@@ -25,6 +25,10 @@ sleep 3
 ollama pull qwen2:0.5b || ollama pull llama3.2:1b
 
 echo "=== 3. PostgreSQL (Docker) ==="
+if ! command -v docker >/dev/null 2>&1; then
+  curl -fsSL https://get.docker.com | sh
+  sudo usermod -aG docker ubuntu
+fi
 if ! sudo docker ps -a --format '{{.Names}}' | grep -q '^menu-postgres$'; then
   sudo docker run -d --name menu-postgres \
     --restart unless-stopped \
