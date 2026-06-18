@@ -147,11 +147,15 @@ export const actions = {
 
     await dispatch('setting/initSettings');
     await dispatch('city/initCity', ctx.route);
-    const tableApplied = await dispatch('tableDeepLink/tryApplyFromQuery', ctx);
-    if (!tableApplied?.applied) {
-      await dispatch('pickupDeepLink/tryApplyFromQuery', ctx);
-      dispatch('city/initCitySelection');
-      dispatch('pickupDeepLink/consumePendingPickupModal');
+    try {
+      const tableApplied = await dispatch('tableDeepLink/tryApplyFromQuery', ctx);
+      if (!tableApplied?.applied) {
+        await dispatch('pickupDeepLink/tryApplyFromQuery', ctx);
+        dispatch('city/initCitySelection');
+        dispatch('pickupDeepLink/consumePendingPickupModal');
+      }
+    } catch (e) {
+      console.error('Deep link init error:', e);
     }
     dispatch('catalog/initCatalog')
       .then(() => dispatch('cart/setDeliveryMethod', 'self'))
