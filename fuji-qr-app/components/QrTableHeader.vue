@@ -51,7 +51,7 @@
       :class="{ 'qr-header__categories--show': isCatalogMenuShow }"
       class="qr-header__categories"
     >
-      <CatalogHeaderCategories />
+      <CatalogHeaderCategories disable-portal />
     </div>
   </header>
 </template>
@@ -62,7 +62,8 @@ export default {
 
   computed: {
     isCatalogMenuShow() {
-      return this.$store.state.view.isCatalogCategoriesIntersecting;
+      const onMenu = this.$store.state.tableSession.activeTab === 'menu';
+      return onMenu && this.$store.state.view.isCatalogCategoriesIntersecting;
     },
     tableLabel() {
       return this.$store.getters['tableSession/tableLabel'];

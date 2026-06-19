@@ -5,13 +5,13 @@
   >
     <div class="page-index">
       <template v-if="isTableMode">
-        <CatalogHeaderCategories />
         <div
           ref="page-index-catalog-categories"
           class="page-index__catalog-categories"
         >
-          <portal-target name="catalog-header-categories" />
+          <CatalogHeaderCategories disable-portal />
         </div>
+        <QrMenuSearch class="page-index__search" />
         <div id="top-of-catalog" />
         <template v-if="catalog?.length > 0">
           <CatalogSection
@@ -207,7 +207,10 @@ export default {
   },
   computed: {
     catalog() {
-      return this.$store.getters['catalog/catalogIsIncludedInMenu'].filter((el) => el.items.length);
+      const getter = this.isTableMode && this.$store.state.catalog.searchString
+        ? 'catalog/catalogIsIncludedInMenuFiltered'
+        : 'catalog/catalogIsIncludedInMenu';
+      return this.$store.getters[getter].filter((el) => el.items.length);
     },
 
     isCatalogMenuShow() {
@@ -226,6 +229,10 @@ export default {
   beforeDestroy() {
     if (this.observer) {
       this.observer.disconnect();
+    }
+    if (this.isTableMode) {
+      this.$store.commit('view/setIsCatalogCategoriesIntersecting', false);
+      this.$store.commit('catalog/clearAllFilers');
     }
   },
   mounted() {

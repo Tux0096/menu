@@ -63,6 +63,9 @@ export default {
 
   methods: {
     go(tab) {
+      if (tab !== 'menu') {
+        this.$store.commit('view/setIsCatalogCategoriesIntersecting', false);
+      }
       this.$store.commit('tableSession/setActiveTab', tab);
       const routes = {
         welcome: '/welcome',
