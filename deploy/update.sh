@@ -61,6 +61,7 @@ chmod 600 "$ENV_FILE"
 
 echo "=== 4. База данных ==="
 node db/migrate.js
+timeout 60 node db/check-iiko.js || true
 timeout 300 node db/sync-iiko.js >/dev/null 2>&1 && echo "iiko: меню выгружено" || echo "iiko: выгрузка пропущена (проверьте IIKO_API_LOGIN)"
 
 echo "=== 5. Сервис ==="
