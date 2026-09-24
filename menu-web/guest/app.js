@@ -435,7 +435,11 @@
       }, { timeout: 9000 });
       S.aiFresh = true;
       S.ai = { ...S.ai, results: res.suggestions, loading: false, engine: res.engine, label: res.answer || (res.suggestions.length ? 'Вот что я подобрал:' : '') };
-      if (!res.suggestions.length) S.ai.error = 'Не нашёл подходящих блюд';
+      if (!res.suggestions.length) {
+        S.ai.error = S.catalog && !S.catalog.products?.length
+          ? 'Меню ресторана ещё загружается из iiko — загляните чуть позже или позовите официанта'
+          : 'Не нашёл подходящих блюд';
+      }
       store.set('aiResults', res.suggestions);
     } catch (e) {
       // Fallback по ТЗ: без пустого экрана — показываем популярное
@@ -487,7 +491,9 @@
       ${S.menu.search ? '' : `<div class="cats" id="cats">${sections.map((s) => `<button data-cat="${esc(s.id)}">${esc(s.name)}</button>`).join('')}</div>`}
       ${sections.length ? sections.map((s) => `<h2 class="section-title" id="cat-${esc(s.id)}">${esc(s.name)}</h2>
         <div class="list">${s.items.map((p) => dishCard(p)).join('')}</div>`).join('')
-    : `<div class="empty"><div class="orb orb--md"></div>Ничего не нашлось. Спросите AI — он подберёт похожее.</div>`}
+    : S.catalog.products?.length
+      ? `<div class="empty"><div class="orb orb--md"></div>Ничего не нашлось. Спросите AI — он подберёт похожее.</div>`
+      : `<div class="empty"><div class="orb orb--md"></div>Меню ресторана ещё загружается из iiko.<br>Загляните чуть позже или позовите официанта.</div>`}
       ${cartCount() && !S.session?.isPaid ? `<div style="position:sticky;bottom:calc(100px + var(--safe-b));margin-top:20px">${submitBlock()}</div>` : ''}
     </main>`;
   }
