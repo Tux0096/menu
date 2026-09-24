@@ -173,12 +173,30 @@ async function fetchRawCatalog(restaurant) {
   ]);
 
   let result = null;
-  if (fromIiko) {
-    const matched = enrichWithLegacy(fromIiko, legacy);
-    result = { source: legacy ? `iiko+fuji(${matched}/${fromIiko.products.length})` : 'iiko', data: fromIiko };
-  } else if (legacy) {
+  let networkFrom = null;
+  let iikoMenu = fromIiko;
+  if (!iikoMenu) {
+    // У организации нет своей номенклатуры в iiko — берём меню сети (общая номенклатура, те же ID блюд).
+    // Стоп-лист при этом накладывается свой, этого ресторана.
+    const { rows } = await pool.query(
+      `SELECT p.restaurant_id, r.slug, COUNT(*)::int AS n FROM products p JOIN restaurants r ON r.id = p.restaurant_id
+       WHERE p.is_published = TRUE AND p.price > 0 AND p.restaurant_id <> $1
+       GROUP BY 1, 2 ORDER BY n DESC LIMIT 1`,
+      [restaurant.id],
+    );
+    if (rows[0]) {
+      iikoMenu = await getCatalogFromDb(rows[0].restaurant_id);
+      networkFrom = rows[0].slug;
+    }
+  }
+  if (iikoMenu) {
+    const matched = enrichWithLegacy(iikoMenu, legacy);
+    const base = networkFrom ? `iiko-сеть:${networkFrom}` : 'iiko';
+    result = { source: legacy ? `${base}+fuji(${matched}/${iikoMenu.products.length})` : base, data: iikoMenu };
+  }
+  if (!result && legacy) {
     result = { source: 'fuji-api', data: legacy };
-  } else if (ALLOW_DEMO) {
+  } else if (!result && ALLOW_DEMO) {
     const snap = await loadSnapshot(restaurant.id);
     if (snap) result = { source: `snapshot:${snap.source}`, data: snap.data };
   }

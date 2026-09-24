@@ -278,7 +278,7 @@ export async function syncAllRestaurants(slugArg = null) {
   let totalProducts = 0;
   let failed = 0;
   for (const [idx, r] of restaurants.entries()) {
-    if (idx) await new Promise((res) => setTimeout(res, 2000)); // iiko ограничивает частоту запросов (429)
+    if (idx) await new Promise((res) => setTimeout(res, 6000)); // iiko ограничивает частоту запросов (429)
     try {
       const res = await syncRestaurant(r, token);
       totalProducts += res.products || 0;

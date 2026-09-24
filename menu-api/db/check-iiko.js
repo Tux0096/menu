@@ -27,7 +27,16 @@ async function main() {
   for (const r of rows) {
     console.log(`  ${visible.has(r.organization_id) ? '✓' : '✗'} ${r.slug.padEnd(20)} ${r.organization_id}  ${r.name}`);
   }
-  if (!rows.some((r) => visible.has(r.organization_id))) {
+  try {
+    const { data: menus } = await axios.post(`${IIKO_URL}/api/2/menu`, {}, { headers, timeout: 15000 });
+    const ext = menus.externalMenus || [];
+    console.log(`Внешние меню iiko: ${ext.length ? ext.map((m) => `${m.name} [${m.id}]`).join('; ') : 'нет'}`);
+    const cats = menus.priceCategories || [];
+    if (cats.length) console.log(`Ценовые категории: ${cats.map((c) => `${c.name} [${c.id}]`).join('; ')}`);
+  } catch (e) {
+    console.log('Внешние меню iiko: не удалось получить —', e.response?.status || '', e.response?.data?.errorDescription || e.message);
+  }
+    if (!rows.some((r) => visible.has(r.organization_id))) {
     console.log('ВНИМАНИЕ: ни один ресторан меню не подключён к ключу — добавьте точки в iiko (Cloud API → интеграция → Подключенные точки)');
   }
 }
