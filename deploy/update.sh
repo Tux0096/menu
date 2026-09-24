@@ -2,7 +2,7 @@
 # Обновление прода QR-меню на уже настроенном сервере (запускается из GitHub Actions или вручную).
 #   BRANCH=main bash deploy/update.sh
 # Секреты берутся из переменных окружения и дописываются в menu-api/.env (в репозиторий не попадают):
-#   OPENROUTER_API_KEY, IIKO_API_LOGIN, ADMIN_PASSWORD, MANAGER_PASSWORD, WAITER_PASSWORD
+#   OPENROUTER_API_KEY, IIKO_API_LOGIN, IIKO_CLIENT_SECRET, ADMIN_PASSWORD, MANAGER_PASSWORD, WAITER_PASSWORD
 set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-/home/ubuntu/menu}"
@@ -54,6 +54,7 @@ rand() { openssl rand -hex "${1:-16}"; }
 # Секреты из GitHub Secrets перезаписывают значения в .env
 [ -n "${OPENROUTER_API_KEY:-}" ] && set_env OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
 [ -n "${IIKO_API_LOGIN:-}" ] && set_env IIKO_API_LOGIN "$IIKO_API_LOGIN"
+[ -n "${IIKO_CLIENT_SECRET:-}" ] && set_env IIKO_CLIENT_SECRET "$IIKO_CLIENT_SECRET"
 
 ensure_env AUTH_SECRET "$(rand 32)"
 ensure_env QR_RESTAURANT_SLUG "novo-sadovaya"

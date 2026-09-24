@@ -7,7 +7,7 @@
 #   DEPLOY_SSH_KEY      — приватный SSH-ключ, чей публичный ключ добавлен в ~/.ssh/authorized_keys на сервере
 #   OPENROUTER_API_KEY  — ключ AI (OpenRouter)
 # Необязательные:
-#   IIKO_API_LOGIN, ADMIN_PASSWORD, MANAGER_PASSWORD, WAITER_PASSWORD
+#   IIKO_API_LOGIN, IIKO_CLIENT_SECRET (для ключей iiko нового поколения), ADMIN_PASSWORD, MANAGER_PASSWORD, WAITER_PASSWORD
 name: Deploy
 
 on:
@@ -29,6 +29,7 @@ jobs:
           BRANCH: ${{ github.ref_name }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           IIKO_API_LOGIN: ${{ secrets.IIKO_API_LOGIN }}
+          IIKO_CLIENT_SECRET: ${{ secrets.IIKO_CLIENT_SECRET }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           MANAGER_PASSWORD: ${{ secrets.MANAGER_PASSWORD }}
           WAITER_PASSWORD: ${{ secrets.WAITER_PASSWORD }}
@@ -36,7 +37,7 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: BRANCH,OPENROUTER_API_KEY,IIKO_API_LOGIN,ADMIN_PASSWORD,MANAGER_PASSWORD,WAITER_PASSWORD
+          envs: BRANCH,OPENROUTER_API_KEY,IIKO_API_LOGIN,IIKO_CLIENT_SECRET,ADMIN_PASSWORD,MANAGER_PASSWORD,WAITER_PASSWORD
           command_timeout: 20m
           script: |
             set -e
