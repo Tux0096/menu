@@ -177,7 +177,102 @@ async function upsertIikoGroups(client, groups, products) {
   }
 }
 
-async function syncRestaurant(restaurant, token, orgs = []) {
+/** Внешние меню iiko, подключённые к ключу; выбор — IIKO_EXTERNAL_MENU (id/часть названия) или «Ресторанное меню». */
+async function pickExternalMenu(token) {
+  try {
+    const data = await iikoPostRaw(token, '/api/2/menu', {});
+    const menus = data.externalMenus || [];
+    console.log(`Внешние меню iiko: ${menus.length ? menus.map((m) => `${m.name} [${m.id}]`).join('; ') : 'нет (подключите «Ресторанное меню» к интеграции ключа)'}`);
+    const want = String(process.env.IIKO_EXTERNAL_MENU || '').toLowerCase();
+    const menu = want
+      ? menus.find((m) => String(m.id) === want || String(m.name).toLowerCase().includes(want))
+      : menus.find((m) => /ресторан|зал|qr/i.test(m.name));
+    if (menu) console.log(`Используем внешнее меню «${menu.name}» [${menu.id}]`);
+    return menu || null;
+  } catch (e) {
+    console.log('Внешние меню iiko: не удалось получить —', e.response?.status || '', e.response?.data?.errorDescription || e.message);
+    return null;
+  }
+}
+
+/** Меню ресторана из внешнего меню iiko: цены и доступность — для организации ресторана. */
+async function syncFromExternalMenu(restaurant, token, menu, organizationId) {
+  const data = await iikoPostRaw(token, '/api/2/menu/by_id', {
+    externalMenuId: String(menu.id),
+    organizationIds: [organizationId],
+    version: 2,
+    language: 'ru',
+  });
+  const categories = data.itemCategories || data.categories || [];
+  const rows = [];
+  for (const [ci, cat] of categories.entries()) {
+    if (cat.isHidden) continue;
+    for (const [ii, item] of (cat.items || []).entries()) {
+      if (item.isHidden) continue;
+      const size = (item.itemSizes || []).find((z) => z.isDefault) || (item.itemSizes || [])[0];
+      if (!size) continue;
+      const prices = size.prices || [];
+      const priceRow = prices.find((p) => p.organizationId === organizationId) || (prices.length === 1 ? prices[0] : null);
+      const price = Number(priceRow?.price ?? 0);
+      if (!(price > 0)) continue; // блюдо не продаётся в этом ресторане
+      const n = size.nutritionPerHundredGrams || size.nutritions?.[0] || {};
+      rows.push({
+        category: { id: cat.id, name: cat.name, order: ci },
+        id: item.itemId || item.id,
+        name: item.name,
+        description: item.description || null,
+        price,
+        weight: size.portionWeightGrams ? `${Math.round(size.portionWeightGrams)} г` : null,
+        image: size.buttonImageUrl || item.imageUrl || (item.imageUrls || [])[0] || null,
+        energy: n.energy ?? null,
+        proteins: n.proteins ?? null,
+        fats: n.fats ?? null,
+        carbs: n.carbs ?? null,
+        order: ci * 1000 + ii,
+      });
+    }
+  }
+  console.log(`  внешнее меню «${menu.name}»: ${rows.length} блюд с ценой для ресторана`);
+  if (!rows.length) return 0;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const seen = new Set();
+    for (const r of rows) {
+      if (seen.has(r.category.id)) continue;
+      seen.add(r.category.id);
+      await client.query(
+        `INSERT INTO categories (id, name, slug, parent_id, sort_order, is_visible)
+         VALUES ($1, $2, $3, NULL, $4, TRUE)
+         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, sort_order = EXCLUDED.sort_order, parent_id = NULL, is_visible = TRUE`,
+        [r.category.id, r.category.name, r.category.id, r.category.order],
+      );
+    }
+    await client.query('DELETE FROM products WHERE restaurant_id = $1', [restaurant.id]);
+    for (const r of rows) {
+      await client.query(
+        `INSERT INTO products
+           (iiko_id, restaurant_id, name, slug, description, price, weight, image_url,
+            category_id, sort_order, is_published, energy, proteins, fats, carbs)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,$11,$12,$13,$14)
+         ON CONFLICT (restaurant_id, iiko_id) DO NOTHING`,
+        [r.id, restaurant.id, r.name, r.name, r.description, r.price, r.weight, r.image,
+          r.category.id, r.order, r.energy, r.proteins, r.fats, r.carbs],
+      );
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+  console.log(`  ✓ записано ${rows.length} продуктов (внешнее меню)`);
+  return rows.length;
+}
+
+async function syncRestaurant(restaurant, token, orgs = [], externalMenu = null) {
   const { id: restaurantId, slug, name } = restaurant;
   let organizationId = restaurant.organization_id;
 
@@ -188,6 +283,15 @@ async function syncRestaurant(restaurant, token, orgs = []) {
 
   console.log(`→ ${name} (${slug})`);
   console.log(`  organizationId: ${organizationId}`);
+
+  if (externalMenu) {
+    try {
+      const n = await syncFromExternalMenu(restaurant, token, externalMenu, organizationId);
+      if (n) return { products: n };
+    } catch (e) {
+      console.log(`  ! внешнее меню: ${e.response?.status || ''} ${e.response?.data?.errorDescription || e.message}`);
+    }
+  }
 
   let nomenclature;
   try {
@@ -329,12 +433,13 @@ export async function syncAllRestaurants(slugArg = null) {
   } catch (e) {
     console.log('  ! не удалось получить список организаций:', e.message);
   }
+  const externalMenu = await pickExternalMenu(token);
   let totalProducts = 0;
   let failed = 0;
   for (const [idx, r] of restaurants.entries()) {
     if (idx) await new Promise((res) => setTimeout(res, 6000)); // iiko ограничивает частоту запросов (429)
     try {
-      const res = await syncRestaurant(r, token, orgs);
+      const res = await syncRestaurant(r, token, orgs, externalMenu);
       totalProducts += res.products || 0;
       if (res.error) failed++;
     } catch (e) {
