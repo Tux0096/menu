@@ -1,6 +1,15 @@
 import axios from 'axios';
+import { randomUUID } from 'crypto';
 
 const IIKO_URL = 'https://api-ru.iiko.services';
+
+/**
+ * Демо-режим: IIKO_DEMO=true или не задан IIKO_API_LOGIN.
+ * Заказы «создаются» локально с фиктивным orderId — прототип работает без доступа к iiko.
+ */
+export function isIikoDemo() {
+  return process.env.IIKO_DEMO === 'true' || !process.env.IIKO_API_LOGIN;
+}
 
 let cachedToken = null;
 let tokenExpiresAt = 0;
@@ -20,11 +29,45 @@ export async function getIikoToken() {
 }
 
 async function iikoPost(path, body) {
+  if (isIikoDemo()) return demoResponse(path, body);
   const token = await getIikoToken();
   const res = await axios.post(`${IIKO_URL}${path}`, body, {
     headers: { Authorization: `Bearer ${token}` },
+    timeout: 30000,
   });
   return res.data;
+}
+
+function demoResponse(path, body) {
+  console.log(`[iiko demo] ${path}`);
+  if (path === '/api/1/order/create') {
+    return { orderInfo: { id: randomUUID(), creationStatus: 'Success' } };
+  }
+  if (path === '/api/1/reserve/available_restaurant_sections') {
+    return { restaurantSections: [] };
+  }
+  if (path === '/api/1/order/by_table') {
+    return { orders: [] };
+  }
+  if (path === '/api/1/stop_lists') {
+    return { terminalGroupStopLists: [] };
+  }
+  return { correlationId: randomUUID(), demo: true, body };
+}
+
+/** Стоп-лист iiko для организации: Set productId с нулевым остатком. */
+export async function getStopListProductIds(organizationId, terminalGroupId) {
+  const data = await iikoPost('/api/1/stop_lists', { organizationIds: [organizationId] });
+  const ids = new Set();
+  for (const org of data?.terminalGroupStopLists || []) {
+    for (const group of org.items || []) {
+      if (terminalGroupId && group.terminalGroupId && group.terminalGroupId !== terminalGroupId) continue;
+      for (const item of group.items || []) {
+        if (Number(item.balance) <= 0) ids.add(String(item.productId));
+      }
+    }
+  }
+  return ids;
 }
 
 export async function getRestaurantSections(organizationId, terminalGroupId) {

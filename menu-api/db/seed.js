@@ -4,13 +4,13 @@ import { default as pool } from './pool.js';
 
 const SAMARA_ID = 'a85360f2-55a8-47cc-8a79-1eb88a40c4f0';
 
-const cities = [
+export const cities = [
   { id: SAMARA_ID, name: 'Самара', slug: 'samara' },
 ];
 
 // 7 ресторанов из ТЗ. Для каждого свой organization_id из iiko-adapter.config.js.
 // Меню каждого ресторана выгружается из iiko по его organization_id отдельно.
-const restaurants = [
+export const restaurants = [
   {
     name: 'Фуджи Ленинградская',
     address: 'Ленинградская, 60',
@@ -90,19 +90,15 @@ const restaurants = [
   },
 ];
 
-async function seed() {
-  console.log('Starting seed...');
-
+export async function seedRestaurants(db) {
   for (const city of cities) {
-    await pool.query(
+    await db.query(
       `INSERT INTO cities (id, name, slug) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING`,
       [city.id, city.name, city.slug]
     );
   }
-  console.log(`Seeded ${cities.length} cities`);
-
   for (const r of restaurants) {
-    await pool.query(
+    await db.query(
       `INSERT INTO restaurants
          (name, address, city_id, slug, terminal_id, terminal_group_id, organization_id, phone, sort_order)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -127,13 +123,19 @@ async function seed() {
       ]
     );
   }
-  console.log(`Seeded ${restaurants.length} restaurants`);
+}
 
+async function seed() {
+  console.log('Starting seed...');
+  await seedRestaurants(pool);
+  console.log(`Seeded ${cities.length} cities, ${restaurants.length} restaurants`);
   await pool.end();
   console.log('Seed complete! Run "npm run db:sync" to load menus from iiko.');
 }
 
-seed().catch((err) => {
-  console.error('Seed error:', err);
-  process.exit(1);
-});
+if (process.argv[1] && process.argv[1].endsWith('seed.js')) {
+  seed().catch((err) => {
+    console.error('Seed error:', err);
+    process.exit(1);
+  });
+}
