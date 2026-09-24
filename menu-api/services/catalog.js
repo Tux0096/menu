@@ -5,12 +5,10 @@
  * и стоп-лист iiko + ручной стоп из админки.
  */
 import pool from '../db/pool.js';
-import { getStopListProductIds, isIikoDemo } from '../iiko-client.js';
+import { getStopListIds } from './stoplist.js';
 
 const TTL_MS = parseInt(process.env.CATALOG_TTL_MS || '300000', 10);
-const STOP_TTL_MS = 60 * 1000;
 const rawCache = new Map(); // restaurantId -> { at, source, data }
-const stopCache = new Map(); // restaurantId -> { at, ids }
 
 /** Группы, позиции которых AI не предлагает как самостоятельное блюдо. */
 const NON_MAIN_GROUP_HINTS = ['соус', 'топпинг', 'прибор', 'добав', 'допы', 'имбир', 'васаби'];
@@ -166,18 +164,13 @@ export async function warmCatalogs() {
 }
 
 async function loadIikoStopList(restaurant) {
-  if (isIikoDemo() || !restaurant.organization_id) return new Set();
-  const hit = stopCache.get(restaurant.id);
-  if (hit && Date.now() - hit.at < STOP_TTL_MS) return hit.ids;
-  let ids = new Set();
+  // Стоп-лист из БД/памяти: обновляется вебхуками iiko и фоновой сверкой, не в запросе гостя
   try {
-    ids = await getStopListProductIds(restaurant.organization_id, restaurant.terminal_group_id);
+    return await getStopListIds(restaurant.id);
   } catch (e) {
-    console.warn(`iiko stop-list ${restaurant.slug}:`, e.response?.data?.errorDescription || e.message);
-    ids = hit?.ids || new Set();
+    console.warn(`stop-list ${restaurant.slug}:`, e.message);
+    return new Set();
   }
-  stopCache.set(restaurant.id, { at: Date.now(), ids });
-  return ids;
 }
 
 export async function getOverrides(restaurantId) {
@@ -286,9 +279,7 @@ export async function getAvailableProducts(restaurant) {
 export function invalidateCatalogCache(restaurantId = null) {
   if (restaurantId) {
     rawCache.delete(restaurantId);
-    stopCache.delete(restaurantId);
   } else {
     rawCache.clear();
-    stopCache.clear();
   }
 }

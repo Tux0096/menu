@@ -411,10 +411,11 @@ async function syncRestaurant(restaurant, token, orgs = [], externalMenu = null)
 }
 
 async function getRestaurants(slugFilter) {
-  const sql = slugFilter
-    ? `SELECT id, slug, name, address, organization_id FROM restaurants WHERE slug = $1`
+  const slugs = slugFilter ? [].concat(slugFilter) : null;
+  const sql = slugs
+    ? `SELECT id, slug, name, address, organization_id FROM restaurants WHERE slug = ANY($1) ORDER BY sort_order, name`
     : `SELECT id, slug, name, address, organization_id FROM restaurants WHERE is_disabled = FALSE ORDER BY sort_order, name`;
-  const args = slugFilter ? [slugFilter] : [];
+  const args = slugs ? [slugs] : [];
   const { rows } = await pool.query(sql, args);
   return rows;
 }

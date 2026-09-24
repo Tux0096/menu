@@ -299,6 +299,15 @@ const SCHEMA = `
     fetched_at TIMESTAMPTZ DEFAULT NOW()
   );
 
+  -- Стоп-листы iiko (обновляются вебхуком StopListUpdate и фоновой сверкой)
+  CREATE TABLE IF NOT EXISTS stop_lists (
+    restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+    product_id VARCHAR(100) NOT NULL,
+    balance NUMERIC(12,3) NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (restaurant_id, product_id)
+  );
+
   -- Персонал
   CREATE TABLE IF NOT EXISTS staff_users (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

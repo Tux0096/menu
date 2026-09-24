@@ -28,3 +28,6 @@ Thumbs.db
 
 # IDE
 .idea/
+
+# Фото блюд из админки
+menu-api/media/

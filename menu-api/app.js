@@ -3,12 +3,15 @@ dotenv.config();
 import express from 'express';
 import cors from 'cors';
 import { dirname, join } from 'path';
+import { mkdirSync, writeFileSync } from 'fs';
+import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import pool from './db/pool.js';
 import { QR_RESTAURANT_SLUG } from './lib/qr-config.js';
 import { isIikoDemo } from './iiko-client.js';
 import legacyRoutes from './routes/legacy.js';
 import { syncAllRestaurants } from './db/sync-iiko.js';
+import { refreshStopLists, registerWebhooks, webhookToken } from './services/stoplist.js';
 import { getRestaurantCatalog, invalidateCatalogCache, warmCatalogs } from './services/catalog.js';
 import { checkOllamaHealth, getWelcomeSuggestions, suggestForQuery } from './services/ai-suggest.js';
 import { isLlmEnabled } from './services/ai-llm.js';
@@ -34,6 +37,8 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = process.env.MENU_WEB_DIR || join(__dirname, '..', 'menu-web');
+// Фото блюд, загруженные в админке (вне git, переживают деплой)
+const MEDIA_DIR = process.env.MEDIA_DIR || join(__dirname, 'media');
 const app = express();
 const PORT = process.env.PORT || 3101;
 
@@ -123,6 +128,29 @@ app.get('/api/v1/qr.svg', h(async (req, res) => {
   const r = await resolveRestaurant(req.query.restaurant);
   res.type('image/svg+xml').send(await tableQrSvg(r.slug, req.query.table || '1'));
 }));
+
+// ── Вебхуки iiko: стоп-листы и статусы заказов на стол ──────────────────────
+app.post('/api/v1/iiko/webhook', (req, res) => {
+  const auth = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+  if (auth !== webhookToken()) return res.status(401).json({ error: 'bad token' });
+  res.json({ ok: true });
+  const events = Array.isArray(req.body) ? req.body : [req.body];
+  (async () => {
+    const stopOrgs = new Set();
+    for (const ev of events) {
+      if (ev?.eventType === 'StopListUpdate' && ev.organizationId) stopOrgs.add(ev.organizationId);
+      if (ev?.eventType === 'TableOrderUpdate' && ev.eventInfo?.id) {
+        const { rows } = await pool.query('SELECT id FROM table_sessions WHERE iiko_order_id::text = $1', [String(ev.eventInfo.id)]);
+        for (const r of rows) await refreshFromIiko(r.id);
+      }
+    }
+    if (stopOrgs.size) {
+      await refreshStopLists([...stopOrgs]);
+      invalidateCatalogCache();
+      console.log(`iiko webhook: стоп-лист обновлён (${[...stopOrgs].join(', ')})`);
+    }
+  })().catch((e) => console.warn('iiko webhook:', e.message));
+});
 
 // ── Гость: вход ─────────────────────────────────────────────────────────────
 
@@ -271,6 +299,29 @@ app.get('/api/v1/manager/dashboard', staffAuth('manager'), h(async (req) => getH
 const admin = express.Router();
 admin.use(staffAuth('admin'));
 admin.get('/menu', h(async (req) => getAdminMenu(await staffRestaurant(req), { force: req.query.refresh === '1' })));
+// Загрузка фото блюда: тело запроса — сам файл (image/jpeg|png|webp), до 8 МБ
+const IMAGE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+admin.post('/upload', express.raw({ type: Object.keys(IMAGE_TYPES), limit: '8mb' }), h(async (req) => {
+  const ext = IMAGE_TYPES[String(req.headers['content-type'] || '').split(';')[0]];
+  if (!ext || !req.body?.length) {
+    const err = new Error('Нужна картинка JPG, PNG или WebP до 8 МБ');
+    err.status = 400;
+    throw err;
+  }
+  mkdirSync(MEDIA_DIR, { recursive: true });
+  const name = `${randomUUID()}.${ext}`;
+  writeFileSync(join(MEDIA_DIR, name), req.body);
+  audit(req.staff, 'media.upload', 'file', name, { size: req.body.length });
+  return { url: `/media/${name}` };
+}));
+admin.post('/menu/sync', h(async (req) => {
+  const r = await staffRestaurant(req);
+  await syncIikoMenu({ slugs: [r.slug] });
+  await refreshStopLists([r.organization_id]).catch(() => {});
+  invalidateCatalogCache(r.id);
+  audit(req.staff, 'menu.sync', 'restaurant', r.slug);
+  return getAdminMenu(r, { force: true });
+}));
 admin.post('/menu/override', h(async (req) => {
   requireBody(req.body, 'productId');
   const r = await staffRestaurant(req);
@@ -326,6 +377,7 @@ app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
 // ── Фронт: гостевое меню и терминал персонала ───────────────────────────────
 
+app.use('/media', express.static(MEDIA_DIR, { maxAge: '30d', immutable: true }));
 app.use('/staff', express.static(join(WEB_DIR, 'staff'), { index: 'index.html' }));
 app.get(['/waiter', '/admin'], (req, res) => res.redirect('/staff/'));
 app.use(express.static(join(WEB_DIR, 'guest'), { index: 'index.html' }));
@@ -334,22 +386,71 @@ app.get('*', (req, res) => res.sendFile(join(WEB_DIR, 'guest', 'index.html')));
 // Фоновые проверки: бездействие гостя 5+ мин, долгое ожидание официанта
 setInterval(() => runServiceChecks().catch((e) => console.warn('service checks:', e.message)), 30000);
 
-// Статусы блюд на кухне из iiko
-setInterval(() => refreshKitchenStatuses().catch((e) => console.warn('kitchen statuses:', e.message)), 20000);
+// Статусы блюд на кухне: вебхуки iiko + страховочный опрос
+setInterval(() => refreshKitchenStatuses().catch((e) => console.warn('kitchen statuses:', e.message)), 60000);
 
-// Реальное меню: выгрузка номенклатуры iiko при старте и каждые IIKO_SYNC_MS (30 мин)
-async function syncIikoMenu() {
-  if (isIikoDemo()) return;
+// ── Меню и стоп-листы iiko ──────────────────────────────────────────────────
+// Меню хранится на сервере (БД + память) и отдаётся мгновенно. Полная перевыгрузка — раз в сутки
+// (IIKO_SYNC_MS), при старте — только если выгрузка устарела или у ресторана меню пустое.
+const IIKO_SYNC_MS = parseInt(process.env.IIKO_SYNC_MS || '86400000', 10);
+let syncing = false;
+
+async function getSetting(name) {
+  const { rows } = await pool.query('SELECT value FROM settings WHERE name = $1', [name]);
+  return rows[0]?.value ?? null;
+}
+async function setSetting(name, value) {
+  await pool.query(
+    `INSERT INTO settings (name, value, updated_at) VALUES ($1, $2, NOW())
+     ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+    [name, JSON.stringify(value)],
+  );
+}
+
+async function syncIikoMenu({ force = false, slugs = null } = {}) {
+  if (isIikoDemo() || syncing) return;
+  syncing = true;
   try {
-    await syncAllRestaurants();
+    const last = await getSetting('iiko_menu_synced_at');
+    const stale = !last || Date.now() - new Date(last).getTime() > IIKO_SYNC_MS;
+    if (slugs) {
+      await syncAllRestaurants(slugs);
+    } else if (force || stale) {
+      await syncAllRestaurants();
+      await setSetting('iiko_menu_synced_at', new Date().toISOString());
+    } else {
+      const { rows } = await pool.query(
+        `SELECT r.slug FROM restaurants r
+         WHERE r.is_disabled = FALSE AND NOT EXISTS (SELECT 1 FROM products p WHERE p.restaurant_id = r.id)`,
+      );
+      if (rows.length) await syncAllRestaurants(rows.map((r) => r.slug));
+      else console.log(`iiko menu: выгрузка свежая (${last}), пропускаю`);
+    }
     invalidateCatalogCache();
+    await warmCatalogs();
   } catch (e) {
     console.warn('iiko sync:', e.message);
+  } finally {
+    syncing = false;
   }
 }
-syncIikoMenu().then(() => warmCatalogs()).catch((e) => console.warn('catalog warm:', e.message));
-setInterval(syncIikoMenu, parseInt(process.env.IIKO_SYNC_MS || '1800000', 10));
-setInterval(() => warmCatalogs().catch(() => {}), parseInt(process.env.CATALOG_TTL_MS || '300000', 10));
+
+async function refreshAllStopLists() {
+  try {
+    const n = await refreshStopLists();
+    if (n) invalidateCatalogCache();
+  } catch (e) {
+    console.warn('stop-lists:', e.response?.data?.errorDescription || e.message);
+  }
+}
+
+warmCatalogs()
+  .then(() => syncIikoMenu())
+  .then(() => refreshAllStopLists())
+  .then(() => registerWebhooks())
+  .catch((e) => console.warn('startup iiko:', e.message));
+setInterval(() => syncIikoMenu(), 60 * 60 * 1000); // раз в час проверяем, не пора ли (раз в сутки)
+setInterval(refreshAllStopLists, parseInt(process.env.STOP_LIST_REFRESH_MS || '600000', 10));
 
 app.listen(PORT, () => {
   console.log(`Menu API running on http://localhost:${PORT} (iiko: ${isIikoDemo() ? 'demo' : 'live'}, AI: ${isLlmEnabled() ? 'OpenRouter' : 'instant'})`);
