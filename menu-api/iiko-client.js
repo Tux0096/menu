@@ -41,6 +41,9 @@ function demoResponse(path, body) {
   if (path === '/api/1/reserve/available_restaurant_sections') {
     return { restaurantSections: [] };
   }
+  if (path === '/api/1/order/by_id') {
+    return { orders: [] };
+  }
   if (path === '/api/1/order/by_table') {
     return { orders: [] };
   }
@@ -116,6 +119,11 @@ export async function getOrdersByTable(organizationIds, tableIds) {
     tableIds,
     statuses: ['New', 'Bill'],
   });
+}
+
+/** Заказы на стол по ID (статус заказа и статусы блюд на кухне). */
+export async function getOrdersByIds(organizationId, orderIds) {
+  return iikoPost('/api/1/order/by_id', { organizationIds: [organizationId], orderIds });
 }
 
 export async function initOrderByTable(organizationId, terminalGroupId, tableIds) {

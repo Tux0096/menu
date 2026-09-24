@@ -8,7 +8,8 @@ import pool from './db/pool.js';
 import { QR_RESTAURANT_SLUG } from './lib/qr-config.js';
 import { isIikoDemo } from './iiko-client.js';
 import legacyRoutes from './routes/legacy.js';
-import { getRestaurantCatalog } from './services/catalog.js';
+import { syncAllRestaurants } from './db/sync-iiko.js';
+import { getRestaurantCatalog, invalidateCatalogCache, warmCatalogs } from './services/catalog.js';
 import { checkOllamaHealth, getWelcomeSuggestions, suggestForQuery } from './services/ai-suggest.js';
 import { isLlmEnabled } from './services/ai-llm.js';
 import { logAiQuery, recordAiFeedback } from './services/ai-learning.js';
@@ -18,7 +19,7 @@ import {
 import { audit, listStaff, saveStaff, staffAuth, staffLogin } from './services/staff-auth.js';
 import {
   callWaiter, enterTable, getSessionView, payBill, refreshFromIiko, requestBill, resolveRestaurant,
-  runServiceChecks, saveGuestCart, submitFeedback, submitToWaiter, trackActivity,
+  refreshKitchenStatuses, runServiceChecks, saveGuestCart, submitFeedback, submitToWaiter, trackActivity,
 } from './services/table-session.js';
 import {
   closeSession, getHallDashboard, listActiveSessions, releaseSession, sendToKitchen, takeSession, updateOrder,
@@ -114,6 +115,7 @@ app.get('/api/v1/config', h(async (req) => {
     ],
     tipPresets: [0, 10, 15, 20],
     iikoMode: isIikoDemo() ? 'demo' : 'live',
+    paymentsEnabled: process.env.PAYMENTS_ENABLED === 'true',
   };
 }));
 
@@ -331,6 +333,23 @@ app.get('*', (req, res) => res.sendFile(join(WEB_DIR, 'guest', 'index.html')));
 
 // Фоновые проверки: бездействие гостя 5+ мин, долгое ожидание официанта
 setInterval(() => runServiceChecks().catch((e) => console.warn('service checks:', e.message)), 30000);
+
+// Статусы блюд на кухне из iiko
+setInterval(() => refreshKitchenStatuses().catch((e) => console.warn('kitchen statuses:', e.message)), 20000);
+
+// Реальное меню: выгрузка номенклатуры iiko при старте и каждые IIKO_SYNC_MS (30 мин)
+async function syncIikoMenu() {
+  if (isIikoDemo()) return;
+  try {
+    await syncAllRestaurants();
+    invalidateCatalogCache();
+  } catch (e) {
+    console.warn('iiko sync:', e.message);
+  }
+}
+syncIikoMenu().then(() => warmCatalogs()).catch((e) => console.warn('catalog warm:', e.message));
+setInterval(syncIikoMenu, parseInt(process.env.IIKO_SYNC_MS || '1800000', 10));
+setInterval(() => warmCatalogs().catch(() => {}), parseInt(process.env.CATALOG_TTL_MS || '300000', 10));
 
 app.listen(PORT, () => {
   console.log(`Menu API running on http://localhost:${PORT} (iiko: ${isIikoDemo() ? 'demo' : 'live'}, AI: ${isLlmEnabled() ? 'OpenRouter' : 'instant'})`);

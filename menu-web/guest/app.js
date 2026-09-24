@@ -462,10 +462,10 @@
 
   // ── Экран: заказ ───────────────────────────────────────────
   const STEPS = [
-    { key: 'sent', label: 'Передан', done: ['cart_ready', 'waiter_review', 'in_production', 'reorder_pending', 'bill_requested', 'paid'] },
-    { key: 'waiter', label: 'Официант', done: ['waiter_review', 'in_production', 'reorder_pending', 'bill_requested', 'paid'] },
-    { key: 'kitchen', label: 'На кухне', done: ['in_production', 'reorder_pending', 'bill_requested', 'paid'] },
-    { key: 'paid', label: 'Оплачен', done: ['paid'] },
+    { key: 'sent', label: 'Передан', done: (s) => ['cart_ready', 'waiter_review', 'in_production', 'reorder_pending', 'bill_requested', 'paid'].includes(s.workflowStatus) },
+    { key: 'waiter', label: 'Официант', done: (s) => ['waiter_review', 'in_production', 'reorder_pending', 'bill_requested', 'paid'].includes(s.workflowStatus) },
+    { key: 'kitchen', label: 'Готовится', done: (s) => ['in_production', 'reorder_pending', 'bill_requested', 'paid'].includes(s.workflowStatus) },
+    { key: 'served', label: 'Подано', done: (s) => s.kitchenStatus === 'Served' },
   ];
   const STATUS_SUB = {
     browsing: 'Добавьте блюда из меню или спросите AI',
@@ -474,22 +474,28 @@
     waiter_review: 'Официант сверяет состав заказа',
     in_production: 'Готовим! Можно дозаказать в любой момент',
     reorder_pending: 'Дозаказ ждёт подтверждения официанта',
-    bill_requested: 'Оплатите с телефона или дождитесь официанта',
+    bill_requested: 'Официант скоро принесёт счёт',
     paid: 'Спасибо, что были с нами!',
   };
+
+  function kitchenLabelFor(pid) {
+    const it = (S.session?.items || []).find((i) => i.isLocked && (String(i.productId) === String(pid) || String(i.iikoProductId) === String(pid)));
+    return it?.kitchenLabel || null;
+  }
 
   function renderOrder() {
     const s = S.session;
     const wf = s?.workflowStatus || 'browsing';
     const lines = cartLines();
-    const current = STEPS.findIndex((st) => !st.done.includes(wf));
-    const stepper = STEPS.map((st, i) => `<div class="step ${st.done.includes(wf) ? 'is-done' : ''} ${i === current ? 'is-current' : ''}"><i></i>${st.label}</div>`).join('');
+    const st0 = s || { workflowStatus: wf };
+    const current = STEPS.findIndex((st) => !st.done(st0));
+    const stepper = STEPS.map((st, i) => `<div class="step ${st.done(st0) ? 'is-done' : ''} ${i === current ? 'is-current' : ''}"><i></i>${st.label}</div>`).join('');
 
     const items = lines.map((l) => {
       const locked = lockedQty(l.product.id);
       const fresh = l.qty - locked;
       const tags = [
-        locked ? `<span class="tag tag--kitchen">на кухне ${locked}</span>` : '',
+        locked ? `<span class="tag tag--kitchen">${esc(kitchenLabelFor(l.product.id) || 'на кухне')} ${locked}</span>` : '',
         locked && fresh > 0 ? `<span class="tag tag--new">+${fresh} новое</span>` : '',
       ].join('');
       return `<div class="line-item">
@@ -512,7 +518,7 @@
       <section class="card">
         <div class="steps">${stepper}</div>
         <div class="status-text">${esc(s?.workflowLabel || 'Добро пожаловать')}</div>
-        <div class="status-sub">${esc(STATUS_SUB[wf] || '')}${s?.waitingMinutes ? ` · ждёте ${s.waitingMinutes} мин` : ''}</div>
+        <div class="status-sub">${esc(s?.kitchenLabel ? `Кухня: ${s.kitchenLabel}` : (STATUS_SUB[wf] || ''))}${s?.waitingMinutes ? ` · ждёте ${s.waitingMinutes} мин` : ''}</div>
       </section>
       <section class="card">
         ${lines.length ? items : `<div class="empty" style="padding:24px 8px">Корзина пуста.<br>Выберите блюда в меню или спросите AI.</div>`}
