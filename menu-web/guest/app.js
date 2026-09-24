@@ -49,6 +49,12 @@
 
   // ── Состояние ──────────────────────────────────────────────
   const params = new URLSearchParams(location.search);
+  // ?reset=1 — начать «с чистого листа» (для демонстрации): выйти, забыть стол и корзину
+  if (params.has('reset') || params.has('logout')) {
+    try { Object.keys(localStorage).filter((k) => k.startsWith('fm:')).forEach((k) => localStorage.removeItem(k)); } catch { /* noop */ }
+    params.delete('reset'); params.delete('logout');
+    history.replaceState(null, '', location.pathname + (params.toString() ? `?${params}` : ''));
+  }
   const S = {
     token: store.get('token'),
     guest: store.get('guest'),
@@ -591,8 +597,15 @@
     const hasItems = (S.session?.items || []).length > 0 && !S.session?.isPaid;
     const opt = (reason, label) => `<button class="btn" data-reason="${reason}"><span>${label}</span><span class="round-btn">${ICONS.arrowRight}</span></button>`;
     openSheet(`<h2>Позвать официанта</h2><p class="sheet__hint">Официант увидит стол №${esc(S.table)} и причину вызова</p>
-      ${opt('general', 'Нужна помощь')}${opt('order', 'Дозаказ')}${hasItems ? opt('bill', 'Попросить счёт') : ''}${opt('question', 'Вопрос по блюдам')}`, (sheet) => {
+      ${opt('general', 'Нужна помощь')}${opt('order', 'Дозаказ')}${hasItems ? opt('bill', 'Попросить счёт') : ''}${opt('question', 'Вопрос по блюдам')}
+      <button class="link-btn" data-logout style="display:block;margin:12px auto 0">Выйти (${esc(S.guest?.phoneMasked || 'гость')})</button>`, (sheet) => {
       sheet.addEventListener('click', async (e) => {
+        if (e.target.closest('[data-logout]')) {
+          closeSheet();
+          try { Object.keys(localStorage).filter((k) => k.startsWith('fm:') && k !== 'fm:restaurant').forEach((k) => localStorage.removeItem(k)); } catch { /* noop */ }
+          location.href = location.pathname;
+          return;
+        }
         const b = e.target.closest('[data-reason]');
         if (!b) return;
         b.disabled = true;
