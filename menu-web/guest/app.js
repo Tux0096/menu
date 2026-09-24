@@ -137,8 +137,9 @@
     for (const it of session.items || []) {
       const key = String(it.productId || it.iikoProductId);
       const product = findProduct(key) || { id: key, iikoId: it.iikoProductId, name: it.name, price: it.price };
-      if (!next[key]) next[key] = { qty: 0, product };
+      if (!next[key]) next[key] = { qty: 0, product, course: null };
       next[key].qty += it.quantity;
+      if (!it.isLocked && it.course) next[key].course = it.course;
     }
     return next;
   }
@@ -154,7 +155,7 @@
     const next = line.qty + delta;
     if (delta > 0 && isStopped(product)) { toast('Эта позиция сейчас недоступна', true); return; }
     if (delta < 0 && next < lockedQty(key)) { toast('Это блюдо уже готовится — убрать можно через официанта', true); return; }
-    if (next <= 0) delete S.cart[key]; else S.cart[key] = { qty: next, product };
+    if (next <= 0) delete S.cart[key]; else S.cart[key] = { ...line, qty: next, product };
     persistCart();
     S.changedSinceSubmit = true; store.set('changedSinceSubmit', true);
     if (delta > 0 && S.ai.query && S.tab === 'ai') {
@@ -173,6 +174,7 @@
   }
   const payloadItems = () => cartLines().map((l) => ({
     productId: l.product.id, iikoProductId: l.product.iikoId || l.product.id, name: l.product.name, price: l.product.price, quantity: l.qty,
+    course: l.course || null,
   }));
   async function saveCart() {
     if (!S.sessionId) return;
@@ -546,6 +548,9 @@
         <div class="line-item__main">
           <div class="line-item__name">${esc(l.product.name)}</div>
           <div class="line-item__meta">${rub(l.product.price)} × ${l.qty} ${tags}</div>
+          ${!s?.isPaid && fresh > 0 ? `<div class="course" role="group" aria-label="Курс подачи">
+            <span>Подать:</span>${[[null, 'сразу'], [1, '1-м'], [2, '2-м'], [3, '3-м']].map(([c, t]) => `<button class="${(l.course || null) === c ? 'is-on' : ''}" data-course="${esc(l.product.id)}" data-c="${c ?? ''}">${t}</button>`).join('')}
+          </div>` : ''}
         </div>
         ${s?.isPaid ? `<b>${rub(l.qty * l.product.price)}</b>` : `<div class="qty">
           <button class="round-btn round-btn--sm round-btn--light" data-dec="${esc(l.product.id)}" ${l.qty <= locked ? 'disabled' : ''} aria-label="Убрать">${ICONS.minus}</button>
@@ -782,6 +787,16 @@
         return r && { id: r.productId, iikoId: r.iikoId, name: r.name, price: r.price, image: r.image, weight: r.weight };
       })();
       if (product) changeQty(product, inc ? 1 : -1);
+      return;
+    }
+    const courseBtn = t.closest('[data-course]');
+    if (courseBtn) {
+      const line = S.cart[courseBtn.dataset.course];
+      if (line) {
+        line.course = courseBtn.dataset.c ? Number(courseBtn.dataset.c) : null;
+        persistCart(); S.changedSinceSubmit = true; store.set('changedSinceSubmit', true);
+        scheduleCartSave(); render();
+      }
       return;
     }
     const chip = t.closest('[data-chip]');

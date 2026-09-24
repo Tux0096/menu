@@ -128,7 +128,15 @@ export async function sendToKitchen(sessionId, staff) {
   const demo = isIikoDemo();
   let iikoOrderId = session.iiko_order_id;
   try {
-    const delta = pending.map((i) => ({ productId: i.iiko_product_id, amount: i.quantity }));
+    // Курс подачи и место гостя уходят в iiko комментарием к позиции (печатается на кухонном чеке);
+    // позиции отправляются по порядку курсов
+    const delta = [...pending]
+      .sort((a, b) => (a.course || 1) - (b.course || 1))
+      .map((i) => ({
+        productId: i.iiko_product_id,
+        amount: i.quantity,
+        comment: [i.course ? `Курс ${i.course}` : null, i.seat_number ? `Место ${i.seat_number}` : null].filter(Boolean).join(', ') || undefined,
+      }));
     if (!iikoOrderId) {
       let tableId = session.iiko_table_id;
       if (!tableId && !demo) {

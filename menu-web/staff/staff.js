@@ -154,7 +154,12 @@
     const seats = Array.from({ length: Math.max(e.guestCount, 1) }, (_, i) => i + 1);
     const lockedByOther = s.lockedBy && s.lockedBy !== S.staff.id;
     const q = S.productSearch.trim().toLowerCase();
-    const found = q && S.catalog ? S.catalog.products.filter((p) => p.name.toLowerCase().includes(q)).slice(0, 12) : [];
+    const products = S.catalog?.products || [];
+    const groups = (S.catalog?.groups || []).filter((g) => products.some((p) => p.parentGroup === g.id));
+    if (!S.pickCat || !groups.some((g) => g.id === S.pickCat)) S.pickCat = groups[0]?.id || null;
+    const found = q
+      ? products.filter((p) => p.name.toLowerCase().includes(q)).slice(0, 30)
+      : products.filter((p) => p.parentGroup === S.pickCat);
     const pending = e.items.filter((i) => !i.isLocked).length;
     return `<section class="card editor" id="editor">
       <div class="editor__head">
@@ -172,14 +177,21 @@
       <div>${e.items.length ? e.items.map((it, idx) => `<div class="row ${it.isLocked ? '' : 'is-new'}">
         <div><div class="row__name">${esc(it.name)}</div>
           <div class="row__meta">${rub(it.price)} · ${it.isLocked ? `${esc(it.kitchenLabel || 'на кухне')} (партия ${it.batchNo || 1})` : '<b style="color:var(--ok)">новое</b>'}</div></div>
-        <select class="sel hide-sm" data-seat="${idx}" title="Место"><option value="">Место —</option>${seats.map((n) => `<option value="${n}" ${Number(it.seatNumber) === n ? 'selected' : ''}>Место ${n}</option>`).join('')}</select>
-        <select class="sel hide-sm" data-course="${idx}" title="Курс подачи"><option value="">Курс —</option>${[1, 2, 3].map((n) => `<option value="${n}" ${Number(it.course) === n ? 'selected' : ''}>Курс ${n}</option>`).join('')}</select>
+        <div class="row__opts">
+          <select class="sel" data-seat="${idx}" title="Место"><option value="">Место —</option>${seats.map((n) => `<option value="${n}" ${Number(it.seatNumber) === n ? 'selected' : ''}>Место ${n}</option>`).join('')}</select>
+          <select class="sel" data-course="${idx}" title="Курс подачи" ${it.isLocked ? 'disabled' : ''}><option value="">Курс —</option>${[1, 2, 3].map((n) => `<option value="${n}" ${Number(it.course) === n ? 'selected' : ''}>Курс ${n}</option>`).join('')}</select>
+        </div>
         <div class="qty">${it.isLocked ? `<b>${it.quantity}</b>` : `<button class="icon-btn" data-qty="${idx}" data-d="-1">−</button><b>${it.quantity}</b><button class="icon-btn" data-qty="${idx}" data-d="1">+</button>`}</div>
         <b class="hide-sm" style="min-width:80px;text-align:right">${rub(it.price * it.quantity)}</b>
       </div>`).join('') : '<div class="muted">Позиции не выбраны</div>'}</div>
       <div style="display:flex;justify-content:space-between;margin-top:12px;font-size:18px"><span class="muted">Итого</span><b>${rub(total)}</b></div>
-      <div style="margin-top:16px"><input class="inp" id="prod-search" style="width:100%" placeholder="Добавить блюдо: начните вводить название" value="${esc(S.productSearch)}">
-        <div class="search-results">${found.map((p) => `<button data-add="${esc(p.id)}" ${p.isInStopList ? 'disabled' : ''}><span>${esc(p.name)}${p.isInStopList ? ' · стоп' : ''}</span><b>${rub(p.price)}</b></button>`).join('')}</div></div>
+      <div class="picker">
+        <div class="h3" style="margin:0 0 8px">Добавить из меню</div>
+        ${products.length ? `<input class="inp" id="prod-search" style="width:100%" placeholder="Поиск блюда" value="${esc(S.productSearch)}">
+        ${q ? '' : `<div class="picker__cats">${groups.map((g) => `<button class="${g.id === S.pickCat ? 'is-active' : ''}" data-pick-cat="${esc(g.id)}">${esc(g.name)}</button>`).join('')}</div>`}
+        <div class="search-results">${found.map((p) => `<button data-add="${esc(p.id)}" ${p.isInStopList ? 'disabled' : ''}><span>${esc(p.name)}${p.isInStopList ? ' · стоп-лист' : ''}</span><b>${rub(p.price)}</b></button>`).join('') || '<div class="muted">Ничего не найдено</div>'}</div>`
+    : '<div class="error-box">Меню этого ресторана пустое — выгрузите его из iiko (админка → «Меню и стоп-лист» → «Перевыгрузить из iiko»).</div>'}
+      </div>
       <div class="footer-actions">
         <button class="btn" data-save ${e.dirty && !lockedByOther ? '' : 'disabled'}>Сохранить правки</button>
         <button class="btn btn--dark" data-send ${pending && !lockedByOther ? '' : 'disabled'}>В работу → iiko (${pending})</button>
@@ -237,7 +249,7 @@
           ${k('Реакция официанта', `${d.today.avg_response_min.toFixed(1)} мин`, d.today.avg_response_min > d.slaMinutes)}
           ${k('Оценка (30 дн.)', d.feedback30d.count ? `${d.feedback30d.avg.toFixed(1)} ★ (${d.feedback30d.count})` : '—', d.feedback30d.low > 0)}
         </div>
-        <div class="grid-waiter" style="grid-template-columns:1fr 1fr">
+        <div class="grid-2">
           <section class="card"><div class="h3">Столы и время ожидания</div>
             <div class="tbl-wrap"><table class="tbl"><tr><th>Стол</th><th>Статус</th><th>Гость</th><th>Ждёт</th><th>Сумма</th></tr>
             ${d.sessions.map((s) => `<tr><td><b>№${esc(s.tableNumber)}</b></td><td>${statusPill(s)}</td><td>${esc(s.guest?.name || '—')}</td>
@@ -455,7 +467,7 @@
   }
 
   function openStaffForm(u = {}) {
-    modal(`<div class="h2">${u.id ? 'Сотрудник' : 'Новый сотрудник'}</div><form id="staff-form"><div class="form-grid" style="grid-template-columns:1fr 1fr">
+    modal(`<div class="h2">${u.id ? 'Сотрудник' : 'Новый сотрудник'}</div><form id="staff-form"><div class="form-grid">
       <div class="field"><label>Имя</label><input class="inp" name="name" value="${esc(u.name || '')}" required></div>
       <div class="field"><label>Логин</label><input class="inp" name="login" value="${esc(u.login || '')}" required></div>
       <div class="field"><label>Роль</label><select class="sel" name="role">${[['waiter', 'Официант'], ['manager', 'Управляющий'], ['admin', 'Администратор']].map(([v, l]) => `<option value="${v}" ${u.role === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
@@ -493,10 +505,9 @@
       const s = await api('GET', `/api/v1/waiter/session/${sessionId}`);
       S.edit = { items: s.items.map((i) => ({ ...i })), guestCount: s.guestCount, dirty: false };
     }
-    if (!S.catalog) {
-      const slug = S.restaurant || S.restaurants[0]?.slug;
-      S.catalog = await fetch(`/api/v1/restaurants/${slug}/catalog`).then((r) => r.json()).catch(() => null);
-    }
+    // Меню ресторана — свежее при каждом открытии стола (стоп-лист мог измениться)
+    const slug = S.restaurant || S.restaurants[0]?.slug;
+    S.catalog = await fetch(`/api/v1/restaurants/${slug}/catalog`).then((r) => r.json()).catch(() => S.catalog);
     await render();
     $('#editor')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -533,6 +544,7 @@
         if (it.quantity <= 0) S.edit.items.splice(Number(b.dataset.qty), 1);
         S.edit.dirty = true; render(); return;
       }
+      if (q('[data-pick-cat]')) { S.pickCat = q('[data-pick-cat]').dataset.pickCat; render(); return; }
       if (q('[data-add]')) {
         const p = S.catalog.products.find((x) => String(x.id) === q('[data-add]').dataset.add);
         const existing = S.edit.items.find((i) => !i.isLocked && String(i.productId) === String(p.id));
