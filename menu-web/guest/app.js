@@ -59,7 +59,7 @@
     config: null,
     catalog: null,
     cart: store.get('cart', {}), // productId -> { qty, product }
-    tab: 'ai',
+    tab: 'menu',
     ai: { query: '', results: store.get('aiResults', null), loading: false, error: null, engine: null },
     menu: { search: '', cat: null },
     cartDirty: false,
@@ -140,6 +140,8 @@
   function persistCart() { store.set('cart', S.cart); }
 
   function changeQty(product, delta) {
+    // Меню открыто без стола/входа — сначала стол и телефон, потом положим блюдо в корзину
+    if (delta > 0 && !S.session) { openSeatSheet(() => changeQty(product, delta)); return; }
     if (S.session?.isPaid) { toast('Счёт уже оплачен. Отсканируйте QR, чтобы начать новый заказ'); return; }
     const key = String(product.id);
     const line = S.cart[key] || { qty: 0, product };
@@ -231,7 +233,8 @@
   function logout() {
     S.token = null; S.guest = null;
     store.del('token'); store.del('guest');
-    renderAuth();
+    S.session = null; S.sessionId = null; store.del('sessionId');
+    render();
   }
 
   // ── Статусы ────────────────────────────────────────────────
@@ -245,6 +248,15 @@
     const s = S.session;
     const name = S.guest?.name || s?.guest?.name || '';
     const who = name || S.guest?.phoneMasked || '';
+    if (!s) {
+      return `<header class="topbar">
+      <div>
+        <div class="topbar__table">${esc(S.config?.restaurant?.name || 'Фуджи')}</div>
+        <div class="topbar__guest">${esc(S.config?.restaurant?.address || '')}</div>
+      </div>
+      <button class="status-chip" data-action="seat" data-tone="idle">${S.table ? `Стол №${esc(S.table)} · войти` : 'Выбрать стол'}</button>
+    </header>`;
+    }
     return `<header class="topbar">
       <div>
         <div class="topbar__table">Стол №${esc(S.table)}</div>
@@ -291,47 +303,67 @@
   }
 
   // ── Экран: вход ────────────────────────────────────────────
-  function renderAuth(error = '') {
-    const app = $('#app');
+  /** Шторка «Сделать заказ»: номер стола (если не из QR) и телефон (если гость ещё не входил). */
+  function openSeatSheet(then = null, error = '') {
     const fujiUrl = S.config?.fujiAppLoginUrl;
-    app.innerHTML = `<div class="auth">
-      <div class="auth__main">
-        <div class="logo">ФУДЖИ<small>${esc(S.config?.restaurant?.name || 'Суши Friends')}</small></div>
-        <h1>Регистрация</h1>
-        ${S.table ? `<div class="auth__table">Стол №${esc(S.table)}${S.config?.restaurant?.address ? ` · ${esc(S.config.restaurant.address)}` : ''}</div>` : ''}
-        <form class="pill-input" id="phone-form" autocomplete="on">
-          <input id="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+7 000 000 00 00" value="+7 " aria-label="Номер телефона">
-          <button class="round-btn" type="submit" aria-label="Войти">${ICONS.arrowRight}</button>
-        </form>
-        <label class="consent">
-          <input type="checkbox" id="consent" checked>
-          <span class="consent__box">${ICONS.check}</span>
-          <span>Согласие на обработку персональных данных</span>
-        </label>
-        <div class="auth__error" id="auth-error">${esc(error)}</div>
-      </div>
-      <a class="fuji-btn" id="fuji-login" href="${fujiUrl ? esc(`${fujiUrl}${fujiUrl.includes('?') ? '&' : '?'}return=${encodeURIComponent(location.origin + location.pathname)}`) : '#'}">
-        <span class="fuji-btn__icon">Ф</span>
-        <span>Войти через приложение Фуджи</span>
-      </a>
-    </div>`;
-    const input = $('#phone');
-    input.addEventListener('input', () => { input.value = formatPhone(input.value); });
-    $('#phone-form').addEventListener('submit', async (e) => {
-      e.preventDefault();
-      if (!$('#consent').checked) { $('#auth-error').textContent = 'Нужно согласие на обработку персональных данных'; return; }
-      const btn = e.submitter || $('#phone-form button');
-      btn.disabled = true; btn.innerHTML = '<div class="spinner"></div>';
-      try {
-        const res = await api('POST', '/api/v1/guest/login', { phone: input.value, consent: true });
-        onLoggedIn(res);
-      } catch (err) {
-        $('#auth-error').textContent = err.message;
-        btn.disabled = false; btn.innerHTML = ICONS.arrowRight;
-      }
-    });
-    $('#fuji-login').addEventListener('click', (e) => {
-      if (!fujiUrl) { e.preventDefault(); toast('Откройте меню через QR-сканер в приложении Фуджи — вход произойдёт автоматически'); }
+    const needTable = !S.table || S.changeTable;
+    const needLogin = !S.token;
+    openSheet(`<form id="seat-form" autocomplete="on">
+      <h2>Сделать заказ</h2>
+      <p class="sheet__hint">${esc(S.config?.restaurant?.name || '')}${S.config?.restaurant?.address ? `, ${esc(S.config.restaurant.address)}` : ''}</p>
+      ${needTable ? `<div class="label">Номер стола</div>
+        <div class="pill-input" style="min-height:60px;margin-bottom:8px"><input id="seat-table" type="text" inputmode="numeric" maxlength="10" placeholder="Номер на табличке стола" value="${esc(S.table || '')}"></div>`
+    : `<div class="card" style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px">
+        <span>Стол <b>№${esc(S.table)}</b></span><button type="button" class="link-btn" data-change-table>Другой стол</button></div>`}
+      ${needLogin ? `<div class="label">Телефон</div>
+        <div class="pill-input" style="min-height:60px"><input id="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+7 000 000 00 00" value="+7 " aria-label="Номер телефона"></div>
+        <label class="consent"><input type="checkbox" id="consent" checked><span class="consent__box">${ICONS.check}</span><span>Согласие на обработку персональных данных</span></label>` : ''}
+      <div class="auth__error" id="seat-error">${esc(error)}</div>
+      <button class="btn btn--dark" type="submit"><span>Продолжить</span><span class="round-btn">${ICONS.arrowRight}</span></button>
+      ${needLogin ? `<a class="fuji-btn" id="fuji-login" style="margin-top:12px" href="${fujiUrl ? esc(`${fujiUrl}${fujiUrl.includes('?') ? '&' : '?'}return=${encodeURIComponent(`${location.origin}${location.pathname}?restaurant=${S.restaurant || ''}&table=${S.table || ''}`)}`) : '#'}">
+        <span class="fuji-btn__icon">Ф</span><span>Войти через приложение Фуджи</span></a>` : ''}
+    </form>`, (sheet) => {
+      const phone = $('#phone', sheet);
+      if (phone) phone.addEventListener('input', () => { phone.value = formatPhone(phone.value); });
+      (needTable ? $('#seat-table', sheet) : phone)?.focus();
+      sheet.addEventListener('click', (e) => {
+        if (e.target.closest('[data-change-table]')) { S.changeTable = true; openSeatSheet(then); }
+        if (e.target.closest('#fuji-login') && !fujiUrl) {
+          e.preventDefault();
+          toast('Откройте меню через QR-сканер в приложении Фуджи — вход произойдёт автоматически');
+        }
+      });
+      $('#seat-form', sheet).addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const err = $('#seat-error', sheet);
+        const btn = e.submitter || $('#seat-form button[type=submit]', sheet);
+        let table = S.table;
+        if (needTable) {
+          table = ($('#seat-table', sheet).value || '').trim();
+          if (!table) { err.textContent = 'Введите номер стола'; return; }
+        }
+        if (needLogin && !$('#consent', sheet).checked) { err.textContent = 'Нужно согласие на обработку персональных данных'; return; }
+        btn.disabled = true;
+        try {
+          if (needLogin) {
+            const res = await api('POST', '/api/v1/guest/login', { phone: phone.value, consent: true });
+            S.token = res.token; S.guest = res.guest;
+            store.set('token', res.token); store.set('guest', res.guest);
+          }
+          if (table !== S.table) { S.table = table; S.sessionId = null; store.del('sessionId'); }
+          store.set('table', S.table);
+          S.changeTable = false;
+          await enterTable();
+          startPolling();
+          closeSheet();
+          toast(`Стол №${S.table}: можно заказывать`);
+          render();
+          if (then) then();
+        } catch (e2) {
+          btn.disabled = false;
+          err.textContent = e2.message;
+        }
+      });
     });
   }
 
@@ -352,7 +384,7 @@
   async function onLoggedIn({ token, guest }) {
     S.token = token; S.guest = guest;
     store.set('token', token); store.set('guest', guest);
-    await startTable();
+    if (S.table) await startTable(); else render();
   }
 
   // ── Экран: AI ──────────────────────────────────────────────
@@ -707,7 +739,6 @@
 
   // ── Рендер ─────────────────────────────────────────────────
   function render() {
-    if (!S.token) { renderAuth(); return; }
     const app = $('#app');
     const active = document.activeElement?.id;
     const caret = document.activeElement?.selectionStart;
@@ -747,7 +778,8 @@
     if (card && !t.closest('button')) { openProduct(card.dataset.product); return; }
     const action = t.closest('[data-action]')?.dataset.action;
     if (!action) return;
-    if (action === 'call') openCallSheet();
+    if (action === 'seat') openSeatSheet();
+    else if (action === 'call') { if (S.session) openCallSheet(); else openSeatSheet(openCallSheet); }
     else if (action === 'submit') submitToWaiter(t.closest('button'));
     else if (action === 'pay') openPaySheet();
     else if (action === 'bill') requestBill();
@@ -784,27 +816,27 @@
     } catch (e) { toast('Не удалось загрузить меню — проверьте интернет', true); }
   }
 
-  async function startTable() {
-    try {
-      await enterTable();
-    } catch (e) {
-      if (e.status === 401) return;
-      $('#app').innerHTML = `<div class="auth"><div class="auth__main"><div class="logo">ФУДЖИ</div>
-        <p style="text-align:center">${esc(e.message)}</p><button class="btn btn--dark btn--center" onclick="location.reload()">Повторить</button></div></div>`;
-      return;
-    }
-    render();
-    if (!S.catalog) loadCatalog();
+  let polling = false;
+  function startPolling() {
+    if (polling) return;
+    polling = true;
     setInterval(() => { if (!document.hidden) refreshSession(); }, 10000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshSession(); });
   }
 
-  async function boot() {
-    if (!S.table) {
-      $('#app').innerHTML = `<div class="auth"><div class="auth__main"><div class="logo">ФУДЖИ<small>Электронное меню</small></div>
-        <h1>Отсканируйте QR-код на столе</h1><p class="muted" style="text-align:center">Меню откроется с привязкой к вашему столу</p></div></div>`;
-      return;
+  async function startTable() {
+    try {
+      await enterTable();
+      S.tab = 'ai';
+      startPolling();
+    } catch (e) {
+      // Стол не найден и т.п. — меню остаётся доступным, стол выберут при заказе
+      if (e.status !== 401) toast(e.message, true);
     }
+    render();
+  }
+
+  async function boot() {
     try {
       S.config = await api('GET', `/api/v1/config?restaurant=${encodeURIComponent(S.restaurant || '')}`);
       S.restaurant = S.config.restaurant.slug;
@@ -814,19 +846,22 @@
         <button class="btn btn--dark btn--center" onclick="location.reload()">Повторить</button></div></div>`;
       return;
     }
+    // Меню видно сразу, без входа и выбора стола
+    render();
     loadCatalog();
 
     const fujiToken = params.get('fujiToken');
     if (fujiToken) {
       history.replaceState(null, '', location.pathname);
-      try { await onLoggedIn(await api('POST', '/api/v1/guest/fuji', { token: fujiToken })); return; } catch (e) { renderAuth(e.message); return; }
+      try { await onLoggedIn(await api('POST', '/api/v1/guest/fuji', { token: fujiToken })); } catch (e) { toast(e.message, true); }
+      return;
     }
-    if (!S.token) { renderAuth(); return; }
+    if (!S.token) return;
     try {
       S.guest = await api('GET', '/api/v1/guest/me');
       store.set('guest', S.guest);
-    } catch (e) { if (e.status === 401) return; }
-    await startTable();
+    } catch (e) { return; }
+    if (S.table) await startTable();
   }
 
   boot();
