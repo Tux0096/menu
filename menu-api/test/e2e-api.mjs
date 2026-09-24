@@ -103,21 +103,20 @@ step('дозаказ отправлен на кухню без дублей');
 // 10. Счёт и оплата
 s = ok(await api('POST', '/api/v1/table/request-bill', { sessionId: s.sessionId }, G), 'bill');
 assert.equal(s.workflowStatus, 'bill_requested'); step(`«${s.workflowLabel}»`);
-const tip = Math.round(s.total * 0.1);
-s = ok(await api('POST', '/api/v1/table/guest-pay', { sessionId: s.sessionId, method: 'sbp', tipAmount: tip }, G), 'pay');
-assert.equal(s.workflowStatus, 'paid'); step(`оплачено ${s.total} ₽ + чаевые ${tip} ₽`);
-r = await api('POST', '/api/v1/table/guest-pay', { sessionId: s.sessionId, method: 'sbp', tipAmount: tip }, G);
-assert.equal(r.status, 409); step('повторная оплата заблокирована (409)');
+// 10. Оплата через меню выключена (PAYMENTS_ENABLED=false): заказ не помечается оплаченным
+r = await api('POST', '/api/v1/table/guest-pay', { sessionId: s.sessionId, method: 'sbp', tipAmount: 0 }, G);
+if (process.env.PAYMENTS_ENABLED === 'true') {
+  assert.equal(r.status, 200); step('оплата через меню');
+} else {
+  assert.equal(r.status, 403); step('оплата через меню выключена (403), заказ не отмечается оплаченным');
+  r = await api('POST', `/api/v1/waiter/session/${s.sessionId}/close`, {}, W);
+  assert.equal(r.status, 403); step('закрытие заказа из терминала выключено (403)');
+}
 
 // 11. Отзыв
 ok(await api('POST', '/api/v1/table/feedback', { sessionId: s.sessionId, rating: 2, comment: 'Долго ждали' }, G), 'feedback');
 const fb2 = ok(await api('POST', '/api/v1/table/feedback', { sessionId: s.sessionId, rating: 5 }, G), 'feedback2');
 assert.ok(fb2.alreadySent); step('отзыв сохранён один раз, низкая оценка эскалирована');
-
-// 15. Новый визит после оплаты
-const s2 = ok(await api('POST', '/api/v1/table/enter', { restaurantSlug: 'novo-sadovaya', tableNumber: TABLE, previousSessionId: s.sessionId }, G), 'reenter');
-assert.notEqual(s2.sessionId, s.sessionId); assert.equal(s2.items.length, 0);
-step('повторный скан после оплаты — новый чистый визит');
 
 // 5.10 Дашборд управляющего и доступ
 r = await api('GET', '/api/v1/manager/dashboard?restaurant=novo-sadovaya', null, W);

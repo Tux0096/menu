@@ -171,7 +171,7 @@
       ${s.iikoLastError ? `<div class="error-box"><b>Ошибка iiko:</b> ${esc(s.iikoLastError)}<br>Корзина сохранена — исправьте и нажмите «В работу» ещё раз.</div>` : ''}
       <div>${e.items.length ? e.items.map((it, idx) => `<div class="row ${it.isLocked ? '' : 'is-new'}">
         <div><div class="row__name">${esc(it.name)}</div>
-          <div class="row__meta">${rub(it.price)} · ${it.isLocked ? `на кухне (партия ${it.batchNo || 1})` : '<b style="color:var(--ok)">новое</b>'}</div></div>
+          <div class="row__meta">${rub(it.price)} · ${it.isLocked ? `${esc(it.kitchenLabel || 'на кухне')} (партия ${it.batchNo || 1})` : '<b style="color:var(--ok)">новое</b>'}</div></div>
         <select class="sel hide-sm" data-seat="${idx}" title="Место"><option value="">Место —</option>${seats.map((n) => `<option value="${n}" ${Number(it.seatNumber) === n ? 'selected' : ''}>Место ${n}</option>`).join('')}</select>
         <select class="sel hide-sm" data-course="${idx}" title="Курс подачи"><option value="">Курс —</option>${[1, 2, 3].map((n) => `<option value="${n}" ${Number(it.course) === n ? 'selected' : ''}>Курс ${n}</option>`).join('')}</select>
         <div class="qty">${it.isLocked ? `<b>${it.quantity}</b>` : `<button class="icon-btn" data-qty="${idx}" data-d="-1">−</button><b>${it.quantity}</b><button class="icon-btn" data-qty="${idx}" data-d="1">+</button>`}</div>
@@ -183,7 +183,6 @@
       <div class="footer-actions">
         <button class="btn" data-save ${e.dirty && !lockedByOther ? '' : 'disabled'}>Сохранить правки</button>
         <button class="btn btn--dark" data-send ${pending && !lockedByOther ? '' : 'disabled'}>В работу → iiko (${pending})</button>
-        <button class="btn" data-close-table>${s.isPaid ? 'Завершить визит' : 'Закрыть стол'}</button>
         <button class="btn" data-hide-editor>Свернуть</button>
       </div>
     </section>`;
@@ -206,7 +205,7 @@
             <div class="h2">Активные столы <span class="muted" style="font-weight:400">${S.sessions.filter((s) => s.status === 'open').length}</span></div>
             <div class="tables">${S.sessions.length ? S.sessions.map((s) => `<button class="table-card ${S.openId === s.sessionId ? 'is-open' : ''}" data-open="${esc(s.sessionId)}">
               <div class="table-card__num">№${esc(s.tableNumber)} ${s.isOverdue ? '<span class="overdue">⏱ ' + s.waitingMinutes + ' мин</span>' : ''}</div>
-              ${statusPill(s)}
+              ${statusPill(s)}${s.kitchenLabel ? ` <span class="pill" data-tone="work">Кухня: ${esc(s.kitchenLabel)}</span>` : ''}
               <div class="table-card__guest">${esc(s.guest?.name || 'Гость')}${s.pendingCount ? ` · новых: ${s.pendingCount}` : ''}</div>
               <div class="table-card__sum"><span class="muted" style="font-weight:400">${s.items.length} поз.</span><span>${rub(s.total)}</span></div>
             </button>`).join('') : '<div class="muted">Нет активных столов. Когда гость отсканирует QR, стол появится здесь.</div>'}</div>

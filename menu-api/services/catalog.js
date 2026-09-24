@@ -113,42 +113,114 @@ async function loadSnapshot(restaurantId) {
   return rows[0] || null;
 }
 
-async function loadRawCatalog(restaurant, { force = false } = {}) {
-  const hit = rawCache.get(restaurant.id);
-  if (!force && hit && Date.now() - hit.at < TTL_MS) return hit;
+const inflight = new Map(); // restaurantId -> Promise
+
+const ALLOW_DEMO = process.env.ALLOW_DEMO_MENU === 'true';
+const normName = (n) => String(n || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]/g, '');
+
+async function fetchLegacy(restaurant) {
+  if (!restaurant.terminal_id || process.env.LEGACY_API_DISABLED === 'true') return null;
+  const started = Date.now();
+  try {
+    const data = await fetchLegacyCatalog(restaurant.terminal_id);
+    if (data?.products?.length) {
+      saveSnapshot(restaurant.id, 'fuji-api', data);
+      return data;
+    }
+    console.warn(`catalog ${restaurant.slug}: prod API вернул пустое меню`);
+  } catch (e) {
+    console.warn(`catalog ${restaurant.slug}: prod API недоступен за ${Date.now() - started} мс — ${e.message}`);
+  }
+  const snap = await loadSnapshot(restaurant.id);
+  return snap && snap.source === 'fuji-api' ? snap.data : null;
+}
+
+/** Дополнить меню iiko данными сайта Фуджи: фото, описание/состав, КБЖУ, вес, фильтры. */
+function enrichWithLegacy(iikoMenu, legacy) {
+  if (!legacy?.products?.length) return 0;
+  const byId = new Map(legacy.products.map((p) => [String(p.iikoId || p.id), p]));
+  const byName = new Map(legacy.products.map((p) => [normName(p.name), p]));
+  let matched = 0;
+  for (const p of iikoMenu.products) {
+    const l = byId.get(String(p.id)) || byName.get(normName(p.name));
+    if (!l) continue;
+    matched += 1;
+    if (!p.image && l.image) p.image = l.image;
+    if (!p.description && l.description) p.description = l.description;
+    if (!p.weight && l.weight) p.weight = l.weight;
+    for (const k of ['energyAmount', 'fiberAmount', 'fatAmount', 'carbohydrateAmount']) {
+      if (p[k] == null && l[k] != null) p[k] = l[k];
+    }
+    if (l.composition?.length) p.composition = l.composition;
+    if (l.filters?.length) p.filters = l.filters;
+    if (l.allergens?.length) p.allergens = l.allergens;
+    if (l.groupModifiers?.length && !p.groupModifiers?.length) p.legacyGroupModifiers = l.groupModifiers;
+  }
+  return matched;
+}
+
+/**
+ * Реальное меню ресторана:
+ *  1) номенклатура iiko этой организации (ID блюд совпадают с iiko → заказ на стол принимается),
+ *     дополненная фото/составом/КБЖУ с сайта Фуджи;
+ *  2) если выгрузки iiko ещё нет — меню сайта Фуджи (prod API) или его последний снимок.
+ * Демо-меню используется только локально (ALLOW_DEMO_MENU=true).
+ */
+async function fetchRawCatalog(restaurant) {
+  const [fromIiko, legacy] = await Promise.all([
+    getCatalogFromDb(restaurant.id),
+    fetchLegacy(restaurant),
+  ]);
 
   let result = null;
-  if (restaurant.terminal_id && process.env.LEGACY_API_DISABLED !== 'true') {
-    try {
-      const data = await fetchLegacyCatalog(restaurant.terminal_id);
-      if (data?.products?.length) {
-        result = { source: 'fuji-api', data };
-        saveSnapshot(restaurant.id, 'fuji-api', data);
-      }
-    } catch (e) {
-      console.warn(`catalog ${restaurant.slug}: prod API недоступен — ${e.message}`);
-    }
-  }
-  if (!result) {
-    const fromDb = await getCatalogFromDb(restaurant.id);
-    if (fromDb) result = { source: 'iiko', data: fromDb };
-  }
-  if (!result) {
+  if (fromIiko) {
+    const matched = enrichWithLegacy(fromIiko, legacy);
+    result = { source: legacy ? `iiko+fuji(${matched}/${fromIiko.products.length})` : 'iiko', data: fromIiko };
+  } else if (legacy) {
+    result = { source: 'fuji-api', data: legacy };
+  } else if (ALLOW_DEMO) {
     const snap = await loadSnapshot(restaurant.id);
-    if (snap) result = { source: `snapshot:${snap.source}`, data: snap.data, fetchedAt: snap.fetched_at };
-  }
-  if (!result) {
-    // Если ничего нет — возьмём меню любого ресторана сети (меню у сети единое).
-    const { rows } = await pool.query(
-      'SELECT restaurant_id, source, data FROM catalog_snapshots ORDER BY fetched_at DESC LIMIT 1',
-    );
-    if (rows[0]) result = { source: `snapshot-network:${rows[0].source}`, data: rows[0].data };
+    if (snap) result = { source: `snapshot:${snap.source}`, data: snap.data };
   }
   if (!result) result = { source: 'empty', data: { products: [], groups: [], stopList: [] } };
 
-  const entry = { ...result, at: Date.now() };
+  // Пустое меню кэшируем ненадолго, чтобы быстро повторить попытку
+  const at = result.source === 'empty' ? Date.now() - TTL_MS + 20000 : Date.now();
+  const entry = { ...result, at };
   rawCache.set(restaurant.id, entry);
   return entry;
+}
+
+function refreshRawCatalog(restaurant) {
+  if (!inflight.has(restaurant.id)) {
+    const p = fetchRawCatalog(restaurant).finally(() => inflight.delete(restaurant.id));
+    inflight.set(restaurant.id, p);
+  }
+  return inflight.get(restaurant.id);
+}
+
+/** Кэш с фоновым обновлением: гость получает меню сразу, свежая версия подтягивается в фоне. */
+async function loadRawCatalog(restaurant, { force = false } = {}) {
+  const hit = rawCache.get(restaurant.id);
+  if (!force && hit && Date.now() - hit.at < TTL_MS) return hit;
+  if (!force && hit && hit.source !== 'empty') {
+    refreshRawCatalog(restaurant).catch(() => {});
+    return hit;
+  }
+  return refreshRawCatalog(restaurant);
+}
+
+/** Прогрев меню всех ресторанов (при старте и по таймеру). */
+export async function warmCatalogs() {
+  const { rows } = await pool.query('SELECT * FROM restaurants WHERE is_disabled = FALSE ORDER BY sort_order');
+  for (const r of rows) {
+    try {
+      const e = await refreshRawCatalog(r);
+      console.log(`catalog ${r.slug}: ${e.source}, блюд: ${e.data.products?.length || 0}`);
+    } catch (err) {
+      console.warn(`catalog warm ${r.slug}:`, err.message);
+    }
+  }
 }
 
 async function loadIikoStopList(restaurant) {

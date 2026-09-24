@@ -86,6 +86,7 @@ export async function updateOrder(sessionId, staff, { items = [], guestCount } =
     for (const it of items.filter((i) => !(i.id && lockedIds.has(i.id)))) {
       const qty = Math.floor(Number(it.quantity) || 0);
       if (qty <= 0 || !it.iikoProductId) continue;
+      if (!/^[0-9a-f-]{36}$/i.test(String(it.iikoProductId))) throw httpError(400, `«${it.name}»: нет ID блюда в iiko`);
       const price = Math.max(0, Number(it.price) || 0);
       await client.query(
         `INSERT INTO table_order_items
@@ -196,6 +197,9 @@ export async function releaseSession(sessionId, staff) {
 
 /** Официант принял оплату на своём терминале / закрыл стол. */
 export async function closeSession(sessionId, staff) {
+  if (process.env.PAYMENTS_ENABLED !== 'true') {
+    throw httpError(403, 'Закрытие заказов из меню отключено — закройте счёт в iiko');
+  }
   await pool.query(
     `UPDATE table_sessions SET
        status = CASE WHEN payment_status = 'paid' THEN 'closed' ELSE 'closed' END,

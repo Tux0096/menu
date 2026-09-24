@@ -17,7 +17,7 @@ import {
 import {
   changeOrderPayments,
   closeTableOrder,
-  getOrdersByTable,
+  getOrdersByIds,
   getRestaurantSections,
   isIikoDemo,
   matchTableIdFromSections,
@@ -35,6 +35,18 @@ const PAYABLE = [
   WORKFLOW.CART_READY, WORKFLOW.WAITER_REVIEW, WORKFLOW.IN_PRODUCTION,
   WORKFLOW.REORDER_PENDING, WORKFLOW.BILL_REQUESTED,
 ];
+/** Онлайн-оплата и отметка «Оплачено» — выключены, пока не подключён платёжный провайдер. */
+export const PAYMENTS_ENABLED = process.env.PAYMENTS_ENABLED === 'true';
+
+const KITCHEN_LABELS = {
+  Added: 'Принят',
+  PrintedNotCooking: 'Принят кухней',
+  CookingStarted: 'Готовится',
+  CookingCompleted: 'Готово',
+  Served: 'Подано',
+};
+const KITCHEN_ORDER = ['Added', 'PrintedNotCooking', 'CookingStarted', 'CookingCompleted', 'Served'];
+
 const AFTER_KITCHEN = [WORKFLOW.IN_PRODUCTION, WORKFLOW.REORDER_PENDING, WORKFLOW.BILL_REQUESTED];
 
 // ── Рестораны ───────────────────────────────────────────────────────────────
@@ -121,6 +133,8 @@ function mapItem(row) {
     batchNo: row.batch_no,
     isLocked: row.is_locked,
     isNew: !row.is_locked,
+    kitchenStatus: row.kitchen_status || null,
+    kitchenLabel: KITCHEN_LABELS[row.kitchen_status] || (row.is_locked ? 'Отправлено на кухню' : null),
   };
 }
 
@@ -151,7 +165,7 @@ export function mapSession({ session, restaurant, items }, extra = {}) {
     status: session.status,
     paymentStatus: session.payment_status,
     workflowStatus: wf,
-    workflowLabel: WORKFLOW_GUEST_LABELS[wf] || wf,
+    workflowLabel: (!PAYMENTS_ENABLED && wf === WORKFLOW.BILL_REQUESTED) ? 'Счёт запрошен' : (WORKFLOW_GUEST_LABELS[wf] || wf),
     guest: session.guest_id ? {
       id: session.guest_id,
       name: session.guest_name || 'Гость',
@@ -174,7 +188,12 @@ export function mapSession({ session, restaurant, items }, extra = {}) {
     lockedBy: session.locked_until && new Date(session.locked_until) > new Date() ? session.locked_by : null,
     canGuestRemoveItems: !isPaid,
     canGuestSubmit: !isPaid && pending.length > 0,
-    canGuestPay: PAYABLE.includes(wf) && !isPaid && parseFloat(session.total || 0) > 0,
+    canGuestPay: PAYMENTS_ENABLED && PAYABLE.includes(wf) && !isPaid && parseFloat(session.total || 0) > 0,
+    paymentsEnabled: PAYMENTS_ENABLED,
+    iikoStatus: session.iiko_status || null,
+    kitchenStatus: session.kitchen_status || null,
+    kitchenLabel: KITCHEN_LABELS[session.kitchen_status] || null,
+    kitchenStatusAt: session.iiko_status_at || null,
     canRequestBill: !isPaid && mapped.length > 0 && wf !== WORKFLOW.BILL_REQUESTED,
     isPaid,
     items: mapped,
@@ -300,11 +319,16 @@ export async function trackActivity(sessionId) {
 
 // ── Корзина ─────────────────────────────────────────────────────────────────
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function aggregateCart(cartItems) {
   const map = new Map();
   for (const item of cartItems || []) {
     const key = String(item.iikoProductId || item.productId || '');
     if (!key) continue;
+    if (!UUID_RE.test(key)) {
+      throw httpError(400, `«${String(item.name || 'Позиция').slice(0, 60)}» нельзя заказать через меню — позовите официанта`);
+    }
     const qty = Math.max(0, Math.floor(Number(item.quantity) || 0));
     const prev = map.get(key);
     if (prev) prev.quantity += qty;
@@ -499,6 +523,7 @@ export async function callWaiter(sessionId, reason = 'general', comment = '') {
 const PAYMENT_METHODS = ['card', 'sbp', 'apple_pay', 'google_pay'];
 
 export async function payBill(sessionId, { method = 'card', tipAmount = 0 } = {}) {
+  if (!PAYMENTS_ENABLED) throw httpError(403, 'Оплата через меню пока недоступна — попросите счёт у официанта');
   if (!PAYMENT_METHODS.includes(method)) throw httpError(400, 'Неизвестный способ оплаты');
   const tip = Math.max(0, Math.round(Number(tipAmount) || 0));
 
@@ -587,6 +612,14 @@ export async function submitFeedback(sessionId, { rating, comment = '' }) {
 // ── Фоновые проверки: бездействие гостя и долгое ожидание ───────────────────
 
 export async function runServiceChecks() {
+  // Забытые визиты (12+ часов без активности) закрываем, чтобы новый гость начинал с чистого стола
+  await pool.query(
+    `UPDATE table_sessions SET status = 'closed', workflow_status = CASE WHEN payment_status = 'paid' THEN 'paid' ELSE 'closed' END,
+       closed_at = NOW(), updated_at = NOW()
+     WHERE status = 'open'
+       AND COALESCE(last_guest_activity_at, updated_at::timestamptz, created_at::timestamptz) < NOW() - INTERVAL '12 hours'`,
+  );
+
   const { rows: idle } = await pool.query(
     `UPDATE table_sessions SET idle_notified_at = NOW()
      WHERE status = 'open' AND idle_notified_at IS NULL
@@ -630,26 +663,58 @@ export async function runServiceChecks() {
   }
 }
 
-/** Проверка, что iiko-заказ стола ещё открыт (если закрыли на кассе — отмечаем оплату). */
+/**
+ * Статус заказа из iiko: статус заказа и статусы блюд на кухне.
+ * Оплату/закрытие по данным iiko не отмечаем (закрытие заказов из меню выключено).
+ */
 export async function refreshFromIiko(sessionId) {
   if (isIikoDemo()) return;
   const ctx = await getSessionContext(sessionId);
-  if (!ctx?.session.iiko_order_id || ctx.session.payment_status === 'paid' || !ctx.session.iiko_table_id) return;
+  if (!ctx?.session.iiko_order_id || !ctx.session.sent_to_production_at) return;
   try {
-    const orders = await getOrdersByTable([ctx.restaurant.organization_id], [ctx.session.iiko_table_id]);
-    const list = orders?.orders || orders?.orderInfos || [];
-    const stillOpen = list.some((o) => (o.id || o.order?.id) === ctx.session.iiko_order_id);
-    if (!stillOpen) {
+    const data = await getOrdersByIds(ctx.restaurant.organization_id, [ctx.session.iiko_order_id]);
+    const info = (data?.orders || [])[0];
+    const order = info?.order || info;
+    if (!order) return;
+    const items = (order.items || []).filter((i) => (i.type || 'Product') === 'Product');
+    // Для каждой позиции — наименее продвинутый статус среди строк iiko с этим блюдом
+    const byProduct = new Map();
+    for (const it of items) {
+      const pid = String(it.product?.id || it.productId || '');
+      if (!pid || !it.status) continue;
+      const prev = byProduct.get(pid);
+      if (!prev || KITCHEN_ORDER.indexOf(it.status) < KITCHEN_ORDER.indexOf(prev)) byProduct.set(pid, it.status);
+    }
+    for (const [pid, st] of byProduct) {
       await pool.query(
-        `UPDATE table_sessions SET payment_status = 'paid', status = 'paid', workflow_status = 'paid',
-           paid_at = NOW(), updated_at = NOW()
-         WHERE id = $1 AND payment_status <> 'paid'`,
-        [sessionId],
+        `UPDATE table_order_items SET kitchen_status = $3
+         WHERE session_id = $1 AND iiko_product_id::text = $2 AND is_locked = TRUE`,
+        [sessionId, pid, st],
       );
     }
+    const statuses = [...byProduct.values()];
+    let kitchen = null;
+    if (statuses.length) {
+      kitchen = statuses.reduce((min, st) => (KITCHEN_ORDER.indexOf(st) < KITCHEN_ORDER.indexOf(min) ? st : min));
+    }
+    await pool.query(
+      `UPDATE table_sessions SET iiko_status = $2, kitchen_status = COALESCE($3, kitchen_status), iiko_status_at = NOW()
+       WHERE id = $1`,
+      [sessionId, order.status || info?.creationStatus || null, kitchen],
+    );
   } catch (e) {
-    console.warn('refreshFromIiko:', e.message);
+    console.warn('refreshFromIiko:', e.response?.data?.errorDescription || e.message);
   }
+}
+
+/** Фоновое обновление статусов кухни по всем открытым заказам из меню. */
+export async function refreshKitchenStatuses() {
+  if (isIikoDemo()) return;
+  const { rows } = await pool.query(
+    `SELECT id FROM table_sessions
+     WHERE status = 'open' AND iiko_order_id IS NOT NULL AND sent_to_production_at IS NOT NULL`,
+  );
+  for (const r of rows) await refreshFromIiko(r.id);
 }
 
 export { withTransaction, lockSession, recalcTotal, AFTER_KITCHEN };

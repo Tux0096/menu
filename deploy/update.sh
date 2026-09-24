@@ -72,7 +72,7 @@ chmod 600 "$ENV_FILE"
 echo "=== 4. База данных ==="
 node db/migrate.js
 timeout 60 node db/check-iiko.js || true
-(timeout 300 node db/sync-iiko.js 2>&1 | grep -E "✓|!|Ошибка|ошибк|failed|Готово" | tail -20) || echo "iiko: выгрузка пропущена"
+# Меню из iiko сервер выгружает сам при старте и каждые 30 минут
 
 echo "=== 5. Сервис ==="
 sudo cp "$REPO_DIR/deploy/systemd/menu-api.service" /etc/systemd/system/menu-api.service
@@ -100,7 +100,16 @@ for i in $(seq 1 15); do
   sleep 2
   [ "$i" = 15 ] && { sudo journalctl -u menu-api -n 50 --no-pager; exit 1; }
 done
-curl -fsS -o /dev/null -w "catalog: %{http_code}\n" "http://127.0.0.1:3101/api/v1/restaurants/novo-sadovaya/catalog"
+echo "Ждём выгрузку меню из iiko (до 60 с)..."
+for i in $(seq 1 12); do
+  sudo journalctl -u menu-api --since "3 min ago" --no-pager -o cat | grep -q "✓ Готово. Ресторанов" && break
+  sleep 5
+done
+SLUG=$(get_env QR_RESTAURANT_SLUG); SLUG=${SLUG:-novo-sadovaya}
+curl -fsS -m 90 "http://127.0.0.1:3101/api/v1/restaurants/$SLUG/catalog" \
+  | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(`меню ${process.argv[1]}: источник ${j.source}, блюд ${j.products.length}, категорий ${(j.groups||[]).length}, стоп-лист ${(j.stopList||[]).length}`)})' "$SLUG" \
+  || echo "меню: не удалось получить"
+sudo journalctl -u menu-api --since "3 min ago" --no-pager -o cat | grep -E "^catalog|prod API|iiko|→|вернул|по группам|записано|! |Готово" | tail -40 || true
 
 echo ""
 echo "Готово:"

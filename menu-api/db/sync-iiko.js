@@ -17,7 +17,7 @@ import axios from 'axios';
 import { default as pool } from './pool.js';
 import { requestIikoToken } from '../lib/iiko-token.js';
 
-const IIKO_URL = 'https://api-ru.iiko.services';
+const IIKO_URL = process.env.IIKO_URL || 'https://api-ru.iiko.services';
 
 // Категории, которые показываем в меню. Эти UUID одинаковые для всех ресторанов
 // (брались из общей номенклатуры fuji-api/setting/config/catalogMenu.js).
@@ -111,6 +111,32 @@ async function ensureCategoriesMerged(client, iikoGroupMap) {
   }
 }
 
+/** Категории из групп iiko (только те, где есть блюда, + их родители). */
+async function upsertIikoGroups(client, groups, products) {
+  const byId = new Map(groups.map((g) => [g.id, g]));
+  const needed = new Set();
+  for (const p of products) {
+    let g = byId.get(p.parentGroup);
+    while (g && !needed.has(g.id)) {
+      needed.add(g.id);
+      g = g.parentGroup ? byId.get(g.parentGroup) : null;
+    }
+  }
+  const ordered = [...needed].map((id) => byId.get(id))
+    .sort((a, b) => (a.parentGroup ? 1 : 0) - (b.parentGroup ? 1 : 0));
+  for (const g of ordered) {
+    const parent = g.parentGroup && needed.has(g.parentGroup) ? g.parentGroup : null;
+    await client.query(
+      `INSERT INTO categories (id, name, slug, parent_id, sort_order, image_url, is_visible)
+       VALUES ($1, $2, $3, $4, $5, $6, true)
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, sort_order = EXCLUDED.sort_order,
+         image_url = COALESCE(EXCLUDED.image_url, categories.image_url)`,
+      [g.id, g.name, g.seoText || g.id, null, g.order ?? 0, g.imageLinks?.[0] ?? null],
+    );
+    if (parent) await client.query('UPDATE categories SET parent_id = $2 WHERE id = $1', [g.id, parent]);
+  }
+}
+
 async function syncRestaurant(restaurant, token) {
   const { id: restaurantId, slug, organization_id: organizationId, name } = restaurant;
 
@@ -148,11 +174,32 @@ async function syncRestaurant(restaurant, token) {
 
   console.log(`  релевантных продуктов: ${relevantProducts.length}`);
 
+  // Группы сайта не совпали с группами организации — берём меню из групп самого iiko
+  let useIikoGroups = false;
+  if (!relevantProducts.length) {
+    const menuGroups = new Set(groups.filter((g) => !g.isDeleted && g.isIncludedInMenu !== false && !g.isGroupModifier).map((g) => g.id));
+    for (const p of products) {
+      if (p.isDeleted || p.isIncludedInMenu === false) continue;
+      if (p.type && !['Dish', 'Goods'].includes(p.type)) continue;
+      if (!menuGroups.has(p.parentGroup)) continue;
+      if ((p.sizePrices?.[0]?.price?.currentPrice ?? 0) <= 0) continue;
+      relevantProducts.push(p);
+    }
+    useIikoGroups = relevantProducts.length > 0;
+    console.log(`  по группам iiko: ${relevantProducts.length} продуктов`);
+  }
+
+  if (!relevantProducts.length) {
+    console.log('  ! iiko не вернул блюд для меню — оставляем прежнюю выгрузку');
+    return { products: 0, error: 'empty nomenclature' };
+  }
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
     await ensureCategoriesMerged(client, iikoGroupMap);
+    if (useIikoGroups) await upsertIikoGroups(client, groups, relevantProducts);
 
     await client.query(`DELETE FROM products WHERE restaurant_id = $1`, [restaurantId]);
 
@@ -220,21 +267,18 @@ async function getRestaurants(slugFilter) {
   return rows;
 }
 
-async function main() {
-  const slugArg = process.argv[2];
+/** Выгрузка меню из iiko по всем (или одному) ресторанам. Используется скриптом и сервером по таймеру. */
+export async function syncAllRestaurants(slugArg = null) {
   const restaurants = await getRestaurants(slugArg);
-
   if (restaurants.length === 0) {
     console.log(`Нет ресторанов${slugArg ? ` со slug=${slugArg}` : ''}.`);
-    process.exit(1);
+    return { restaurants: 0, products: 0, failed: 0 };
   }
-
   const token = await getToken();
-  console.log('');
-
   let totalProducts = 0;
   let failed = 0;
-  for (const r of restaurants) {
+  for (const [idx, r] of restaurants.entries()) {
+    if (idx) await new Promise((res) => setTimeout(res, 2000)); // iiko ограничивает частоту запросов (429)
     try {
       const res = await syncRestaurant(r, token);
       totalProducts += res.products || 0;
@@ -243,14 +287,16 @@ async function main() {
       failed++;
       console.error(`  ! ошибка по ${r.slug}: ${e.message}`);
     }
-    console.log('');
   }
-
   console.log(`✓ Готово. Ресторанов: ${restaurants.length}, всего продуктов: ${totalProducts}, ошибок: ${failed}`);
-  await pool.end();
+  return { restaurants: restaurants.length, products: totalProducts, failed };
 }
 
-main().catch((e) => {
-  console.error('Sync failed:', e.message);
-  process.exit(1);
-});
+if (process.argv[1] && process.argv[1].endsWith('sync-iiko.js')) {
+  syncAllRestaurants(process.argv[2] || null)
+    .then(() => pool.end())
+    .catch((e) => {
+      console.error('Sync failed:', e.message);
+      process.exit(1);
+    });
+}
