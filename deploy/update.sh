@@ -12,6 +12,15 @@ ENV_FILE="$API_DIR/.env"
 
 echo "=== 1. Код: $BRANCH ==="
 cd "$REPO_DIR"
+# Ручные правки на сервере не теряем: сохраняем патч и stash, затем ставим код из GitHub
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  BACKUP_DIR="$HOME/menu-backups"; mkdir -p "$BACKUP_DIR"
+  STAMP=$(date +%Y%m%d-%H%M%S)
+  git diff > "$BACKUP_DIR/local-changes-$STAMP.patch"
+  git stash push -m "prod-local-changes-$STAMP" >/dev/null
+  echo "Локальные правки сервера сохранены: $BACKUP_DIR/local-changes-$STAMP.patch и git stash"
+  git diff --stat "stash@{0}^" "stash@{0}" | tail -20
+fi
 git fetch origin "$BRANCH"
 git checkout -B "$BRANCH" "origin/$BRANCH"
 git reset --hard "origin/$BRANCH"

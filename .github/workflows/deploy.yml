@@ -42,5 +42,7 @@ jobs:
             set -e
             cd /home/ubuntu/menu
             git fetch origin "$BRANCH"
-            git checkout -f "origin/$BRANCH" -- deploy/update.sh
-            BRANCH="$BRANCH" bash deploy/update.sh
+            git checkout -- deploy/update.sh 2>/dev/null || true
+            # запускаем копию скрипта: сам скрипт обновляет рабочую папку
+            git show "origin/$BRANCH:deploy/update.sh" > /tmp/menu-update.sh
+            BRANCH="$BRANCH" bash /tmp/menu-update.sh
