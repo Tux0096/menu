@@ -70,6 +70,46 @@ async function getToken() {
   return requestIikoToken(apiLogin);
 }
 
+async function iikoPostRaw(token, path, body) {
+  const res = await axios.post(`${IIKO_URL}${path}`, body, { headers: { Authorization: `Bearer ${token}` }, timeout: 60000 });
+  return res.data;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const normOrg = (s) => String(s || '').toLowerCase().replace(/ё/g, 'е').replace(/[^а-яa-z0-9]/g, '');
+/** Ключ поиска организации по адресу ресторана: «Ново-Садовая, 24» → «новосад» */
+const addressKey = (address) => normOrg(String(address || '').split(/[,\d]/)[0]).slice(0, 7);
+
+/**
+ * У ресторана пустая номенклатура в его организации iiko — ищем среди доступных ключу организацию
+ * с похожим названием, где меню заведено, и переключаем ресторан на неё (вместе с терминальной группой).
+ */
+async function findMenuOrganization(token, restaurant, orgs) {
+  const key = addressKey(restaurant.address);
+  if (key.length < 4) return null;
+  const candidates = orgs.filter((o) => o.id !== restaurant.organization_id && normOrg(o.name).includes(key)).slice(0, 3);
+  for (const org of candidates) {
+    await sleep(Number(process.env.IIKO_PAUSE_MS || 6000));
+    try {
+      const nom = await getNomenclature(token, org.id);
+      const count = (nom.products || []).filter((p) => !p.isDeleted).length;
+      console.log(`  кандидат «${org.name}» [${org.id}]: ${count} продуктов`);
+      if (!count) continue;
+      const tg = await iikoPostRaw(token, '/api/1/terminal_groups', { organizationIds: [org.id], includeDisabled: false });
+      const terminalGroupId = tg.terminalGroups?.[0]?.items?.[0]?.id || null;
+      await pool.query(
+        'UPDATE restaurants SET organization_id = $2, terminal_group_id = COALESCE($3, terminal_group_id) WHERE id = $1',
+        [restaurant.id, org.id, terminalGroupId],
+      );
+      console.log(`  → ресторан переключён на организацию «${org.name}» (терминальная группа ${terminalGroupId || 'не найдена'})`);
+      return { org, nomenclature: nom };
+    } catch (e) {
+      console.log(`  кандидат «${org.name}»: ошибка ${e.response?.status || ''} ${e.response?.data?.errorDescription || e.message}`);
+    }
+  }
+  return null;
+}
+
 async function getNomenclature(token, organizationId) {
   const res = await axios.post(
     `${IIKO_URL}/api/1/nomenclature`,
@@ -137,8 +177,9 @@ async function upsertIikoGroups(client, groups, products) {
   }
 }
 
-async function syncRestaurant(restaurant, token) {
-  const { id: restaurantId, slug, organization_id: organizationId, name } = restaurant;
+async function syncRestaurant(restaurant, token, orgs = []) {
+  const { id: restaurantId, slug, name } = restaurant;
+  let organizationId = restaurant.organization_id;
 
   if (!organizationId) {
     console.log(`  ! ${slug}: organization_id не задан, пропускаем`);
@@ -158,8 +199,15 @@ async function syncRestaurant(restaurant, token) {
     return { products: 0, error: e.message };
   }
 
-  const { groups = [], products = [] } = nomenclature;
+  let { groups = [], products = [] } = nomenclature;
   console.log(`  iiko вернул: ${groups.length} групп, ${products.length} продуктов`);
+  if (!products.length && orgs.length) {
+    const found = await findMenuOrganization(token, restaurant, orgs);
+    if (found) {
+      organizationId = found.org.id;
+      ({ groups = [], products = [] } = found.nomenclature);
+    }
+  }
 
   const iikoGroupMap = new Map(groups.map((g) => [g.id, g]));
 
@@ -260,8 +308,8 @@ async function syncRestaurant(restaurant, token) {
 
 async function getRestaurants(slugFilter) {
   const sql = slugFilter
-    ? `SELECT id, slug, name, organization_id FROM restaurants WHERE slug = $1`
-    : `SELECT id, slug, name, organization_id FROM restaurants ORDER BY sort_order, name`;
+    ? `SELECT id, slug, name, address, organization_id FROM restaurants WHERE slug = $1`
+    : `SELECT id, slug, name, address, organization_id FROM restaurants WHERE is_disabled = FALSE ORDER BY sort_order, name`;
   const args = slugFilter ? [slugFilter] : [];
   const { rows } = await pool.query(sql, args);
   return rows;
@@ -275,12 +323,18 @@ export async function syncAllRestaurants(slugArg = null) {
     return { restaurants: 0, products: 0, failed: 0 };
   }
   const token = await getToken();
+  let orgs = [];
+  try {
+    orgs = (await iikoPostRaw(token, '/api/1/organizations', { returnAdditionalInfo: false, includeDisabled: false })).organizations || [];
+  } catch (e) {
+    console.log('  ! не удалось получить список организаций:', e.message);
+  }
   let totalProducts = 0;
   let failed = 0;
   for (const [idx, r] of restaurants.entries()) {
     if (idx) await new Promise((res) => setTimeout(res, 6000)); // iiko ограничивает частоту запросов (429)
     try {
-      const res = await syncRestaurant(r, token);
+      const res = await syncRestaurant(r, token, orgs);
       totalProducts += res.products || 0;
       if (res.error) failed++;
     } catch (e) {

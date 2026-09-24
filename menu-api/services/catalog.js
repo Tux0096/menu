@@ -1,15 +1,10 @@
 /**
- * Меню ресторана для QR-интерфейса.
- *
- * Источники (по приоритету):
- *   1. prod API Фуджи (apiv2.infra-fuji.ru) — полное меню с фото, КБЖУ, модификаторами;
- *   2. таблица products (выгрузка из iiko скриптом db/sync-iiko.js);
- *   3. последний успешный снимок из catalog_snapshots (если оба источника недоступны).
- *
- * Поверх выгрузки применяются правки из админки (menu_overrides) и стоп-лист iiko.
+ * Меню ресторана для QR-интерфейса — только номенклатура iiko организации ресторана
+ * (выгрузка db/sync-iiko.js при старте сервера и каждые 30 минут).
+ * Поверх накладываются карточки из админки (menu_overrides, привязка по UUID блюда в iiko)
+ * и стоп-лист iiko + ручной стоп из админки.
  */
 import pool from '../db/pool.js';
-import { fetchLegacyCatalog } from './catalog-proxy.js';
 import { getStopListProductIds, isIikoDemo } from '../iiko-client.js';
 
 const TTL_MS = parseInt(process.env.CATALOG_TTL_MS || '300000', 10);
@@ -116,87 +111,16 @@ async function loadSnapshot(restaurantId) {
 const inflight = new Map(); // restaurantId -> Promise
 
 const ALLOW_DEMO = process.env.ALLOW_DEMO_MENU === 'true';
-const normName = (n) => String(n || '').toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]/g, '');
-
-async function fetchLegacy(restaurant) {
-  if (!restaurant.terminal_id || process.env.LEGACY_API_DISABLED === 'true') return null;
-  const started = Date.now();
-  try {
-    const data = await fetchLegacyCatalog(restaurant.terminal_id);
-    if (data?.products?.length) {
-      saveSnapshot(restaurant.id, 'fuji-api', data);
-      return data;
-    }
-    console.warn(`catalog ${restaurant.slug}: prod API вернул пустое меню`);
-  } catch (e) {
-    console.warn(`catalog ${restaurant.slug}: prod API недоступен за ${Date.now() - started} мс — ${e.message}`);
-  }
-  const snap = await loadSnapshot(restaurant.id);
-  return snap && snap.source === 'fuji-api' ? snap.data : null;
-}
-
-/** Дополнить меню iiko данными сайта Фуджи: фото, описание/состав, КБЖУ, вес, фильтры. */
-function enrichWithLegacy(iikoMenu, legacy) {
-  if (!legacy?.products?.length) return 0;
-  const byId = new Map(legacy.products.map((p) => [String(p.iikoId || p.id), p]));
-  const byName = new Map(legacy.products.map((p) => [normName(p.name), p]));
-  let matched = 0;
-  for (const p of iikoMenu.products) {
-    const l = byId.get(String(p.id)) || byName.get(normName(p.name));
-    if (!l) continue;
-    matched += 1;
-    if (!p.image && l.image) p.image = l.image;
-    if (!p.description && l.description) p.description = l.description;
-    if (!p.weight && l.weight) p.weight = l.weight;
-    for (const k of ['energyAmount', 'fiberAmount', 'fatAmount', 'carbohydrateAmount']) {
-      if (p[k] == null && l[k] != null) p[k] = l[k];
-    }
-    if (l.composition?.length) p.composition = l.composition;
-    if (l.filters?.length) p.filters = l.filters;
-    if (l.allergens?.length) p.allergens = l.allergens;
-    if (l.groupModifiers?.length && !p.groupModifiers?.length) p.legacyGroupModifiers = l.groupModifiers;
-  }
-  return matched;
-}
 
 /**
- * Реальное меню ресторана:
- *  1) номенклатура iiko этой организации (ID блюд совпадают с iiko → заказ на стол принимается),
- *     дополненная фото/составом/КБЖУ с сайта Фуджи;
- *  2) если выгрузки iiko ещё нет — меню сайта Фуджи (prod API) или его последний снимок.
- * Демо-меню используется только локально (ALLOW_DEMO_MENU=true).
+ * Меню ресторана — только номенклатура iiko его организации (сайт и приложение Фуджи
+ * используют другое меню и здесь не участвуют). Демо-меню — только локально (ALLOW_DEMO_MENU=true).
  */
 async function fetchRawCatalog(restaurant) {
-  const [fromIiko, legacy] = await Promise.all([
-    getCatalogFromDb(restaurant.id),
-    fetchLegacy(restaurant),
-  ]);
-
   let result = null;
-  let networkFrom = null;
-  let iikoMenu = fromIiko;
-  if (!iikoMenu) {
-    // У организации нет своей номенклатуры в iiko — берём меню сети (общая номенклатура, те же ID блюд).
-    // Стоп-лист при этом накладывается свой, этого ресторана.
-    const { rows } = await pool.query(
-      `SELECT p.restaurant_id, r.slug, COUNT(*)::int AS n FROM products p JOIN restaurants r ON r.id = p.restaurant_id
-       WHERE p.is_published = TRUE AND p.price > 0 AND p.restaurant_id <> $1
-       GROUP BY 1, 2 ORDER BY n DESC LIMIT 1`,
-      [restaurant.id],
-    );
-    if (rows[0]) {
-      iikoMenu = await getCatalogFromDb(rows[0].restaurant_id);
-      networkFrom = rows[0].slug;
-    }
-  }
-  if (iikoMenu) {
-    const matched = enrichWithLegacy(iikoMenu, legacy);
-    const base = networkFrom ? `iiko-сеть:${networkFrom}` : 'iiko';
-    result = { source: legacy ? `${base}+fuji(${matched}/${iikoMenu.products.length})` : base, data: iikoMenu };
-  }
-  if (!result && legacy) {
-    result = { source: 'fuji-api', data: legacy };
-  } else if (!result && ALLOW_DEMO) {
+  const fromIiko = await getCatalogFromDb(restaurant.id);
+  if (fromIiko) result = { source: 'iiko', data: fromIiko };
+  else if (ALLOW_DEMO) {
     const snap = await loadSnapshot(restaurant.id);
     if (snap) result = { source: `snapshot:${snap.source}`, data: snap.data };
   }
