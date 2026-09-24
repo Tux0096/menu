@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { randomUUID } from 'crypto';
+import { IIKO_URL, requestIikoToken } from './lib/iiko-token.js';
 
-const IIKO_URL = 'https://api-ru.iiko.services';
 
 /**
  * Демо-режим: IIKO_DEMO=true или не задан IIKO_API_LOGIN.
@@ -18,12 +18,7 @@ export async function getIikoToken() {
   if (cachedToken && Date.now() < tokenExpiresAt) {
     return cachedToken;
   }
-  const apiLogin = process.env.IIKO_API_LOGIN;
-  if (!apiLogin) {
-    throw new Error('IIKO_API_LOGIN не задан в .env');
-  }
-  const res = await axios.post(`${IIKO_URL}/api/1/access_token`, { apiLogin });
-  cachedToken = res.data.token;
+  cachedToken = await requestIikoToken(process.env.IIKO_API_LOGIN);
   tokenExpiresAt = Date.now() + 50 * 60 * 1000;
   return cachedToken;
 }

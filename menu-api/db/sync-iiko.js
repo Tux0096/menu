@@ -15,6 +15,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import axios from 'axios';
 import { default as pool } from './pool.js';
+import { requestIikoToken } from '../lib/iiko-token.js';
 
 const IIKO_URL = 'https://api-ru.iiko.services';
 
@@ -66,8 +67,7 @@ async function getToken() {
     );
   }
   console.log('Получаем токен iiko...');
-  const res = await axios.post(`${IIKO_URL}/api/1/access_token`, { apiLogin });
-  return res.data.token;
+  return requestIikoToken(apiLogin);
 }
 
 async function getNomenclature(token, organizationId) {
