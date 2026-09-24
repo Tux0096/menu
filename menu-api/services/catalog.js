@@ -49,6 +49,14 @@ async function getCatalogFromDb(restaurantId) {
     }));
 
   const num = (v) => (v == null ? null : parseFloat(v));
+  // iiko отдаёт вес в килограммах («0.23») — показываем в граммах
+  const fmtWeight = (w) => {
+    if (w == null || w === '') return null;
+    const n = Number(String(w).replace(',', '.'));
+    if (!Number.isFinite(n)) return String(w);
+    if (n <= 0) return null;
+    return n < 10 ? `${Math.round(n * 1000)} г` : `${Math.round(n)} г`;
+  };
   return {
     groups,
     stopList: [],
@@ -63,7 +71,7 @@ async function getCatalogFromDb(restaurantId) {
       parentGroupName: null,
       price: parseFloat(p.price),
       oldPrice: num(p.old_price),
-      weight: p.weight,
+      weight: fmtWeight(p.weight),
       description: p.description,
       image: p.image_url || null,
       order: p.sort_order,

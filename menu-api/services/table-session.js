@@ -339,6 +339,8 @@ function aggregateCart(cartItems) {
         name: String(item.name || 'Позиция').slice(0, 300),
         price: Math.max(0, Number(item.price) || 0),
         quantity: qty,
+        // Курс подачи 1–3 (гость выбирает в корзине); undefined — не менять
+        course: item.course === undefined ? undefined : (Number(item.course) >= 1 && Number(item.course) <= 3 ? Number(item.course) : null),
       });
     }
   }
@@ -390,7 +392,7 @@ async function writeGuestCart(client, ctx, cartItems) {
          (session_id, product_id, iiko_product_id, name, price, quantity, line_total, seat_number, course, batch_no, is_locked)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE)`,
       [session.id, line.productId, key, line.name, line.price, pendingQty, line.price * pendingQty,
-        prev?.seat_number || null, prev?.course || null, nextBatch],
+        prev?.seat_number || null, line.course !== undefined ? line.course : (prev?.course || null), nextBatch],
     );
   }
   return recalcTotal(client, session.id);

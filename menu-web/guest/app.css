@@ -330,3 +330,9 @@ textarea.field {
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; }
 }
+
+/* Курс подачи в корзине */
+.course { display: flex; align-items: center; gap: 4px; margin-top: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+.course span { margin-right: 2px; }
+.course button { padding: 5px 10px; border-radius: 12px; background: var(--bg); font-size: 12px; font-weight: 500; color: var(--ink); }
+.course button.is-on { background: var(--ink); color: #fff; }

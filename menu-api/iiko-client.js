@@ -94,6 +94,7 @@ export async function createTableOrder({
         productId: item.productId,
         type: 'Product',
         amount: item.amount,
+        ...(item.comment ? { comment: item.comment } : {}),
       })),
       guests: { count: guestCount },
     },
@@ -112,6 +113,7 @@ export async function addItemsToOrder({
       productId: item.productId,
       type: 'Product',
       amount: item.amount,
+      ...(item.comment ? { comment: item.comment } : {}),
     })),
   });
 }
