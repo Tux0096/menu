@@ -338,7 +338,7 @@
     return `<div class="card">
       <div class="toolbar">
         <div class="h2 grow" style="margin:0">Меню <span class="muted" style="font-weight:400;font-size:14px">источник: ${esc(m.source)} · обновлено ${dateTime(m.fetchedAt)}</span></div>
-        <button class="btn btn--sm" data-menu-refresh>Обновить из iiko / prod</button>
+        <button class="btn btn--sm" data-menu-refresh>Перевыгрузить из iiko</button>
       </div>
       <div class="toolbar">
         <input class="inp grow" id="menu-search" placeholder="Поиск блюда" value="${esc(S.menu.search)}">
@@ -370,10 +370,15 @@
 
   function openProductEditor(id) {
     const p = S.adminMenu.products.find((x) => String(x.id) === String(id));
+    const ownOverrides = (S.adminMenu.overrides || []).filter((o) => String(o.product_id) === String(id));
     const f = (key, label, value, type = 'text') => `<div class="field"><label>${label}</label><input class="inp" name="${key}" type="${type}" value="${esc(value ?? '')}" ${type === 'number' ? 'step="0.1"' : ''}></div>`;
     modal(`<div class="h2">${esc(p.name)}</div>
       <form id="prod-form">
-        ${f('image_url', 'Фото (URL)', p.image)}
+        <div style="display:flex;gap:14px;align-items:center;margin-bottom:10px">
+          <img id="prod-img" src="${esc(p.image || '')}" alt="" style="width:96px;height:96px;border-radius:16px;object-fit:cover;background:#fff;${p.image ? '' : 'visibility:hidden'}">
+          <label class="btn btn--sm" style="cursor:pointer">Загрузить фото<input type="file" id="prod-file" accept="image/jpeg,image/png,image/webp" hidden></label>
+        </div>
+        ${f('image_url', 'Фото (ссылка)', p.image)}
         <div class="field" style="margin-top:10px"><label>Описание</label><textarea class="inp" name="description">${esc(p.description || '')}</textarea></div>
         <div class="form-grid" style="margin-top:10px">
           ${f('weight', 'Вес / объём', p.weight)}${f('energy', 'Ккал', p.energy, 'number')}${f('proteins', 'Белки', p.proteins, 'number')}
@@ -381,8 +386,31 @@
         </div>
         ${f('allergens', 'Аллергены (через запятую)', (p.allergens || []).join(', '))}
         <div class="field" style="margin-top:10px"><label>Где применить</label><select class="sel" name="scope"><option value="restaurant">Только в этом ресторане</option><option value="global">Во всех ресторанах</option></select></div>
-        <div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить</button><button class="btn" type="button" data-modal-close>Отмена</button></div>
+        <p class="muted" style="font-size:12px;margin:12px 4px 0">Данные карточки приходят из iiko. Правки хранятся только в меню и накладываются по UUID блюда (${esc(p.id)}); в iiko ничего не меняется.</p>
+        <div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить</button>
+          ${ownOverrides.length ? '<button class="btn btn--danger" type="button" data-reset-iiko>Вернуть как в iiko</button>' : ''}
+          <button class="btn" type="button" data-modal-close>Отмена</button></div>
       </form>`, (root) => {
+      root.querySelector('[data-reset-iiko]')?.addEventListener('click', async () => {
+        try {
+          for (const o of ownOverrides) await api('DELETE', `/api/v1/admin/menu/override/${o.id}`);
+          S.adminMenu = null; closeModal(); toast('Карточка снова как в iiko'); render();
+        } catch (err) { toast(err.message, true); }
+      });
+      $('#prod-file', root).addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        try {
+          const res = await fetch('/api/v1/admin/upload', {
+            method: 'POST', headers: { 'Content-Type': file.type, Authorization: `Bearer ${S.token}` }, body: file,
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Не удалось загрузить');
+          root.querySelector('[name=image_url]').value = data.url;
+          const img = $('#prod-img', root); img.src = data.url; img.style.visibility = 'visible';
+          toast('Фото загружено — нажмите «Сохранить»');
+        } catch (err) { toast(err.message, true); }
+      });
       $('#prod-form', root).addEventListener('submit', async (e) => {
         e.preventDefault();
         const fd = Object.fromEntries(new FormData(e.target));
@@ -529,7 +557,11 @@
         S.openId = null; S.edit = null; toast('Стол закрыт'); render(); return;
       }
       // админ
-      if (q('[data-menu-refresh]')) { S.adminMenu = { restaurant: S.restaurant, ...(await api('GET', '/api/v1/admin/menu?refresh=1')) }; toast(`Меню обновлено: ${S.adminMenu.source}`); render(); return; }
+      if (q('[data-menu-refresh]')) {
+        const b = q('[data-menu-refresh]'); b.disabled = true; b.textContent = 'Выгружаем из iiko…';
+        S.adminMenu = { restaurant: S.restaurant, ...(await api('POST', '/api/v1/admin/menu/sync')) };
+        toast(`Меню выгружено из iiko: ${S.adminMenu.products.filter((p) => !p.isHidden).length} блюд`); render(); return;
+      }
       if (q('[data-only-stop]')) { S.menu.onlyStop = !S.menu.onlyStop; render(); return; }
       if (q('[data-ov]')) { const b = q('[data-ov]'); await setOverride(b.dataset.ov, { [b.dataset.field]: b.dataset.val === 'true' }); toast('Сохранено'); return; }
       if (q('[data-edit-product]')) { openProductEditor(q('[data-edit-product]').dataset.editProduct); return; }

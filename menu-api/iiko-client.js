@@ -53,6 +53,9 @@ function demoResponse(path, body) {
   return { correlationId: randomUUID(), demo: true, body };
 }
 
+/** Произвольный запрос к iiko Cloud API (с токеном и демо-режимом). */
+export const iikoRequest = (path, body) => iikoPost(path, body);
+
 /** Стоп-лист iiko для организации: Set productId с нулевым остатком. */
 export async function getStopListProductIds(organizationId, terminalGroupId) {
   const data = await iikoPost('/api/1/stop_lists', { organizationIds: [organizationId] });
