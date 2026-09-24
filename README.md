@@ -105,6 +105,25 @@ menu/
 - **Вход через приложение Fuji** — принимается `?fujiToken=<JWT основного API>`. Токен проверяется через `GET /api/v1/user/:phone` prod API или локально по `FUJI_JWT_SECRET`. Кнопке «Войти через приложение Фуджи» нужен deep link (`FUJI_APP_LOGIN_URL`) от команды приложения.
 - **Уведомления персонала** — лента в терминале со звуком (опрос раз в 5 с). Telegram для управляющего — по решению заказчика.
 
-## Деплой
+## Деплой через GitHub Actions
 
-`deploy/server-setup.sh` ставит Node, PostgreSQL (Docker), запускает миграцию, выгрузку iiko, systemd-сервис и nginx. Nginx проксирует всё на `menu-api`, а `/uploads`, `/_ipx`, `/content` (фото блюд) — на prod API Фуджи.
+Workflow `.github/workflows/deploy.yml` выкатывает прод на `menu.franchise-fuji.ru` при каждом push в `main`; вручную — **Actions → Deploy → Run workflow** (можно выбрать ветку). Он заходит на сервер по SSH и запускает `deploy/update.sh`:
+
+1. подтягивает код ветки, `npm ci`;
+2. дописывает в `menu-api/.env` недостающие настройки (секрет подписи, ключи из GitHub Secrets, пароли персонала). Уже заданные значения сохраняются;
+3. `db/migrate.js` — идемпотентная миграция, старые данные сохраняются; выгрузка меню из iiko;
+4. перезапускает сервис `menu-api` и обновляет nginx (с бэкапом и откатом, если конфиг не прошёл `nginx -t`);
+5. проверяет `/health` и меню.
+
+**Секреты** (Settings → Secrets and variables → Actions → New repository secret):
+
+| Секрет | Обязателен | Что это |
+|---|---|---|
+| `DEPLOY_HOST` | да | IP сервера (`37.139.43.117`) |
+| `DEPLOY_USER` | да | пользователь SSH (`ubuntu`) |
+| `DEPLOY_SSH_KEY` | да | приватный SSH-ключ, публичная часть — в `~/.ssh/authorized_keys` на сервере |
+| `OPENROUTER_API_KEY` | да | ключ AI |
+| `IIKO_API_LOGIN` | нет | если ещё не прописан в `.env` на сервере |
+| `ADMIN_PASSWORD`, `MANAGER_PASSWORD`, `WAITER_PASSWORD` | нет | пароли персонала при первом деплое. Без них генерируются случайные и хранятся только в `.env` на сервере |
+
+Первичная установка на чистый сервер — `deploy/server-setup.sh`. Nginx проксирует всё на `menu-api`, а `/uploads`, `/_ipx`, `/content` (фото блюд) — на prod API Фуджи.

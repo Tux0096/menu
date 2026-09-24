@@ -332,6 +332,12 @@ const DEFAULT_CHIPS = [
 
 // Уникальные индексы на старых данных могут не создаться из-за дублей — не валим миграцию.
 const SOFT_INDEXES = [
+  // Старые данные: оставить по одному отзыву на визит и одну успешную оплату, иначе индекс не создастся
+  `DELETE FROM visit_feedback a USING visit_feedback b
+     WHERE a.session_id = b.session_id AND (a.created_at, a.id::text) > (b.created_at, b.id::text)`,
+  `UPDATE table_payments a SET status = 'duplicate' FROM table_payments b
+     WHERE a.session_id = b.session_id AND a.status = 'completed' AND b.status = 'completed'
+       AND (a.created_at, a.id::text) > (b.created_at, b.id::text)`,
   'CREATE UNIQUE INDEX IF NOT EXISTS idx_visit_feedback_session ON visit_feedback(session_id)',
   // Защита от двойной оплаты: одна успешная оплата на визит
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_table_payments_one_completed

@@ -54,7 +54,6 @@ fi
 
 node db/migrate.js           # идемпотентно: схема, рестораны, AI-чипы, персонал
 node db/sync-iiko.js 2>/dev/null || echo "iiko sync skipped (check IIKO_API_LOGIN)"
-node db/demo-menu.js          # резервное демо-меню только для ресторанов без выгрузки
 
 echo "=== 6. Фронт ==="
 # Гостевое меню и терминал персонала (menu-web) раздаёт сам menu-api — сборка не нужна.
