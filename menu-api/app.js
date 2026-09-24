@@ -2,632 +2,336 @@ import dotenv from 'dotenv';
 dotenv.config();
 import express from 'express';
 import cors from 'cors';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import pool from './db/pool.js';
-import {
-  aiSuggest,
-  aiWelcome,
-  enterTableSession,
-  payTableOrder,
-  pullOrderFromIiko,
-  refreshSessionFromIiko,
-  reopenTableForMore,
-  saveAiFeedback,
-  syncTableOrder,
-} from './services/table-order.js';
-import {
-  callWaiterExtended,
-  guestPay,
-  listActiveSessions,
-  notifyMenuOpened,
-  refreshSessionWithWorkflow,
-  saveGuestCart,
-  sendOrderToProduction,
-  submitCartToWaiter,
-  submitVisitFeedback,
-  trackGuestActivity,
-  waiterUpdateCart,
-} from './services/table-workflow.js';
-import {
-  listWaiterNotifications,
-  markAllNotificationsRead,
-  markNotificationRead,
-} from './services/waiter-notifications.js';
-import { checkOllamaHealth } from './services/ai-suggest.js';
-import { fetchLegacyCatalog, fetchLegacySettings } from './services/catalog-proxy.js';
 import { QR_RESTAURANT_SLUG } from './lib/qr-config.js';
+import { isIikoDemo } from './iiko-client.js';
+import legacyRoutes from './routes/legacy.js';
+import { getRestaurantCatalog } from './services/catalog.js';
+import { checkOllamaHealth, getWelcomeSuggestions, suggestForQuery } from './services/ai-suggest.js';
+import { isLlmEnabled } from './services/ai-llm.js';
+import { logAiQuery, recordAiFeedback } from './services/ai-learning.js';
+import {
+  getGuestByToken, guestAuth, guestTokenFromRequest, loginByFujiToken, loginByPhone, updateGuestProfile,
+} from './services/guest-auth.js';
+import { audit, listStaff, saveStaff, staffAuth, staffLogin } from './services/staff-auth.js';
+import {
+  callWaiter, enterTable, getSessionView, payBill, refreshFromIiko, requestBill, resolveRestaurant,
+  runServiceChecks, saveGuestCart, submitFeedback, submitToWaiter, trackActivity,
+} from './services/table-session.js';
+import {
+  closeSession, getHallDashboard, listActiveSessions, releaseSession, sendToKitchen, takeSession, updateOrder,
+} from './services/waiter.js';
+import {
+  listWaiterNotifications, markAllNotificationsRead, markNotificationRead,
+} from './services/waiter-notifications.js';
+import {
+  deleteOverride, deleteRow, getAdminMenu, listAudit, listFeedback, listRestaurants, listRows,
+  saveOverride, saveRow, tableQrSvg, tableUrl, updateRestaurant,
+} from './services/admin.js';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const WEB_DIR = process.env.MENU_WEB_DIR || join(__dirname, '..', 'menu-web');
 const app = express();
 const PORT = process.env.PORT || 3101;
 
+app.set('trust proxy', true);
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
-// ── helpers ──────────────────────────────────────────────────────────────────
+/** async-обработчик с единым форматом ошибок */
+const h = (fn) => async (req, res) => {
+  try {
+    const result = await fn(req, res);
+    if (!res.headersSent) res.json(result ?? { ok: true });
+  } catch (err) {
+    if (!err.status || err.status >= 500) console.error(`${req.method} ${req.path}:`, err);
+    res.status(err.status || 500).json({ error: err.message, code: err.code, details: err.details });
+  }
+};
 
-async function getRestaurants() {
-  const { rows } = await pool.query(`
-    SELECT r.id, r.name, r.address, r.slug, r.terminal_id, r.terminal_group_id,
-           r.organization_id, r.phone, r.is_disabled, r.sort_order
-    FROM restaurants r
-    WHERE r.is_disabled = FALSE
-    ORDER BY r.sort_order, r.name
-  `);
-  return rows;
+const requireBody = (body, ...keys) => {
+  const missing = keys.filter((k) => body?.[k] === undefined || body?.[k] === null || body?.[k] === '');
+  if (missing.length) {
+    const err = new Error(`Не заполнено: ${missing.join(', ')}`);
+    err.status = 400;
+    throw err;
+  }
+};
+
+async function staffRestaurant(req) {
+  if (req.query.restaurant) return resolveRestaurant(req.query.restaurant);
+  if (req.staff?.restaurantId) {
+    const { rows } = await pool.query('SELECT * FROM restaurants WHERE id = $1', [req.staff.restaurantId]);
+    if (rows[0]) return rows[0];
+  }
+  return resolveRestaurant(QR_RESTAURANT_SLUG);
 }
 
-async function getRestaurantBySlug(slug) {
+// ── Публичное: рестораны, меню, конфиг ──────────────────────────────────────
+
+app.get('/health', h(async () => ({
+  ok: true,
+  db: (await pool.query('SELECT 1 AS ok')).rows[0].ok === 1,
+  iiko: isIikoDemo() ? 'demo' : 'live',
+  llm: isLlmEnabled() ? 'openrouter' : 'off',
+  ollama: process.env.OLLAMA_ENABLED === 'true' ? await checkOllamaHealth() : 'off',
+})));
+
+app.get('/api/v1/restaurants', h(async () => {
   const { rows } = await pool.query(
-    `SELECT r.id, r.name, r.address, r.slug, r.terminal_id, r.terminal_group_id,
-            r.organization_id, r.phone, r.is_disabled, r.sort_order
-     FROM restaurants r
-     WHERE r.slug = $1`,
-    [slug]
+    `SELECT id, name, address, slug, phone, tables_count FROM restaurants
+     WHERE is_disabled = FALSE ORDER BY sort_order, name`,
   );
-  return rows[0] || null;
-}
+  return rows;
+}));
 
-async function buildCatalogMenu() {
-  const { rows } = await pool.query(`
-    SELECT id, name, slug, parent_id, sort_order, image_url
-    FROM categories
-    WHERE is_visible = TRUE
-    ORDER BY sort_order
-  `);
-  const parents = rows.filter((r) => !r.parent_id);
-  return parents.map((p) => {
-    const item = { id: p.id, name: p.name, slug: p.slug, order: p.sort_order, image: p.image_url || null };
-    const children = rows.filter((r) => r.parent_id === p.id);
-    if (children.length > 0) {
-      item.isParent = true;
-      item.children = children.map((c) => ({ id: c.id, name: c.name, slug: c.slug }));
-    }
-    return item;
-  });
-}
+app.get('/api/v1/restaurants/:slug', h(async (req) => {
+  const r = await resolveRestaurant(req.params.slug);
+  return { id: r.id, name: r.name, address: r.address, slug: r.slug, phone: r.phone, tablesCount: r.tables_count };
+}));
 
-// Каталог конкретного ресторана: только те категории, в которых есть его продукты.
-async function getCatalogForRestaurant(restaurantId) {
-  const { rows: products } = await pool.query(
-    `SELECT p.id, p.iiko_id, p.name, p.slug, p.description, p.price, p.old_price,
-            p.weight, p.image_url, p.category_id as "parentGroup",
-            p.sort_order as "order", p.is_published as "isPublished",
-            p.energy as "energyAmount", p.proteins as "fiberAmount",
-            p.fats as "fatAmount", p.carbs as "carbohydrateAmount"
-     FROM products p
-     WHERE p.restaurant_id = $1 AND p.is_published = TRUE AND p.price > 0
-     ORDER BY p.sort_order`,
-    [restaurantId]
-  );
+app.get('/api/v1/restaurants/:slug/catalog', h(async (req) => getRestaurantCatalog(await resolveRestaurant(req.params.slug))));
 
-  const categoryIds = new Set(products.map((p) => p.parentGroup));
-
-  const { rows: allCategories } = await pool.query(`
-    SELECT id, name, slug, parent_id, sort_order, image_url
-    FROM categories
-    WHERE is_visible = TRUE
-    ORDER BY sort_order
-  `);
-
-  // Берём те категории, в которых есть продукты, плюс их родителей.
-  const usedCategories = new Set(categoryIds);
-  for (const cat of allCategories) {
-    if (categoryIds.has(cat.id) && cat.parent_id) {
-      usedCategories.add(cat.parent_id);
-    }
-  }
-
-  const groups = allCategories
-    .filter((c) => usedCategories.has(c.id))
-    .map((c) => ({
-      id: c.id,
-      name: c.name,
-      slug: c.slug,
-      parentGroup: c.parent_id || null,
-      order: c.sort_order,
-      image: c.image_url || null,
-      additionalInfo: {},
-      isIncludedInMenu: true,
-      isGroupModifier: false,
-    }));
-
-  const mappedProducts = products.map((p) => ({
-    id: p.id,
-    iikoId: p.iiko_id,
-    name: p.name,
-    nameTo: p.name,
-    slug: p.slug,
-    code: p.slug,
-    parentGroup: p.parentGroup,
-    parentGroupName: null,
-    price: parseFloat(p.price),
-    oldPrice: p.old_price ? parseFloat(p.old_price) : null,
-    weight: p.weight,
-    description: p.description,
-    image: p.image_url || null,
-    order: p.order,
-    isPublished: p.isPublished,
-    energyAmount: p.energyAmount ? parseFloat(p.energyAmount) : null,
-    fiberAmount: p.fiberAmount ? parseFloat(p.fiberAmount) : null,
-    fatAmount: p.fatAmount ? parseFloat(p.fatAmount) : null,
-    carbohydrateAmount: p.carbohydrateAmount ? parseFloat(p.carbohydrateAmount) : null,
-    groupModifiers: [],
-    modifiers: [],
-    filters: [],
-    allergens: [],
-    additionalInfo: {},
-    composition: [],
-    likesCount: 0,
-    isLiked: false,
-    minGroupMod: 0,
-  }));
-
-  return { products: mappedProducts, groups, stopList: [] };
-}
-
-// ── Полные настройки. Геттеры frontend полагаются на эту форму, поэтому
-// держим полный объект, даже если часть полей не используется в /menu.
-async function buildSettings() {
-  const restaurants = await getRestaurants();
-  const catalogMenu = await buildCatalogMenu();
-
-  const SAMARA_ID = 'a85360f2-55a8-47cc-8a79-1eb88a40c4f0';
-  const TOLYATTI_ID = '3f02eb06-e771-434c-ab73-2ec5bbde1265';
-  const NOVOKUJBYSHEVSK_ID = 'e27dec5a-4447-4bcb-a124-0c1795618998';
-
-  const RESTAURANT_LIST = restaurants.map((r) => ({
-    text: r.address,
-    value: r.terminal_id,
-    name: r.name,
-    slug: r.slug,
-    deliveryTerminalId: r.terminal_id,
-    address: r.address,
-  }));
-
-  const DELIVERY_TERMINALS = { [SAMARA_ID]: [], [TOLYATTI_ID]: [], [NOVOKUJBYSHEVSK_ID]: [] };
-  for (const r of restaurants) {
-    DELIVERY_TERMINALS[SAMARA_ID].push({
-      id: r.id,
-      name: r.name,
-      address: r.address,
-      slug: r.slug,
-      deliveryTerminalId: r.terminal_id,
-      phone: r.phone,
-      isDisabled: false,
-    });
-  }
-
-  const defaultWeek = [
-    { open: '10:00', close: '23:59' },
-    { open: '10:00', close: '23:59' },
-    { open: '10:00', close: '23:59' },
-    { open: '10:00', close: '23:59' },
-    { open: '10:00', close: '23:59' },
-    { open: '10:00', close: '23:59' },
-    { open: '10:00', close: '23:59' },
-  ];
-
+app.get('/api/v1/config', h(async (req) => {
+  const r = await resolveRestaurant(req.query.restaurant);
+  const [chips, promos] = await Promise.all([
+    listRows('ai_chips', { activeOnly: true }),
+    listRows('promo_blocks', { activeOnly: true }),
+  ]);
   return {
-    CATALOG_MENU: catalogMenu,
-    RESTAURANT_LIST,
-    DELIVERY_TERMINALS,
-    STORIES: [],
-    CITY_ZONES: { [SAMARA_ID]: [], [TOLYATTI_ID]: [], [NOVOKUJBYSHEVSK_ID]: [] },
-    PHONES: { deliveryService: '8 800 2222-000' },
-    GLOBAL_SEO_META_TAG: {
-      title: 'Электронное меню — Фуджи Суши Friends',
-      description: 'Выберите ресторан и блюда',
-    },
-    ALLERGENS: [],
-    CHECKOUT_DELIVERY_TEXT: {
-      delivery: { title: '60 минут приготовление', text: 'доставка 30 минут' },
-      self: { title: '30 минут приготовление' },
-    },
-    CUSTOM_ADD_TO_CART_GROUPS_ID: [],
-    SECTION_ID_ADD_TO_ORDER: null,
-    SECTION_ID_ADDITIONALLY: null,
-    SECTION_PROMO_IMAGES: {},
-    IS_SHOW_8MARCH_MODAL: false,
-    IS_SITE_NOT_WORKING: false,
-    TEXT_SITE_NOT_WORKING: '',
-    IS_SITE_INFORMATION: false,
-    TEXT_SITE_INFORMATION: '',
-    IS_ONLINE_PAYMENT_DISABLE: { delivery: true, self: true },
-    STORE_VERSION: '1.0.0',
-    SAMARA_ID,
-    TOLYATTI_ID,
-    NOVOKUJBYSHEVSK_ID,
-    CITIES_DATA: {
-      [SAMARA_ID]: { name: 'Самара', slug: 'samara', iikoId: SAMARA_ID },
-      [TOLYATTI_ID]: { name: 'Тольятти', slug: 'tolyatti', iikoId: TOLYATTI_ID },
-      [NOVOKUJBYSHEVSK_ID]: { name: 'Новокуйбышевск', slug: 'novokujbyshevsk', iikoId: NOVOKUJBYSHEVSK_ID },
-    },
-    WORK_TIME: {
-      [SAMARA_ID]: defaultWeek,
-      [TOLYATTI_ID]: defaultWeek,
-      [NOVOKUJBYSHEVSK_ID]: defaultWeek,
-    },
-    GIFT_IDS: { PIZZA: null, SNACK: null },
-    PIZZAS_GROUP_ID: [],
-    SNACKS_GROUP_ID: [],
-    YANDEX_MAPS_API_KEY: '',
-    SMARTCAPTCHA_SITE_KEY: '',
-    IS_WITHOUT_RECAPTCHA: true,
-    IMAGE_PRESET_CATALOG_LIST: { height: 248, width: 248, quality: 60 },
-    IMAGE_PRESET_CATALOG_DETAIL: { height: 500, width: 500, quality: 60 },
+    restaurant: { name: r.name, address: r.address, slug: r.slug, phone: r.phone },
+    chips: chips.map((c) => ({ id: c.id, label: c.label, query: c.query, emoji: c.emoji })),
+    promos,
+    fujiAppLoginUrl: process.env.FUJI_APP_LOGIN_URL || null,
+    guestAuthRequired: process.env.GUEST_AUTH_REQUIRED !== 'false',
+    paymentMethods: [
+      { id: 'sbp', label: 'СБП' },
+      { id: 'card', label: 'Банковская карта' },
+      { id: 'apple_pay', label: 'Apple Pay' },
+      { id: 'google_pay', label: 'Google Pay' },
+    ],
+    tipPresets: [0, 10, 15, 20],
+    iikoMode: isIikoDemo() ? 'demo' : 'live',
   };
+}));
+
+app.get('/api/v1/qr.svg', h(async (req, res) => {
+  const r = await resolveRestaurant(req.query.restaurant);
+  res.type('image/svg+xml').send(await tableQrSvg(r.slug, req.query.table || '1'));
+}));
+
+// ── Гость: вход ─────────────────────────────────────────────────────────────
+
+app.post('/api/v1/guest/login', h(async (req) => {
+  requireBody(req.body, 'phone');
+  if (req.body.consent === false) {
+    const err = new Error('Нужно согласие на обработку персональных данных');
+    err.status = 400;
+    throw err;
+  }
+  return loginByPhone(req.body);
+}));
+app.post('/api/v1/guest/fuji', h(async (req) => {
+  requireBody(req.body, 'token');
+  return loginByFujiToken(req.body.token);
+}));
+app.get('/api/v1/guest/me', h(async (req) => {
+  const guest = await getGuestByToken(guestTokenFromRequest(req));
+  if (!guest) {
+    const err = new Error('Сессия гостя истекла');
+    err.status = 401;
+    err.code = 'GUEST_AUTH_REQUIRED';
+    throw err;
+  }
+  return guest;
+}));
+app.patch('/api/v1/guest/me', guestAuth(), h(async (req) => updateGuestProfile(req.guest.id, req.body || {})));
+
+// ── Гость: стол ─────────────────────────────────────────────────────────────
+
+app.post('/api/v1/table/enter', guestAuth(), h(async (req) => {
+  requireBody(req.body, 'tableNumber');
+  return enterTable({
+    restaurantSlug: req.body.restaurantSlug,
+    tableNumber: req.body.tableNumber,
+    guest: req.guest,
+    previousSessionId: req.body.previousSessionId,
+  });
+}));
+
+const iikoRefreshAt = new Map();
+app.get('/api/v1/table/session/:sessionId', guestAuth(), h(async (req) => {
+  const last = iikoRefreshAt.get(req.params.sessionId) || 0;
+  if (Date.now() - last > 30000) {
+    iikoRefreshAt.set(req.params.sessionId, Date.now());
+    await refreshFromIiko(req.params.sessionId);
+  }
+  return getSessionView(req.params.sessionId);
+}));
+app.post('/api/v1/table/activity', guestAuth(), h(async (req) => {
+  requireBody(req.body, 'sessionId');
+  return trackActivity(req.body.sessionId);
+}));
+app.post('/api/v1/table-order/cart', guestAuth(), h(async (req) => {
+  requireBody(req.body, 'sessionId', 'items');
+  return saveGuestCart(req.body.sessionId, req.body.items);
+}));
+app.post('/api/v1/table/submit-to-waiter', guestAuth(), h(async (req) => {
+  requireBody(req.body, 'sessionId');
+  return submitToWaiter(req.body.sessionId, req.body.items);
+}));
+app.post('/api/v1/table/request-bill', guestAuth(), h(async (req) => {
+  requireBody(req.body, 'sessionId');
+  return requestBill(req.body.sessionId);
+}));
+app.post('/api/v1/table/call-waiter', guestAuth(), h(async (req) => {
+  requireBody(req.body, 'sessionId');
+  return callWaiter(req.body.sessionId, req.body.reason, req.body.comment);
+}));
+app.post('/api/v1/table/guest-pay', guestAuth(), h(async (req) => {
+  requireBody(req.body, 'sessionId');
+  return payBill(req.body.sessionId, { method: req.body.method, tipAmount: req.body.tipAmount });
+}));
+app.post('/api/v1/table/feedback', guestAuth(), h(async (req) => {
+  requireBody(req.body, 'sessionId', 'rating');
+  return submitFeedback(req.body.sessionId, req.body);
+}));
+
+// ── AI ──────────────────────────────────────────────────────────────────────
+
+app.post('/api/v1/ai/suggest', guestAuth({ required: false }), h(async (req) => {
+  requireBody(req.body, 'query');
+  const restaurant = await resolveRestaurant(req.body.restaurantSlug);
+  const query = String(req.body.query).slice(0, 300);
+  const cartNames = Array.isArray(req.body.cart) ? req.body.cart.map((c) => String(c).slice(0, 100)) : [];
+  const { suggestions, engine, answer } = await suggestForQuery(restaurant, query, 6, req.guest, { cartNames });
+  logAiQuery(restaurant.slug, query, suggestions).catch(() => {});
+  return { query, suggestions, engine, answer };
+}));
+app.get('/api/v1/ai/welcome', guestAuth({ required: false }), h(async (req) => {
+  const restaurant = await resolveRestaurant(req.query.restaurant);
+  return { suggestions: await getWelcomeSuggestions(restaurant, 4, req.guest) };
+}));
+app.post('/api/v1/ai/feedback', h(async (req) => {
+  requireBody(req.body, 'query', 'productId');
+  await recordAiFeedback(req.body.query, req.body.productId, req.body.action);
+  return { ok: true };
+}));
+
+// ── Персонал ────────────────────────────────────────────────────────────────
+
+app.post('/api/v1/staff/login', h(async (req) => {
+  requireBody(req.body, 'login', 'password');
+  return staffLogin(req.body.login, req.body.password);
+}));
+app.get('/api/v1/staff/me', staffAuth(), h(async (req) => req.staff));
+app.get('/api/v1/staff/restaurants', staffAuth(), h(async () => listRestaurants()));
+
+const waiter = express.Router();
+waiter.use(staffAuth('waiter'));
+waiter.get('/notifications', h(async (req) => {
+  const r = await staffRestaurant(req);
+  return listWaiterNotifications(r.id, { unreadOnly: req.query.unread === '1' });
+}));
+waiter.post('/notifications/read-all', h(async (req) => {
+  const r = await staffRestaurant(req);
+  await markAllNotificationsRead(r.id);
+}));
+waiter.post('/notifications/:id/read', h(async (req) => { await markNotificationRead(req.params.id); }));
+waiter.get('/sessions', h(async (req) => listActiveSessions((await staffRestaurant(req)).id)));
+waiter.get('/session/:id', h(async (req) => getSessionView(req.params.id)));
+waiter.post('/session/:id/take', h(async (req) => takeSession(req.params.id, req.staff)));
+waiter.post('/session/:id/release', h(async (req) => releaseSession(req.params.id, req.staff)));
+waiter.post('/session/:id/cart', h(async (req) => {
+  const result = await updateOrder(req.params.id, req.staff, req.body || {});
+  audit(req.staff, 'order.edit', 'session', req.params.id, { items: (req.body?.items || []).length, guestCount: req.body?.guestCount });
+  return result;
+}));
+waiter.post('/session/:id/send-to-production', h(async (req) => {
+  const result = await sendToKitchen(req.params.id, req.staff);
+  audit(req.staff, 'order.send_to_kitchen', 'session', req.params.id, { iikoOrderId: result.iikoOrderId });
+  return result;
+}));
+waiter.post('/session/:id/close', h(async (req) => {
+  const result = await closeSession(req.params.id, req.staff);
+  audit(req.staff, 'table.close', 'session', req.params.id);
+  return result;
+}));
+app.use('/api/v1/waiter', waiter);
+
+app.get('/api/v1/manager/feedback', staffAuth('manager'), h(async (req) => listFeedback((await staffRestaurant(req)).id)));
+app.get('/api/v1/manager/dashboard', staffAuth('manager'), h(async (req) => getHallDashboard((await staffRestaurant(req)).id)));
+
+// ── Админка ─────────────────────────────────────────────────────────────────
+
+const admin = express.Router();
+admin.use(staffAuth('admin'));
+admin.get('/menu', h(async (req) => getAdminMenu(await staffRestaurant(req), { force: req.query.refresh === '1' })));
+admin.post('/menu/override', h(async (req) => {
+  requireBody(req.body, 'productId');
+  const r = await staffRestaurant(req);
+  const restaurantId = req.body.scope === 'global' ? null : r.id;
+  const row = await saveOverride(restaurantId, req.body.productId, req.body);
+  audit(req.staff, 'menu.override', 'product', req.body.productId, { ...req.body, restaurant: restaurantId ? r.slug : 'all' });
+  return row;
+}));
+admin.delete('/menu/override/:id', h(async (req) => {
+  await deleteOverride(req.params.id);
+  audit(req.staff, 'menu.override.delete', 'override', req.params.id);
+}));
+for (const [path, table] of [['chips', 'ai_chips'], ['promos', 'promo_blocks']]) {
+  admin.get(`/${path}`, h(async () => listRows(table)));
+  admin.post(`/${path}`, h(async (req) => {
+    const row = await saveRow(table, req.body || {});
+    audit(req.staff, `${path}.save`, table, row.id, req.body);
+    return row;
+  }));
+  admin.delete(`/${path}/:id`, h(async (req) => {
+    await deleteRow(table, req.params.id);
+    audit(req.staff, `${path}.delete`, table, req.params.id);
+  }));
 }
+admin.get('/feedback', h(async (req) => listFeedback((await staffRestaurant(req)).id)));
+admin.get('/audit', h(async () => listAudit()));
+admin.get('/staff', h(async () => listStaff()));
+admin.post('/staff', h(async (req) => {
+  const row = await saveStaff(req.body || {});
+  audit(req.staff, 'staff.save', 'staff', row.id, { login: row.login, role: row.role });
+  return row;
+}));
+admin.get('/restaurants', h(async () => listRestaurants()));
+admin.patch('/restaurants/:id', h(async (req) => {
+  const row = await updateRestaurant(req.params.id, req.body || {});
+  audit(req.staff, 'restaurant.update', 'restaurant', req.params.id, req.body);
+  return row;
+}));
+admin.get('/tables', h(async (req) => {
+  const r = await staffRestaurant(req);
+  return Array.from({ length: r.tables_count || 20 }, (_, i) => ({
+    table: String(i + 1),
+    url: tableUrl(r.slug, i + 1),
+    qr: `/api/v1/qr.svg?restaurant=${r.slug}&table=${i + 1}`,
+  }));
+}));
+app.use('/api/v1/admin', admin);
 
-// ── API routes ────────────────────────────────────────────────────────────────
+// Совместимость со старым фронтом
+app.use(legacyRoutes);
 
-app.get('/api/v1/restaurants', async (req, res) => {
-  try {
-    res.json(await getRestaurants());
-  } catch (err) {
-    console.error('restaurants error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
+app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
-app.get('/api/v1/restaurants/:slug', async (req, res) => {
-  try {
-    const r = await getRestaurantBySlug(req.params.slug);
-    if (!r) return res.status(404).json({ error: 'Restaurant not found' });
-    res.json(r);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+// ── Фронт: гостевое меню и терминал персонала ───────────────────────────────
 
-app.get('/api/v1/restaurants/:slug/catalog', async (req, res) => {
-  try {
-    const r = await getRestaurantBySlug(req.params.slug);
-    if (!r) return res.status(404).json({ error: 'Restaurant not found' });
-    try {
-      return res.json(await fetchLegacyCatalog(r.terminal_id));
-    } catch (e) {
-      console.warn('legacy catalog fallback:', e.message);
-      return res.json(await getCatalogForRestaurant(r.id));
-    }
-  } catch (err) {
-    console.error('catalog error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
+app.use('/staff', express.static(join(WEB_DIR, 'staff'), { index: 'index.html' }));
+app.get(['/waiter', '/admin'], (req, res) => res.redirect('/staff/'));
+app.use(express.static(join(WEB_DIR, 'guest'), { index: 'index.html' }));
+app.get('*', (req, res) => res.sendFile(join(WEB_DIR, 'guest', 'index.html')));
 
-// ── Настройки: prod API + локальные рестораны для QR ─────────────────────
-app.get('/api/v1/setting', async (req, res) => {
-  try {
-    const local = await buildSettings();
-    try {
-      const legacy = await fetchLegacySettings();
-      res.json({
-        ...legacy,
-        RESTAURANT_LIST: local.RESTAURANT_LIST,
-        DELIVERY_TERMINALS: local.DELIVERY_TERMINALS,
-        GLOBAL_SEO_META_TAG: local.GLOBAL_SEO_META_TAG,
-        IS_WITHOUT_RECAPTCHA: true,
-      });
-    } catch (e) {
-      console.warn('legacy settings fallback:', e.message);
-      res.json(local);
-    }
-  } catch (err) {
-    console.error('settings error:', err);
-    res.status(500).json({ error: err.message });
-  }
-});
-app.get('/api/v1/setting/version', (req, res) => res.json(1));
-app.get('/api/v1/setting/SETTINGS_VERSION', (req, res) => res.json(1));
-app.get('/api/v1/setting/STORE_VERSION', (req, res) => res.json('1.0.0'));
-app.get('/api/v1/setting/MOBILE_APP_VERSION', (req, res) => res.json(9));
-app.get('/api/v1/setting/YANDEX_COUNTER_ID', (req, res) => res.json(''));
-app.get('/api/v1/setting/GOOGLE_COUNTER_ID', (req, res) => res.json(''));
-app.get('/api/v1/setting/CHECKOUT_DELIVERY_TEXT', (req, res) =>
-  res.json({
-    delivery: { title: '60 минут приготовление', text: 'доставка 30 минут' },
-    self: { title: '30 минут приготовление' },
-  })
-);
-app.get('/api/v1/setting/:name', (req, res) => res.json(null));
-
-app.get('/api/v1/storage/version', (req, res) => res.json({ revision: 1 }));
-
-app.get('/api/v1/city', async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT id, name, slug, id as "iikoId" FROM cities ORDER BY name`
-    );
-    res.json(rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-app.get('/api/v1/city/', async (req, res) => {
-  try {
-    const { rows } = await pool.query(
-      `SELECT id, name, slug, id as "iikoId" FROM cities ORDER BY name`
-    );
-    res.json(rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Глобальный каталог через prod API (полное меню с картинками)
-app.get('/api/v1/catalog', async (req, res) => {
-  try {
-    const { restaurantSlug, deliveryTerminalId } = req.query;
-    let terminalId = deliveryTerminalId || null;
-    if (restaurantSlug) {
-      const r = await getRestaurantBySlug(restaurantSlug);
-      if (!r) return res.status(404).json({ error: 'Restaurant not found' });
-      terminalId = r.terminal_id;
-    }
-    if (terminalId) {
-      try {
-        return res.json(await fetchLegacyCatalog(terminalId));
-      } catch (e) {
-        console.warn('legacy catalog fallback:', e.message);
-      }
-    }
-    res.json({ products: [], groups: [], stopList: [] });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/v1/slide', (req, res) => res.json([]));
-app.get('/api/v1/slide/type/:type', (req, res) => res.json([]));
-app.get('/api/v1/promo', (req, res) => res.json([]));
-app.get('/api/v1/promo/:id', (req, res) => res.status(404).json({ error: 'Not found' }));
-app.get('/api/v1/cladr/*', (req, res) => res.json([]));
-
-// ── Стол / QR-заказ ─────────────────────────────────────────────────────────
-app.post('/api/v1/table/enter', async (req, res) => {
-  try {
-    const { restaurantSlug, tableNumber } = req.body || {};
-    if (!restaurantSlug || !tableNumber) {
-      return res.status(400).json({ error: 'restaurantSlug и tableNumber обязательны' });
-    }
-    let session = await enterTableSession(restaurantSlug, tableNumber);
-    const pulled = await pullOrderFromIiko(restaurantSlug, tableNumber);
-    if (pulled?.items?.length) {
-      session = pulled;
-    }
-    session = await notifyMenuOpened(session.sessionId);
-    res.json(session);
-  } catch (err) {
-    console.error('table/enter:', err);
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.get('/api/v1/table/session/:sessionId', async (req, res) => {
-  try {
-    res.json(await refreshSessionWithWorkflow(req.params.sessionId));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.post('/api/v1/table/activity', async (req, res) => {
-  try {
-    const { sessionId } = req.body || {};
-    if (!sessionId) return res.status(400).json({ error: 'sessionId обязателен' });
-    res.json(await trackGuestActivity(sessionId));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.post('/api/v1/table/menu-opened', async (req, res) => {
-  try {
-    const { sessionId } = req.body || {};
-    if (!sessionId) return res.status(400).json({ error: 'sessionId обязателен' });
-    res.json(await notifyMenuOpened(sessionId));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.post('/api/v1/table/submit-to-waiter', async (req, res) => {
-  try {
-    const { sessionId, items } = req.body || {};
-    if (!sessionId || !Array.isArray(items)) {
-      return res.status(400).json({ error: 'sessionId и items обязательны' });
-    }
-    res.json(await submitCartToWaiter(sessionId, items));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.post('/api/v1/table/guest-pay', async (req, res) => {
-  try {
-    const { sessionId, method, tipAmount } = req.body || {};
-    if (!sessionId) return res.status(400).json({ error: 'sessionId обязателен' });
-    res.json(await guestPay(sessionId, { method, tipAmount }));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.post('/api/v1/table/feedback', async (req, res) => {
-  try {
-    const { sessionId, rating, comment } = req.body || {};
-    if (!sessionId || !rating) {
-      return res.status(400).json({ error: 'sessionId и rating обязательны' });
-    }
-    res.json(await submitVisitFeedback(sessionId, { rating, comment }));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.post('/api/v1/ai/suggest', async (req, res) => {
-  try {
-    const { restaurantSlug, query } = req.body || {};
-    if (!restaurantSlug || !query) {
-      return res.status(400).json({ error: 'restaurantSlug и query обязательны' });
-    }
-    res.json(await aiSuggest(restaurantSlug, query));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.get('/api/v1/ai/welcome', async (req, res) => {
-  try {
-    res.json(await aiWelcome());
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.post('/api/v1/ai/feedback', async (req, res) => {
-  try {
-    const { query, productId, action } = req.body || {};
-    if (!query || !productId) {
-      return res.status(400).json({ error: 'query и productId обязательны' });
-    }
-    res.json(await saveAiFeedback(query, productId, action));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.post('/api/v1/table/call-waiter', async (req, res) => {
-  try {
-    const { sessionId, reason } = req.body || {};
-    if (!sessionId) return res.status(400).json({ error: 'sessionId обязателен' });
-    res.json(await callWaiterExtended(sessionId, { reason }));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.post('/api/v1/table-order/cart', async (req, res) => {
-  try {
-    const { sessionId, items } = req.body || {};
-    if (!sessionId || !Array.isArray(items)) {
-      return res.status(400).json({ error: 'sessionId и items обязательны' });
-    }
-    res.json(await saveGuestCart(sessionId, items));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.post('/api/v1/table-order/sync', async (req, res) => {
-  try {
-    const { sessionId, items } = req.body || {};
-    if (!sessionId || !Array.isArray(items)) {
-      return res.status(400).json({ error: 'sessionId и items обязательны' });
-    }
-    res.json(await syncTableOrder(sessionId, items));
-  } catch (err) {
-    console.error('table-order/sync:', err);
-    res.status(err.status || 500).json({ error: err.message, details: err.details });
-  }
-});
-
-app.post('/api/v1/table-order/pay', async (req, res) => {
-  try {
-    const { sessionId, paymentType } = req.body || {};
-    if (!sessionId) return res.status(400).json({ error: 'sessionId обязателен' });
-    res.json(await payTableOrder(sessionId, { paymentType }));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.post('/api/v1/table-order/reopen', async (req, res) => {
-  try {
-    const { sessionId } = req.body || {};
-    if (!sessionId) return res.status(400).json({ error: 'sessionId обязателен' });
-    res.json(await reopenTableForMore(sessionId));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-// ── Терминал официанта ──────────────────────────────────────────────────────
-app.get('/api/v1/waiter/notifications', async (req, res) => {
-  try {
-    const restaurant = await pool.query(
-      `SELECT id FROM restaurants WHERE slug = $1 LIMIT 1`,
-      [QR_RESTAURANT_SLUG],
-    );
-    const restaurantId = restaurant.rows[0]?.id;
-    if (!restaurantId) return res.status(404).json({ error: 'Ресторан не найден' });
-    const unreadOnly = req.query.unread === '1';
-    res.json(await listWaiterNotifications(restaurantId, { unreadOnly }));
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/v1/waiter/notifications/:id/read', async (req, res) => {
-  try {
-    await markNotificationRead(req.params.id);
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.post('/api/v1/waiter/notifications/read-all', async (req, res) => {
-  try {
-    const restaurant = await pool.query(
-      `SELECT id FROM restaurants WHERE slug = $1 LIMIT 1`,
-      [QR_RESTAURANT_SLUG],
-    );
-    await markAllNotificationsRead(restaurant.rows[0]?.id);
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/v1/waiter/sessions', async (req, res) => {
-  try {
-    res.json(await listActiveSessions());
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get('/api/v1/waiter/session/:sessionId', async (req, res) => {
-  try {
-    res.json(await refreshSessionWithWorkflow(req.params.sessionId));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.post('/api/v1/waiter/session/:sessionId/cart', async (req, res) => {
-  try {
-    const { items, guestCount } = req.body || {};
-    if (!Array.isArray(items)) return res.status(400).json({ error: 'items обязателен' });
-    res.json(await waiterUpdateCart(req.params.sessionId, items, { guestCount }));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
-  }
-});
-
-app.post('/api/v1/waiter/session/:sessionId/send-to-production', async (req, res) => {
-  try {
-    res.json(await sendOrderToProduction(req.params.sessionId));
-  } catch (err) {
-    res.status(err.status || 500).json({ error: err.message, details: err.details });
-  }
-});
-
-app.get('/health', async (req, res) => {
-  const ollama = await checkOllamaHealth();
-  res.json({ ok: true, ollama });
-});
+// Фоновые проверки: бездействие гостя 5+ мин, долгое ожидание официанта
+setInterval(() => runServiceChecks().catch((e) => console.warn('service checks:', e.message)), 30000);
 
 app.listen(PORT, () => {
-  console.log(`Menu API running on http://localhost:${PORT}`);
+  console.log(`Menu API running on http://localhost:${PORT} (iiko: ${isIikoDemo() ? 'demo' : 'live'}, AI: ${isLlmEnabled() ? 'OpenRouter' : 'instant'})`);
 });

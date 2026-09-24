@@ -9,7 +9,7 @@ export async function fetchLegacyCatalog(deliveryTerminalId) {
   }
   const { data } = await axios.get(`${LEGACY_API}/api/v1/catalog`, {
     params: { deliveryTerminalId },
-    timeout: 30000,
+    timeout: parseInt(process.env.LEGACY_API_TIMEOUT_MS || "8000", 10),
   });
   return data;
 }

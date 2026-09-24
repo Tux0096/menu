@@ -15,15 +15,6 @@ if ! command -v node >/dev/null 2>&1; then
   sudo apt-get install -y nodejs
 fi
 
-echo "=== 2. Ollama ==="
-if ! command -v ollama >/dev/null 2>&1; then
-  curl -fsSL https://ollama.com/install.sh | sh
-fi
-sudo systemctl enable ollama
-sudo systemctl start ollama
-sleep 3
-ollama pull qwen2:0.5b || ollama pull llama3.2:1b
-
 echo "=== 3. PostgreSQL (Docker) ==="
 if ! command -v docker >/dev/null 2>&1; then
   curl -fsSL https://get.docker.com | sh
@@ -61,18 +52,12 @@ if [ ! -f .env ]; then
   fi
 fi
 
-if ! PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d menu_db -tAc "SELECT 1 FROM restaurants LIMIT 1" 2>/dev/null | grep -q 1; then
-  node db/init.js
-  node db/seed.js
-fi
-node db/migrate-table-orders.js
+node db/migrate.js           # идемпотентно: схема, рестораны, AI-чипы, персонал
 node db/sync-iiko.js 2>/dev/null || echo "iiko sync skipped (check IIKO_API_LOGIN)"
+node db/demo-menu.js          # резервное демо-меню только для ресторанов без выгрузки
 
-echo "=== 6. fuji-qr-app build ==="
-cd "$REPO_DIR/fuji-qr-app"
-npm ci 2>/dev/null || npm install
-export NODE_ENV=production
-npm run generate
+echo "=== 6. Фронт ==="
+# Гостевое меню и терминал персонала (menu-web) раздаёт сам menu-api — сборка не нужна.
 
 echo "=== 7. systemd menu-api ==="
 sudo cp "$REPO_DIR/deploy/systemd/menu-api.service" /etc/systemd/system/menu-api.service
@@ -91,4 +76,5 @@ echo "=== Done ==="
 curl -s http://127.0.0.1:3101/health || true
 echo ""
 echo "Site: https://menu.franchise-fuji.ru"
-echo "QR:   https://menu.franchise-fuji.ru/?restaurant=leningradskaya&table=5"
+echo "QR:    https://menu.franchise-fuji.ru/?table=5"
+echo "Staff: https://menu.franchise-fuji.ru/staff/"

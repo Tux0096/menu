@@ -1,7 +1,6 @@
 [Unit]
 Description=Fuji Menu API
-After=network.target postgresql.service docker.service ollama.service
-Wants=ollama.service
+After=network.target postgresql.service docker.service
 
 [Service]
 Type=simple

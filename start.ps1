@@ -1,21 +1,16 @@
-# === Запуск QR-меню (API + фронт) ===
+# === Запуск QR-меню: API + гостевое меню + терминал персонала (одним процессом) ===
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ApiDir = Join-Path $Root "menu-api"
-$FrontDir = Join-Path $Root "fuji-qr-app"
 
-Write-Host "=== Запуск Menu API ===" -ForegroundColor Cyan
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$ApiDir'; node app.js" -WindowStyle Normal
-
-Start-Sleep -Seconds 2
-
-Write-Host "=== Запуск Nuxt (fuji-qr-app) ===" -ForegroundColor Cyan
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "Set-Location '$FrontDir'; `$env:NODE_ENV='development'; npm run dev" -WindowStyle Normal
+Set-Location $ApiDir
+if (-not (Test-Path "node_modules")) { npm install }
+node db/migrate.js
+node db/demo-menu.js
 
 Write-Host ""
 Write-Host "====================================" -ForegroundColor Green
-Write-Host "  API:     http://localhost:3101" -ForegroundColor Yellow
-Write-Host "  Сайт:    http://localhost:3100" -ForegroundColor Yellow
-Write-Host "  QR-пример:" -ForegroundColor Yellow
-Write-Host "  http://localhost:3100/?restaurant=leningradskaya&table=5" -ForegroundColor White
+Write-Host "  Гость:    http://localhost:3101/?table=5" -ForegroundColor Yellow
+Write-Host "  Персонал: http://localhost:3101/staff/  (admin/admin, manager/manager, waiter/1111)" -ForegroundColor Yellow
 Write-Host "====================================" -ForegroundColor Green
+node app.js
