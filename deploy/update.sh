@@ -52,6 +52,10 @@ ensure_env() {
 rand() { openssl rand -hex "${1:-16}"; }
 
 # Секреты из GitHub Secrets перезаписывают значения в .env
+# Какие секреты пришли из GitHub (только факт, без значений)
+for v in OPENROUTER_API_KEY IIKO_API_LOGIN IIKO_CLIENT_SECRET IIKO_MENU_API_LOGIN IIKO_MENU_CLIENT_SECRET IIKO_EXTERNAL_MENU_ID; do
+  if [ -n "${!v:-}" ]; then echo "  секрет $v: задан"; else echo "  секрет $v: —"; fi
+done
 [ -n "${OPENROUTER_API_KEY:-}" ] && set_env OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
 [ -n "${IIKO_API_LOGIN:-}" ] && set_env IIKO_API_LOGIN "$IIKO_API_LOGIN"
 [ -n "${IIKO_CLIENT_SECRET:-}" ] && set_env IIKO_CLIENT_SECRET "$IIKO_CLIENT_SECRET"
