@@ -392,8 +392,8 @@
         S.staffRests = rests;
         const roleName = { admin: 'Администратор', manager: 'Управляющий', waiter: 'Официант' };
         return `<div class="card"><div class="toolbar"><div class="h2 grow" style="margin:0">Сотрудники</div><button class="btn btn--dark btn--sm" data-staff-new>Добавить</button></div>
-          <div class="tbl-wrap"><table class="tbl tbl--cards"><tr><th>Имя</th><th>Логин</th><th>Роль</th><th>Ресторан</th><th>Статус</th><th></th></tr>
-          ${rows.map((u) => `<tr><td class="td-title">${esc(u.name)}</td><td data-label="Логин">${esc(u.login)}</td><td data-label="Роль">${roleName[u.role]}</td>
+          <div class="tbl-wrap"><table class="tbl tbl--cards"><tr><th>Имя</th><th>Логин</th><th>Роль</th><th>PIN</th><th>Ресторан</th><th>Статус</th><th></th></tr>
+          ${rows.map((u) => `<tr><td class="td-title">${esc(u.name)}</td><td data-label="Логин">${esc(u.login)}</td><td data-label="Роль">${roleName[u.role]}</td><td data-label="PIN">${u.hasPin ? '●●●●' : '—'}</td>
             <td data-label="Ресторан">${esc(rests.find((r) => r.id === u.restaurantId)?.name || 'Все')}</td><td data-label="Статус">${u.isActive ? '<span class="pill" data-tone="ok">активен</span>' : '<span class="pill">отключён</span>'}</td>
             <td class="td-actions"><button class="btn btn--sm" data-staff-edit='${esc(JSON.stringify(u))}'>Изменить</button></td></tr>`).join('')}
           </table></div></div>`;
@@ -614,12 +614,15 @@
       <div class="field"><label>Роль</label><select class="sel" name="role">${[['waiter', 'Официант'], ['manager', 'Управляющий'], ['admin', 'Администратор']].map(([v, l]) => `<option value="${v}" ${u.role === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
       <div class="field"><label>Ресторан</label><select class="sel" name="restaurantId"><option value="">Все</option>${(S.staffRests || []).map((r) => `<option value="${r.id}" ${u.restaurantId === r.id ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select></div>
       <div class="field"><label>${u.id ? 'Новый пароль (пусто — не менять)' : 'Пароль'}</label><input class="inp" name="password" type="password" ${u.id ? '' : 'required'}></div>
+      <div class="field"><label>PIN для приложения официанта (4–6 цифр${u.hasPin ? ', пусто — не менять' : ''})</label><input class="inp" name="pin" inputmode="numeric" pattern="\\d{4,6}" maxlength="6" autocomplete="off" placeholder="${u.hasPin ? 'PIN задан' : 'например, 482915'}"></div>
+      ${u.hasPin ? '<label style="display:flex;gap:10px;align-items:center;margin-top:20px"><input type="checkbox" name="clearPin"> Сбросить PIN</label>' : ''}
       <label style="display:flex;gap:10px;align-items:center;margin-top:20px"><input type="checkbox" name="isActive" ${u.isActive !== false ? 'checked' : ''}> Активен</label>
       </div><div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить</button><button class="btn" type="button" data-modal-close>Отмена</button></div></form>`, (root) => {
       $('#staff-form', root).addEventListener('submit', async (e) => {
         e.preventDefault();
         const fd = Object.fromEntries(new FormData(e.target));
         fd.isActive = e.target.elements.isActive.checked; fd.id = u.id;
+        fd.clearPin = Boolean(e.target.elements.clearPin?.checked); if (!fd.pin) delete fd.pin;
         try { await api('POST', '/api/v1/admin/staff', fd); closeModal(); toast('Сохранено'); render(); } catch (err) { toast(err.message, true); }
       });
     });

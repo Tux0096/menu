@@ -17,7 +17,48 @@ function mapStaff(row) {
     role: row.role,
     restaurantId: row.restaurant_id,
     isActive: row.is_active,
+    hasPin: Boolean(row.pin_hash),
   };
+}
+
+function issueToken(staff) {
+  return signToken({ sid: staff.id, role: staff.role, name: staff.name, rid: staff.restaurantId });
+}
+
+// Защита PIN от перебора: не больше 5 неудачных попыток в минуту с одного адреса
+const pinFails = new Map();
+function pinThrottle(key) {
+  const now = Date.now();
+  const list = (pinFails.get(key) || []).filter((t) => now - t < 60000);
+  pinFails.set(key, list);
+  if (list.length >= 5) throw httpError(429, 'Слишком много попыток — подождите минуту');
+  return () => { list.push(now); pinFails.set(key, list); };
+}
+
+/** Вход по PIN (приложение официанта): сотрудники ресторана и сотрудники «на все рестораны». */
+export async function pinLogin(restaurantId, pin, clientKey = '') {
+  const code = String(pin || '').trim();
+  if (!/^\d{4,6}$/.test(code)) throw httpError(400, 'PIN — 4–6 цифр');
+  const fail = pinThrottle(`${clientKey}|${restaurantId}`);
+  const { rows } = await pool.query(
+    `SELECT * FROM staff_users WHERE is_active = TRUE AND pin_hash IS NOT NULL
+       AND (restaurant_id = $1 OR restaurant_id IS NULL)`,
+    [restaurantId],
+  );
+  const user = rows.find((u) => verifyPassword(code, u.pin_hash));
+  if (!user) { fail(); throw httpError(401, 'Неверный PIN'); }
+  const staff = { ...mapStaff(user), restaurantId: user.restaurant_id || restaurantId };
+  await audit(staff, 'login.pin', 'staff', staff.id);
+  return { token: issueToken(staff), staff };
+}
+
+async function assertPinFree(pin, restaurantId, exceptId) {
+  const { rows } = await pool.query(
+    `SELECT id, pin_hash FROM staff_users WHERE pin_hash IS NOT NULL AND id IS DISTINCT FROM $1
+       AND (restaurant_id IS NOT DISTINCT FROM $2 OR restaurant_id IS NULL OR $2::uuid IS NULL)`,
+    [exceptId || null, restaurantId || null],
+  );
+  if (rows.some((r) => verifyPassword(pin, r.pin_hash))) throw httpError(409, 'Такой PIN уже есть у другого сотрудника — выберите другой');
 }
 
 export async function staffLogin(login, password) {
@@ -30,7 +71,7 @@ export async function staffLogin(login, password) {
     throw httpError(401, 'Неверный логин или пароль');
   }
   const staff = mapStaff(user);
-  const token = signToken({ sid: staff.id, role: staff.role, name: staff.name, rid: staff.restaurantId });
+  const token = issueToken(staff);
   await audit(staff, 'login', 'staff', staff.id);
   return { token, staff };
 }
@@ -70,22 +111,27 @@ export async function listStaff() {
 export async function saveStaff(data) {
   const login = String(data.login || '').trim().toLowerCase();
   if (!login || !data.name || !ROLE_LEVEL[data.role]) throw httpError(400, 'Логин, имя и роль обязательны');
+  const pin = String(data.pin || '').trim();
+  if (pin && !/^\d{4,6}$/.test(pin)) throw httpError(400, 'PIN — 4–6 цифр');
+  if (pin) await assertPinFree(pin, data.restaurantId, data.id);
+  const pinHash = pin ? hashPassword(pin) : null;
   if (data.id) {
     const { rows } = await pool.query(
       `UPDATE staff_users SET login = $2, name = $3, role = $4, restaurant_id = $5, is_active = $6,
-         password_hash = COALESCE($7, password_hash)
+         password_hash = COALESCE($7, password_hash),
+         pin_hash = CASE WHEN $9 THEN NULL ELSE COALESCE($8, pin_hash) END
        WHERE id = $1 RETURNING *`,
       [data.id, login, data.name, data.role, data.restaurantId || null, data.isActive !== false,
-        data.password ? hashPassword(data.password) : null],
+        data.password ? hashPassword(data.password) : null, pinHash, data.clearPin === true],
     );
     if (!rows[0]) throw httpError(404, 'Сотрудник не найден');
     return mapStaff(rows[0]);
   }
   if (!data.password) throw httpError(400, 'Задайте пароль');
   const { rows } = await pool.query(
-    `INSERT INTO staff_users (login, name, role, restaurant_id, password_hash)
-     VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-    [login, data.name, data.role, data.restaurantId || null, hashPassword(data.password)],
+    `INSERT INTO staff_users (login, name, role, restaurant_id, password_hash, pin_hash)
+     VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+    [login, data.name, data.role, data.restaurantId || null, hashPassword(data.password), pinHash],
   );
   return mapStaff(rows[0]);
 }
