@@ -8,7 +8,7 @@ import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import pool from './db/pool.js';
 import { QR_RESTAURANT_SLUG } from './lib/qr-config.js';
-import { isIikoDemo } from './iiko-client.js';
+import { isIikoDemo, accessibleOrgIds } from './iiko-client.js';
 import legacyRoutes from './routes/legacy.js';
 import { syncAllRestaurants } from './db/sync-iiko.js';
 import { refreshStopLists, registerWebhooks, webhookToken } from './services/stoplist.js';
@@ -87,10 +87,16 @@ app.get('/health', h(async () => ({
 
 app.get('/api/v1/restaurants', h(async () => {
   const { rows } = await pool.query(
-    `SELECT id, name, address, slug, phone, tables_count FROM restaurants
-     WHERE is_disabled = FALSE ORDER BY sort_order, name`,
+    `SELECT r.id, r.name, r.address, r.slug, r.phone, r.tables_count, r.organization_id,
+            EXISTS (SELECT 1 FROM products p WHERE p.restaurant_id = r.id AND p.is_published) AS has_products
+     FROM restaurants r WHERE r.is_disabled = FALSE ORDER BY r.sort_order, r.name`,
   );
-  return rows;
+  // Доступен для заказа: есть меню и точка подключена к API-логину iiko
+  const allowed = await accessibleOrgIds();
+  return rows.map(({ organization_id: orgId, has_products: hasProducts, ...r }) => ({
+    ...r,
+    hasMenu: hasProducts && (!allowed || allowed.has(orgId)),
+  }));
 }));
 
 app.get('/api/v1/restaurants/:slug', h(async (req) => {
