@@ -458,3 +458,15 @@ html { scroll-behavior: smooth; -webkit-tap-highlight-color: transparent; }
 /* Статус в шапке обрезается с многоточием */
 .topbar__right .status-chip { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .topbar__right .status-chip::before { display: inline-block; margin-right: 6px; vertical-align: middle; }
+
+/* Полноэкранный режим: выход — стрелка «назад» слева, без акцента */
+.topbar > :first-child { flex: initial; }
+.topbar__main { flex: 1 1 auto; min-width: 0; }
+.back-btn {
+  flex-shrink: 0; width: 36px; height: 36px; margin-left: -6px; border: 0; border-radius: 50%;
+  background: transparent; color: var(--ink); display: grid; place-items: center; opacity: .75;
+}
+.back-btn:active { background: rgba(9, 16, 39, .06); }
+.back-btn svg { width: 22px; height: 22px; }
+.fs-btn { display: none; }
+.topbar { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 8px 12px -12px rgba(9, 16, 39, .18); }
