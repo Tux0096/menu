@@ -16,7 +16,7 @@ async function main() {
     return;
   }
   const mask = (k) => (k ? `${k.slice(0, 4)}…${k.slice(-2)} (${k.length} симв.)` : 'не задан');
-  console.log(`iiko: ключ заказов ${mask(process.env.IIKO_API_LOGIN)}${process.env.IIKO_CLIENT_SECRET ? ', секрет клиента задан' : ''}`);
+  console.log(`iiko: ключ заказов ${mask(process.env.IIKO_API_LOGIN)}${(process.env.IIKO_CLIENT_SECRET || process.env.IIKO_MENU_CLIENT_SECRET) ? ', секрет клиента задан' : ', секрета клиента нет'}`);
   const headers = { Authorization: `Bearer ${await requestIikoToken(process.env.IIKO_API_LOGIN)}` };
   const { data } = await axios.post(`${IIKO_URL}/api/1/organizations`, { returnAdditionalInfo: false, includeDisabled: false }, { headers, timeout: 15000 });
   const orgs = data.organizations || [];
