@@ -13,6 +13,7 @@ import {
   mapSession,
   recalcTotal,
   resolveIikoTableId,
+  tableGuests,
   withTransaction,
 } from './table-session.js';
 
@@ -73,11 +74,15 @@ export async function updateOrder(sessionId, staff, { items = [], guestCount } =
     const ctx = await lockSession(client, sessionId);
     assertEditable(ctx, staff);
     const lockedIds = new Set(ctx.items.filter((i) => i.is_locked).map((i) => i.id));
+    // Место = гость за столом (по порядку присоединения); место без гостя — просто номер места
+    const guests = tableGuests(ctx);
+    const guestOf = (seat) => guests.find((g) => g.seat === Number(seat)) || null;
 
     for (const it of items.filter((i) => i.id && lockedIds.has(i.id))) {
+      const g = guestOf(it.seatNumber);
       await client.query(
-        'UPDATE table_order_items SET seat_number = $2, course = $3, updated_at = NOW() WHERE id = $1',
-        [it.id, it.seatNumber || null, it.course || null],
+        'UPDATE table_order_items SET seat_number = $2, course = $3, guest_id = $4, guest_name = $5, updated_at = NOW() WHERE id = $1',
+        [it.id, it.seatNumber || null, it.course || null, g?.id || null, g?.name || null],
       );
     }
 
@@ -90,10 +95,12 @@ export async function updateOrder(sessionId, staff, { items = [], guestCount } =
       const price = Math.max(0, Number(it.price) || 0);
       await client.query(
         `INSERT INTO table_order_items
-           (session_id, product_id, iiko_product_id, name, price, quantity, line_total, seat_number, course, batch_no, is_locked)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE)`,
+           (session_id, product_id, iiko_product_id, name, price, quantity, line_total, seat_number, course, batch_no, is_locked,
+            guest_id, guest_name)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12)`,
         [sessionId, it.productId || null, it.iikoProductId, String(it.name || 'Позиция').slice(0, 300),
-          price, qty, price * qty, it.seatNumber || null, it.course || null, nextBatch],
+          price, qty, price * qty, it.seatNumber || null, it.course || null, nextBatch,
+          guestOf(it.seatNumber)?.id || null, guestOf(it.seatNumber)?.name || null],
       );
     }
     await recalcTotal(client, sessionId);
@@ -135,7 +142,8 @@ export async function sendToKitchen(sessionId, staff) {
       .map((i) => ({
         productId: i.iiko_product_id,
         amount: i.quantity,
-        comment: [i.course ? `Курс ${i.course}` : null, i.seat_number ? `Место ${i.seat_number}` : null].filter(Boolean).join(', ') || undefined,
+        comment: [i.guest_name || null, i.seat_number ? `место ${i.seat_number}` : null, i.course ? `курс ${i.course}` : null]
+          .filter(Boolean).join(', ') || undefined,
       }));
     if (!iikoOrderId) {
       let tableId = session.iiko_table_id;
@@ -179,7 +187,7 @@ export async function sendToKitchen(sessionId, staff) {
 
   const ids = pending.map((i) => i.id);
   await pool.query(
-    `UPDATE table_order_items SET is_locked = TRUE, synced_to_iiko = TRUE, updated_at = NOW()
+    `UPDATE table_order_items SET is_locked = TRUE, synced_to_iiko = TRUE, sent_at = NOW(), kitchen_status = COALESCE(kitchen_status, 'Added'), updated_at = NOW()
      WHERE id = ANY($1::uuid[])`,
     [ids],
   );

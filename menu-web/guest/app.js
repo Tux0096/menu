@@ -121,7 +121,10 @@
   const cartLines = () => Object.values(S.cart).filter((l) => l.qty > 0);
   const cartCount = () => cartLines().reduce((s, l) => s + l.qty, 0);
   const cartTotal = () => cartLines().reduce((s, l) => s + l.qty * (Number(l.product.price) || 0), 0);
-  const lockedQty = (pid) => (S.session?.items || [])
+  // За столом может быть несколько гостей: корзина гостя — только его позиции
+  const myItems = (session = S.session) => (session?.items || [])
+    .filter((i) => (i.guestId || null) === (S.guest?.id || null));
+  const lockedQty = (pid) => myItems()
     .filter((i) => i.isLocked && (String(i.productId) === String(pid) || String(i.iikoProductId) === String(pid)))
     .reduce((s, i) => s + i.quantity, 0);
   const pendingCount = () => cartLines().reduce((s, l) => s + Math.max(0, l.qty - lockedQty(l.product.id)), 0);
@@ -134,7 +137,7 @@
   /** Корзина = сервер (источник правды) ⊕ несохранённые локальные правки. */
   function cartFromSession(session) {
     const next = {};
-    for (const it of session.items || []) {
+    for (const it of myItems(session)) {
       const key = String(it.productId || it.iikoProductId);
       const product = findProduct(key) || { id: key, iikoId: it.iikoProductId, name: it.name, price: it.price };
       if (!next[key]) next[key] = { qty: 0, product, course: null };
@@ -204,20 +207,64 @@
     }
   }
 
-  async function enterTable() {
+  /** Вход за стол. false — за столом уже сидят: показан вопрос «присоединиться?». */
+  async function enterTable({ join = false, name = '', then = null } = {}) {
     const session = await api('POST', '/api/v1/table/enter', {
-      restaurantSlug: S.restaurant, tableNumber: S.table, previousSessionId: S.sessionId,
+      restaurantSlug: S.restaurant, tableNumber: S.table, previousSessionId: S.sessionId, join, name,
     });
+    if (session.joinRequired) { openJoinSheet({ ...session, guestName: session.guestName || name }, then); return false; }
+    if (name && S.guest) { S.guest = { ...S.guest, name }; store.set('guest', S.guest); }
     const localCart = S.cart;
     const sameVisit = session.sessionId === S.sessionId;
     applySession(session);
     // Кейс 14: корзина, не успевшая уйти на сервер, восстанавливается с телефона
     if (sameVisit && Object.keys(localCart).length && !session.isPaid) {
-      const serverCount = (session.items || []).reduce((s, i) => s + i.quantity, 0);
+      const serverCount = myItems(session).reduce((s, i) => s + i.quantity, 0);
       const localCount = Object.values(localCart).reduce((s, l) => s + l.qty, 0);
       if (localCount > serverCount) { S.cart = localCart; persistCart(); scheduleCartSave(); }
     }
     if (!sameVisit) { store.del('aiResults'); S.ai.results = null; S.changedSinceSubmit = true; store.set('changedSinceSubmit', true); }
+    return true;
+  }
+
+  /** За столом уже есть гости или заказ: присоединиться к ним под своим именем или выбрать другой стол. */
+  function openJoinSheet(info, then = null) {
+    const who = (info.guests || []).join(', ');
+    openSheet(`<form id="join-form">
+      <h2>Стол №${esc(info.tableNumber)} уже занят</h2>
+      <p class="sheet__hint" style="margin-top:0">${who ? `За столом: <b>${esc(who)}</b>` : 'За столом уже делают заказ'}${info.itemsCount ? ` · в заказе ${info.itemsCount} поз.` : ''}.<br>
+        Присоединитесь к столу — ваши блюда будут отмечены вашим именем, официант принесёт их вам.</p>
+      <div class="label">Ваше имя</div>
+      <div class="pill-input" style="min-height:60px"><input id="join-name" type="text" maxlength="40" autocomplete="given-name" placeholder="Как к вам обращаться" value="${esc(info.guestName || S.guest?.name || '')}"></div>
+      <div class="auth__error" id="join-error"></div>
+      <button class="btn btn--dark" type="submit"><span>Присоединиться к столу</span><span class="round-btn">${ICONS.arrowRight}</span></button>
+      <button class="btn" type="button" data-other-table style="margin-top:10px"><span>Это не мой стол</span></button>
+    </form>`, (sheet) => {
+      const input = $('#join-name', sheet);
+      input.focus();
+      $('[data-other-table]', sheet).addEventListener('click', () => {
+        S.table = null; S.sessionId = null; store.del('sessionId'); store.del('table');
+        S.changeTable = true; openSeatSheet(then);
+      });
+      $('#join-form', sheet).addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const name = input.value.trim();
+        if (!name) { $('#join-error', sheet).textContent = 'Введите имя — официант будет знать, чьё блюдо'; return; }
+        const btn = e.submitter || $('#join-form button[type=submit]', sheet);
+        btn.disabled = true;
+        try {
+          await enterTable({ join: true, name });
+          startPolling();
+          closeSheet();
+          toast(`Вы за столом №${S.table}`);
+          render();
+          if (then) then();
+        } catch (e2) {
+          btn.disabled = false;
+          $('#join-error', sheet).textContent = e2.message;
+        }
+      });
+    });
   }
 
   async function refreshSession(force = false) {
@@ -226,7 +273,7 @@
       applySession(await api('GET', `/api/v1/table/session/${S.sessionId}`));
       render();
     } catch (e) {
-      if (e.status === 404) { S.sessionId = null; store.del('sessionId'); await enterTable().catch(() => {}); render(); }
+      if (e.status === 404 || e.code === 'NOT_AT_TABLE') { S.sessionId = null; S.session = null; store.del('sessionId'); await enterTable().catch(() => {}); render(); }
     }
   }
 
@@ -259,8 +306,9 @@
     if (!s) {
       return `<header class="topbar">
       <div>
-        <div class="topbar__table">${esc(S.config?.restaurant?.name || 'Фуджи')}</div>
-        <div class="topbar__guest">${esc(S.config?.restaurant?.address || '')}</div>
+        <button class="topbar__rest" data-action="restaurant" aria-label="Сменить ресторан">
+          <span class="topbar__table">${esc(S.config?.restaurant?.name || 'Фуджи')} ▾</span>
+          <span class="topbar__guest">${esc(S.config?.restaurant?.address || '')}</span></button>
       </div>
       <button class="status-chip" data-action="seat" data-tone="idle">${S.table ? `Стол №${esc(S.table)} · войти` : 'Выбрать стол'}</button>
     </header>`;
@@ -268,7 +316,8 @@
     return `<header class="topbar">
       <div>
         <div class="topbar__table">Стол №${esc(S.table)}</div>
-        <div class="topbar__guest">${esc(who ? `${who} · ` : '')}${esc(S.config?.restaurant?.address || '')}</div>
+        <button class="topbar__rest" data-action="restaurant" aria-label="Сменить ресторан">
+          <span class="topbar__guest">${esc(who ? `${who} · ` : '')}${esc(S.config?.restaurant?.name || '')} ▾</span></button>
       </div>
       ${s ? `<button class="status-chip" data-go="order" data-tone="${STATUS_TONE[s.workflowStatus] || 'idle'}">${esc(s.workflowLabel)}</button>` : ''}
     </header>`;
@@ -316,6 +365,7 @@
     const fujiUrl = S.config?.fujiAppLoginUrl;
     const needTable = !S.table || S.changeTable;
     const needLogin = !S.token;
+    const needName = !S.guest?.name;
     openSheet(`<form id="seat-form" autocomplete="on">
       <h2>Сделать заказ</h2>
       <p class="sheet__hint">${esc(S.config?.restaurant?.name || '')}${S.config?.restaurant?.address ? `, ${esc(S.config.restaurant.address)}` : ''}</p>
@@ -326,6 +376,8 @@
       ${needLogin ? `<div class="label">Телефон</div>
         <div class="pill-input" style="min-height:60px"><input id="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+7 000 000 00 00" value="+7 " aria-label="Номер телефона"></div>
         <label class="consent"><input type="checkbox" id="consent" checked><span class="consent__box">${ICONS.check}</span><span>Согласие на обработку персональных данных</span></label>` : ''}
+      ${needName ? `<div class="label">Ваше имя</div>
+        <div class="pill-input" style="min-height:60px"><input id="seat-name" type="text" maxlength="40" autocomplete="given-name" placeholder="Чтобы официант знал, чьё блюдо"></div>` : ''}
       <div class="auth__error" id="seat-error">${esc(error)}</div>
       <button class="btn btn--dark" type="submit"><span>Продолжить</span><span class="round-btn">${ICONS.arrowRight}</span></button>
       ${needLogin ? `<a class="fuji-btn" id="fuji-login" style="margin-top:12px" href="${fujiUrl ? esc(`${fujiUrl}${fujiUrl.includes('?') ? '&' : '?'}return=${encodeURIComponent(`${location.origin}${location.pathname}?restaurant=${S.restaurant || ''}&table=${S.table || ''}`)}`) : '#'}">
@@ -351,6 +403,8 @@
           if (!table) { err.textContent = 'Введите номер стола'; return; }
         }
         if (needLogin && !$('#consent', sheet).checked) { err.textContent = 'Нужно согласие на обработку персональных данных'; return; }
+        const name = needName ? ($('#seat-name', sheet).value || '').trim() : '';
+        if (needName && !name) { err.textContent = 'Введите имя — официант будет знать, чьё блюдо'; return; }
         btn.disabled = true;
         try {
           if (needLogin) {
@@ -361,7 +415,7 @@
           if (table !== S.table) { S.table = table; S.sessionId = null; store.del('sessionId'); }
           store.set('table', S.table);
           S.changeTable = false;
-          await enterTable();
+          if (!(await enterTable({ name, then }))) return; // стол занят — спросили, присоединиться ли
           startPolling();
           closeSheet();
           toast(`Стол №${S.table}: можно заказывать`);
@@ -371,6 +425,27 @@
           btn.disabled = false;
           err.textContent = e2.message;
         }
+      });
+    });
+  }
+
+  /** Смена ресторана: QR выбирает его автоматически, но гость может переключиться вручную. */
+  async function openRestaurantSheet() {
+    let list = [];
+    try { list = await api('GET', '/api/v1/restaurants'); } catch (e) { toast(e.message, true); return; }
+    const pending = pendingCount();
+    openSheet(`<h2>Ресторан</h2>
+      <p class="sheet__hint" style="margin-top:0">${S.session ? `Сейчас вы за столом №${esc(S.table)}. При смене ресторана стол нужно будет выбрать заново${pending ? ', неотправленные блюда из корзины удалятся' : ''}.` : 'Выберите, в каком ресторане вы находитесь'}</p>
+      <div class="rest-list">${list.map((r) => `<button class="rest-item ${r.slug === S.restaurant ? 'is-current' : ''}" data-rest="${esc(r.slug)}">
+        <b>${esc(r.name)}</b><span>${esc(r.address || '')}</span>${r.slug === S.restaurant ? '<i>вы здесь</i>' : ''}</button>`).join('')}</div>`, (sheet) => {
+      sheet.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-rest]');
+        if (!b) return;
+        if (b.dataset.rest === S.restaurant) { closeSheet(); return; }
+        // Новый ресторан — чистый старт: без стола, визита и корзины прошлого ресторана
+        ['table', 'sessionId', 'cart', 'aiResults'].forEach((k) => store.del(k));
+        store.set('restaurant', b.dataset.rest);
+        location.href = `${location.pathname}?restaurant=${encodeURIComponent(b.dataset.rest)}`;
       });
     });
   }
@@ -525,7 +600,7 @@
   };
 
   function kitchenLabelFor(pid) {
-    const it = (S.session?.items || []).find((i) => i.isLocked && (String(i.productId) === String(pid) || String(i.iikoProductId) === String(pid)));
+    const it = myItems().find((i) => i.isLocked && (String(i.productId) === String(pid) || String(i.iikoProductId) === String(pid)));
     return it?.kitchenLabel || null;
   }
 
@@ -541,7 +616,7 @@
       const locked = lockedQty(l.product.id);
       const fresh = l.qty - locked;
       const tags = [
-        locked ? `<span class="tag tag--kitchen">${esc(kitchenLabelFor(l.product.id) || 'на кухне')} ${locked}</span>` : '',
+        locked ? `<span class="tag ${kitchenLabelFor(l.product.id) === 'Готово' ? 'tag--ready' : 'tag--kitchen'}">${esc(kitchenLabelFor(l.product.id) || 'на кухне')} ${locked}</span>` : '',
         locked && fresh > 0 ? `<span class="tag tag--new">+${fresh} новое</span>` : '',
       ].join('');
       return `<div class="line-item">
@@ -562,6 +637,20 @@
 
     const canClear = lines.some((l) => l.qty > lockedQty(l.product.id));
     const paid = s?.isPaid;
+    // Остальные за столом: блюда других гостей и добавленные официантом
+    const others = (s?.items || []).filter((i) => (i.guestId || null) !== (S.guest?.id || null));
+    const byWho = new Map();
+    for (const i of others) {
+      const who = i.guestName || (i.seatNumber ? `Место ${i.seatNumber}` : 'Добавил официант');
+      if (!byWho.has(who)) byWho.set(who, []);
+      byWho.get(who).push(i);
+    }
+    const table = [...byWho].map(([who, list]) => `<div class="table-guest">
+        <div class="table-guest__name">${esc(who)}</div>
+        ${list.map((i) => `<div class="table-guest__item"><span>${esc(i.name)} × ${i.quantity}</span>
+          <span class="tag ${i.isReady ? 'tag--ready' : i.isLocked ? 'tag--kitchen' : ''}">${esc(i.isLocked ? (i.kitchenLabel || 'на кухне') : 'в корзине')}</span></div>`).join('')}
+      </div>`).join('');
+    const multi = (s?.guests || []).length > 1;
     return `${topbar()}<main class="screen">
       <h1 class="page-title">Заказ</h1>
       <section class="card">
@@ -570,9 +659,15 @@
         <div class="status-sub">${esc(s?.kitchenLabel ? `Кухня: ${s.kitchenLabel}` : (STATUS_SUB[wf] || ''))}${s?.waitingMinutes ? ` · ждёте ${s.waitingMinutes} мин` : ''}</div>
       </section>
       <section class="card">
+        ${multi ? `<div class="table-guest__name" style="margin-bottom:6px">Мой заказ${S.guest?.name ? ` · ${esc(S.guest.name)}` : ''}</div>` : ''}
         ${lines.length ? items : `<div class="empty" style="padding:24px 8px">Корзина пуста.<br>Выберите блюда в меню или спросите AI.</div>`}
-        ${lines.length ? `<div class="total-row"><span class="muted">Итого</span><b>${rub(cartTotal())}</b></div>` : ''}
+        ${lines.length ? `<div class="total-row"><span class="muted">${multi ? 'Мой заказ' : 'Итого'}</span><b>${rub(cartTotal())}</b></div>` : ''}
       </section>
+      ${table ? `<section class="card">
+        <div class="status-text" style="font-size:17px;margin-bottom:6px">За столом</div>
+        ${table}
+        <div class="total-row"><span class="muted">Весь стол</span><b>${rub(s.total)}</b></div>
+      </section>` : ''}
       <div class="actions">
         ${paid ? `<button class="btn btn--dark" data-action="new-visit"><span>Начать новый заказ</span><span class="round-btn">${ICONS.arrowRight}</span></button>
           ${s.feedbackLeft ? '' : '<button class="btn" data-action="feedback"><span>Оценить визит</span></button>'}`
@@ -813,6 +908,7 @@
     const action = t.closest('[data-action]')?.dataset.action;
     if (!action) return;
     if (action === 'seat') openSeatSheet();
+    else if (action === 'restaurant') openRestaurantSheet();
     else if (action === 'call') { if (S.session) openCallSheet(); else openSeatSheet(openCallSheet); }
     else if (action === 'submit') submitToWaiter(t.closest('button'));
     else if (action === 'pay') openPaySheet();
@@ -860,9 +956,10 @@
 
   async function startTable() {
     try {
-      await enterTable();
-      S.tab = 'ai';
-      startPolling();
+      if (await enterTable()) {
+        S.tab = 'ai';
+        startPolling();
+      }
     } catch (e) {
       // Стол не найден и т.п. — меню остаётся доступным, стол выберут при заказе
       if (e.status !== 401) toast(e.message, true);

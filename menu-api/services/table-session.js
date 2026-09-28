@@ -105,7 +105,27 @@ export async function getSessionContext(sessionId, client = pool) {
     'SELECT * FROM table_order_items WHERE session_id = $1 ORDER BY batch_no, created_at',
     [sessionId],
   );
-  return { session, restaurant: rr[0], items };
+  // Гости за столом в порядке присоединения: место = порядковый номер
+  const { rows: guests } = await client.query(
+    `SELECT g.id, g.name FROM unnest($1::uuid[]) WITH ORDINALITY AS x(id, ord)
+     JOIN guests g ON g.id = x.id ORDER BY x.ord`,
+    [session.guest_ids || []],
+  );
+  return { session, restaurant: rr[0], items, guests };
+}
+
+/** Гости стола с местами: [{ id, name, seat }]. */
+export function tableGuests(ctx) {
+  return (ctx.guests || []).map((g, i) => ({ id: g.id, name: g.name || `Гость ${i + 1}`, seat: i + 1 }));
+}
+
+/** Гость может работать только со столом, к которому присоединился. */
+export async function assertGuestAtTable(sessionId, guestId) {
+  const { rows } = await pool.query('SELECT guest_ids FROM table_sessions WHERE id::text = $1', [String(sessionId)]);
+  if (!rows[0]) throw httpError(404, 'Визит не найден — отсканируйте QR-код ещё раз');
+  if (!(rows[0].guest_ids || []).includes(guestId)) {
+    throw httpError(403, 'Вы не присоединились к этому столу — отсканируйте QR-код ещё раз', { code: 'NOT_AT_TABLE' });
+  }
 }
 
 async function requireContext(sessionId) {
@@ -129,12 +149,16 @@ function mapItem(row) {
     quantity: row.quantity,
     lineTotal: parseFloat(row.line_total),
     seatNumber: row.seat_number || null,
+    guestId: row.guest_id || null,
+    guestName: row.guest_name || null,
     course: row.course || null,
     batchNo: row.batch_no,
     isLocked: row.is_locked,
     isNew: !row.is_locked,
     kitchenStatus: row.kitchen_status || null,
     kitchenLabel: KITCHEN_LABELS[row.kitchen_status] || (row.is_locked ? 'Отправлено на кухню' : null),
+    isReady: row.kitchen_status === 'CookingCompleted' && !row.served_at,
+    servedAt: row.served_at || null,
   };
 }
 
@@ -143,7 +167,7 @@ function minutesSince(ts) {
   return Math.floor((Date.now() - new Date(ts).getTime()) / 60000);
 }
 
-export function mapSession({ session, restaurant, items }, extra = {}) {
+export function mapSession({ session, restaurant, items, guests = [] }, extra = {}) {
   const wf = session.workflow_status || WORKFLOW.BROWSING;
   const isPaid = session.payment_status === 'paid';
   const mapped = items.map(mapItem);
@@ -173,6 +197,8 @@ export function mapSession({ session, restaurant, items }, extra = {}) {
       visitsCount: session.guest_visits || 0,
     } : null,
     guestsAtTable: (session.guest_ids || []).length || (session.guest_id ? 1 : 0),
+    guests: tableGuests({ guests }),
+    readyCount: mapped.filter((i) => i.isReady).reduce((s, i) => s + i.quantity, 0),
     guestCount: session.guest_count || 1,
     total: parseFloat(session.total || 0),
     sentTotal: lockedTotal,
@@ -233,7 +259,7 @@ async function findOpenSession(restaurantId, tableNumber) {
  * Скан QR: найти открытый визит стола или начать новый, привязать гостя.
  * Если прошлый визит оплачен — он закрывается, начинается новый (кейс 15).
  */
-export async function enterTable({ restaurantSlug, tableNumber, guest, previousSessionId = null }) {
+export async function enterTable({ restaurantSlug, tableNumber, guest, previousSessionId = null, join = false, name = '' }) {
   const restaurant = await resolveRestaurant(restaurantSlug);
   const table = normalizeTable(tableNumber, restaurant);
 
@@ -261,11 +287,35 @@ export async function enterTable({ restaurantSlug, tableNumber, guest, previousS
 
   if (guest) {
     const known = (session.guest_ids || []).includes(guest.id);
+    // За столом уже есть гости или заказ — сначала спрашиваем, присоединиться ли к ним
+    if (!known && !isNew && !join) {
+      const ctx = await getSessionContext(session.id);
+      if (ctx.guests.length || ctx.items.length) {
+        return {
+          joinRequired: true,
+          tableNumber: table,
+          restaurantName: restaurant.name,
+          guests: tableGuests(ctx).map((g) => g.name),
+          itemsCount: ctx.items.reduce((sum, i) => sum + i.quantity, 0),
+          guestName: guest.name || null,
+        };
+      }
+    }
+    const cleanName = String(name || '').trim().slice(0, 100);
+    if (cleanName && cleanName !== guest.name) {
+      await pool.query('UPDATE guests SET name = $2 WHERE id = $1', [guest.id, cleanName]);
+      guest.name = cleanName;
+      if (known) {
+        await pool.query('UPDATE table_order_items SET guest_name = $3 WHERE session_id = $1 AND guest_id = $2', [session.id, guest.id, cleanName]);
+      }
+    }
     if (!known) {
+      // Каждый присоединившийся — ещё один гость в заказе
       await pool.query(
         `UPDATE table_sessions SET
            guest_id = COALESCE(guest_id, $2),
            guest_ids = array_append(guest_ids, $2),
+           guest_count = GREATEST(guest_count, cardinality(guest_ids) + 1),
            last_guest_activity_at = NOW(),
            updated_at = NOW()
          WHERE id = $1`,
@@ -285,8 +335,8 @@ export async function enterTable({ restaurantSlug, tableNumber, guest, previousS
         type: NOTIFY_TYPES.GUEST_SEATED,
         title: `Стол №${table}`,
         body: isLead
-          ? `${who} сел за стол и открыл меню${visits}`
-          : `К столу присоединился гость: ${who}`,
+          ? `${who}: за столом, открыто меню${visits}`
+          : `К столу присоединился гость: ${who} (место ${(session.guest_ids || []).length + 1})`,
         payload: { sessionId: session.id, guestId: guest.id, guestName: who, phone: maskPhone(guest.phone) },
       });
     }
@@ -362,8 +412,12 @@ async function recalcTotal(client, sessionId) {
  * Сохранить корзину гостя (полный список позиций, включая уже отправленные).
  * Отправленные на кухню позиции убрать нельзя; сверх них — черновик/дозаказ.
  */
-async function writeGuestCart(client, ctx, cartItems) {
-  const { session, items } = ctx;
+async function writeGuestCart(client, ctx, cartItems, guestId) {
+  const { session } = ctx;
+  // У каждого гостя своя корзина: трогаем только его позиции, чужие и добавленные официантом — нет
+  guestId = guestId || null;
+  const items = ctx.items.filter((i) => (i.guest_id || null) === guestId);
+  const me = tableGuests(ctx).find((g) => g.id === guestId);
   if (session.payment_status === 'paid') throw httpError(409, 'Счёт уже оплачен — отсканируйте QR, чтобы начать новый заказ');
 
   const incoming = aggregateCart(cartItems);
@@ -380,8 +434,8 @@ async function writeGuestCart(client, ctx, cartItems) {
   }
 
   const prevPending = new Map(items.filter((i) => !i.is_locked).map((i) => [String(i.iiko_product_id), i]));
-  await client.query('DELETE FROM table_order_items WHERE session_id = $1 AND is_locked = FALSE', [session.id]);
-  const nextBatch = Math.max(0, ...items.filter((i) => i.is_locked).map((i) => i.batch_no)) + 1;
+  await client.query('DELETE FROM table_order_items WHERE session_id = $1 AND is_locked = FALSE AND guest_id IS NOT DISTINCT FROM $2::uuid', [session.id, guestId]);
+  const nextBatch = Math.max(0, ...ctx.items.filter((i) => i.is_locked).map((i) => i.batch_no)) + 1;
 
   for (const [key, line] of incoming) {
     const pendingQty = line.quantity - (lockedQty.get(key) || 0);
@@ -389,10 +443,12 @@ async function writeGuestCart(client, ctx, cartItems) {
     const prev = prevPending.get(key);
     await client.query(
       `INSERT INTO table_order_items
-         (session_id, product_id, iiko_product_id, name, price, quantity, line_total, seat_number, course, batch_no, is_locked)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE)`,
+         (session_id, product_id, iiko_product_id, name, price, quantity, line_total, seat_number, course, batch_no, is_locked,
+          guest_id, guest_name)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12)`,
       [session.id, line.productId, key, line.name, line.price, pendingQty, line.price * pendingQty,
-        prev?.seat_number || null, line.course !== undefined ? line.course : (prev?.course || null), nextBatch],
+        prev?.seat_number || me?.seat || null, line.course !== undefined ? line.course : (prev?.course || null), nextBatch,
+        guestId, me?.name || null],
     );
   }
   return recalcTotal(client, session.id);
@@ -421,10 +477,10 @@ async function lockSession(client, sessionId) {
 }
 
 /** Автосохранение корзины (кейс 5). */
-export async function saveGuestCart(sessionId, cartItems) {
+export async function saveGuestCart(sessionId, cartItems, guestId) {
   await withTransaction(async (client) => {
     const ctx = await lockSession(client, sessionId);
-    await writeGuestCart(client, ctx, cartItems);
+    await writeGuestCart(client, ctx, cartItems, guestId);
     const wf = ctx.session.workflow_status;
     const next = wf === WORKFLOW.BROWSING ? WORKFLOW.BUILDING_CART : wf;
     await client.query(
@@ -436,11 +492,11 @@ export async function saveGuestCart(sessionId, cartItems) {
 }
 
 /** «Передать официанту» / «Передать дозаказ» (кейсы 6, 9). */
-export async function submitToWaiter(sessionId, cartItems) {
+export async function submitToWaiter(sessionId, cartItems, guestId) {
   let notify = null;
   await withTransaction(async (client) => {
     const ctx = await lockSession(client, sessionId);
-    if (Array.isArray(cartItems)) await writeGuestCart(client, ctx, cartItems);
+    if (Array.isArray(cartItems)) await writeGuestCart(client, ctx, cartItems, guestId);
     const fresh = await getSessionContext(sessionId, client);
     const pending = fresh.items.filter((i) => !i.is_locked);
     if (!pending.length) throw httpError(400, 'Корзина пуста — добавьте блюда из меню');
@@ -460,8 +516,8 @@ export async function submitToWaiter(sessionId, cartItems) {
       tableNumber: fresh.session.table_number,
       type: isReorder ? NOTIFY_TYPES.REORDER_INTENT : NOTIFY_TYPES.CART_READY,
       title: `Стол №${fresh.session.table_number}`,
-      body: `${isReorder ? 'Дозаказ' : 'Новый заказ'} от ${fresh.session.guest_name || 'гостя'}: `
-        + `${pending.map((i) => `${i.name} ×${i.quantity}`).join(', ')} — ${Math.round(sum)} ₽`,
+      body: `${isReorder ? 'Дозаказ' : 'Новый заказ'}: `
+        + `${pending.map((i) => `${i.name} ×${i.quantity}${i.guest_name ? ` (${i.guest_name})` : ''}`).join(', ')} — ${Math.round(sum)} ₽`,
       payload: { sessionId, itemsCount: pending.length, sum, isReorder },
     };
   });
@@ -667,34 +723,76 @@ export async function runServiceChecks() {
 
 /**
  * Статус заказа из iiko: статус заказа и статусы блюд на кухне.
+ * Когда блюдо стало «Готово» — официанту уведомление «пора выносить».
  * Оплату/закрытие по данным iiko не отмечаем (закрытие заказов из меню выключено).
+ * В демо-режиме (без ключа iiko) кухня имитируется по времени с отправки.
  */
+const DEMO_COOK_MS = parseInt(process.env.IIKO_DEMO_COOK_SEC || '45', 10) * 1000;
+
+function demoKitchenStatus(row) {
+  const t = Date.now() - new Date(row.sent_at || row.updated_at).getTime();
+  if (t < DEMO_COOK_MS / 3) return 'Added';
+  if (t < DEMO_COOK_MS) return 'CookingStarted';
+  return 'CookingCompleted';
+}
+
 export async function refreshFromIiko(sessionId) {
-  if (isIikoDemo()) return;
+  const demo = isIikoDemo();
   const ctx = await getSessionContext(sessionId);
   if (!ctx?.session.iiko_order_id || !ctx.session.sent_to_production_at) return;
   try {
-    const data = await getOrdersByIds(ctx.restaurant.organization_id, [ctx.session.iiko_order_id]);
-    const info = (data?.orders || [])[0];
-    const order = info?.order || info;
-    if (!order) return;
-    const items = (order.items || []).filter((i) => (i.type || 'Product') === 'Product');
-    // Для каждой позиции — наименее продвинутый статус среди строк iiko с этим блюдом
-    const byProduct = new Map();
-    for (const it of items) {
-      const pid = String(it.product?.id || it.productId || '');
-      if (!pid || !it.status) continue;
-      const prev = byProduct.get(pid);
-      if (!prev || KITCHEN_ORDER.indexOf(it.status) < KITCHEN_ORDER.indexOf(prev)) byProduct.set(pid, it.status);
+    const locked = ctx.items.filter((i) => i.is_locked && !i.served_at);
+    let orderStatus = null;
+    let statusOf;
+    if (demo) {
+      statusOf = demoKitchenStatus;
+      orderStatus = 'New';
+    } else {
+      const data = await getOrdersByIds(ctx.restaurant.organization_id, [ctx.session.iiko_order_id]);
+      const info = (data?.orders || [])[0];
+      const order = info?.order || info;
+      if (!order) return;
+      orderStatus = order.status || info?.creationStatus || null;
+      const items = (order.items || []).filter((i) => (i.type || 'Product') === 'Product');
+      // Для каждого блюда — наименее продвинутый статус среди строк iiko с этим блюдом
+      const byProduct = new Map();
+      for (const it of items) {
+        const pid = String(it.product?.id || it.productId || '');
+        if (!pid || !it.status) continue;
+        const prev = byProduct.get(pid);
+        if (!prev || KITCHEN_ORDER.indexOf(it.status) < KITCHEN_ORDER.indexOf(prev)) byProduct.set(pid, it.status);
+      }
+      statusOf = (row) => byProduct.get(String(row.iiko_product_id)) || null;
     }
-    for (const [pid, st] of byProduct) {
-      await pool.query(
-        `UPDATE table_order_items SET kitchen_status = $3
-         WHERE session_id = $1 AND iiko_product_id::text = $2 AND is_locked = TRUE`,
-        [sessionId, pid, st],
-      );
+
+    const ready = [];
+    for (const row of locked) {
+      const st = statusOf(row);
+      if (!st) continue;
+      if (st !== row.kitchen_status) {
+        await pool.query('UPDATE table_order_items SET kitchen_status = $2 WHERE id = $1 AND served_at IS NULL', [row.id, st]);
+      }
+      if (st === 'CookingCompleted' && !row.ready_notified_at) ready.push(row);
     }
-    const statuses = [...byProduct.values()];
+    if (ready.length) {
+      await pool.query('UPDATE table_order_items SET ready_notified_at = NOW() WHERE id = ANY($1::uuid[])', [ready.map((r) => r.id)]);
+      const t = ctx.session.table_number;
+      await createWaiterNotification({
+        restaurantId: ctx.restaurant.id,
+        sessionId,
+        tableNumber: t,
+        type: NOTIFY_TYPES.DISH_READY,
+        title: `Стол №${t} — готово, пора выносить`,
+        body: ready.map((r) => `${r.name} ×${r.quantity}${r.guest_name ? ` — ${r.guest_name}` : ''}${r.seat_number ? `, место ${r.seat_number}` : ''}`).join('; '),
+        payload: { sessionId, itemIds: ready.map((r) => r.id) },
+      });
+    }
+
+    const fresh = await pool.query(
+      'SELECT kitchen_status FROM table_order_items WHERE session_id = $1 AND is_locked = TRUE AND kitchen_status IS NOT NULL',
+      [sessionId],
+    );
+    const statuses = fresh.rows.map((r) => r.kitchen_status);
     let kitchen = null;
     if (statuses.length) {
       kitchen = statuses.reduce((min, st) => (KITCHEN_ORDER.indexOf(st) < KITCHEN_ORDER.indexOf(min) ? st : min));
@@ -702,16 +800,38 @@ export async function refreshFromIiko(sessionId) {
     await pool.query(
       `UPDATE table_sessions SET iiko_status = $2, kitchen_status = COALESCE($3, kitchen_status), iiko_status_at = NOW()
        WHERE id = $1`,
-      [sessionId, order.status || info?.creationStatus || null, kitchen],
+      [sessionId, orderStatus, kitchen],
     );
   } catch (e) {
     console.warn('refreshFromIiko:', e.response?.data?.errorDescription || e.message);
   }
 }
 
+/** Официант вынес блюда: отмечаем «Подано» (готовые позиции или переданные по id). */
+export async function markServed(sessionId, itemIds = null) {
+  const ids = Array.isArray(itemIds) && itemIds.length ? itemIds.map(String) : null;
+  await pool.query(
+    `UPDATE table_order_items SET kitchen_status = 'Served', served_at = NOW(), updated_at = NOW()
+     WHERE session_id = $1 AND is_locked = TRUE AND served_at IS NULL
+       AND ${ids ? 'id::text = ANY($2::text[])' : "kitchen_status = 'CookingCompleted'"}`,
+    ids ? [sessionId, ids] : [sessionId],
+  );
+  const { rows } = await pool.query(
+    `SELECT kitchen_status FROM table_order_items WHERE session_id = $1 AND is_locked = TRUE`,
+    [sessionId],
+  );
+  if (rows.length && rows.every((r) => r.kitchen_status === 'Served')) {
+    await pool.query(`UPDATE table_sessions SET kitchen_status = 'Served' WHERE id = $1`, [sessionId]);
+  }
+  await pool.query(
+    `UPDATE waiter_notifications SET is_read = TRUE WHERE session_id = $1 AND type = $2`,
+    [sessionId, NOTIFY_TYPES.DISH_READY],
+  );
+  return getSessionView(sessionId);
+}
+
 /** Фоновое обновление статусов кухни по всем открытым заказам из меню. */
 export async function refreshKitchenStatuses() {
-  if (isIikoDemo()) return;
   const { rows } = await pool.query(
     `SELECT id FROM table_sessions
      WHERE status = 'open' AND iiko_order_id IS NOT NULL AND sent_to_production_at IS NOT NULL`,

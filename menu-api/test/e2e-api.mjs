@@ -89,9 +89,9 @@ const guestItems = [line(p1, 1), line(p2, 1), line(p3, 1)];
 r = await api('POST', '/api/v1/table-order/cart', { sessionId: s.sessionId, items: guestItems }, G);
 assert.equal(r.status, 403); step('гость не может убрать блюда с кухни (403)');
 
-// 9. Дозаказ
+// 9. Дозаказ. У каждого гостя своя корзина: блюдо, добавленное официантом на место 2, в неё не входит
 s = ok(await api('POST', '/api/v1/table/submit-to-waiter', {
-  sessionId: s.sessionId, items: [line(p1, 3), line(p2, 1), line(p3, 1)],
+  sessionId: s.sessionId, items: [line(p1, 3), line(p2, 1)],
 }, G), 'reorder');
 assert.equal(s.workflowStatus, 'reorder_pending');
 assert.equal(s.items.filter((i) => i.isNew).length, 1);

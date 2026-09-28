@@ -132,6 +132,7 @@
     const fresh = notes.filter((n) => !n.is_read && !S.lastUnreadIds.has(n.id));
     if (S.lastUnreadIds.size && fresh.length) {
       beep();
+      if (fresh.some((n) => n.type === 'dish_ready')) { setTimeout(beep, 400); if (navigator.vibrate) navigator.vibrate([200, 100, 200]); }
       toast(`${fresh[0].title}: ${fresh[0].body}`);
     }
     S.lastUnreadIds = new Set(notes.filter((n) => !n.is_read).map((n) => n.id));
@@ -151,7 +152,10 @@
     if (!s || !S.edit) return '';
     const e = S.edit;
     const total = e.items.reduce((sum, i) => sum + i.price * i.quantity, 0);
-    const seats = Array.from({ length: Math.max(e.guestCount, 1) }, (_, i) => i + 1);
+    // Место = гость за столом (по порядку присоединения по QR)
+    const guestBySeat = new Map((s.guests || []).map((g) => [g.seat, g.name]));
+    const seats = Array.from({ length: Math.max(e.guestCount, (s.guests || []).length, 1) }, (_, i) => i + 1);
+    const seatLabel = (n) => (guestBySeat.has(n) ? `${n} · ${guestBySeat.get(n)}` : `Место ${n}`);
     const lockedByOther = s.lockedBy && s.lockedBy !== S.staff.id;
     const q = S.productSearch.trim().toLowerCase();
     const products = S.catalog?.products || [];
@@ -166,19 +170,22 @@
         <div>
           <div class="h2" style="margin-bottom:6px">Стол №${esc(s.tableNumber)} ${statusPill(s)}</div>
           <div class="muted">${s.guest ? `${esc(s.guest.name)} · ${esc(s.guest.phoneMasked || '')} · визитов: ${s.guest.visitsCount}` : 'Гость не идентифицирован'}
-            ${s.guestsAtTable > 1 ? ` · телефонов за столом: ${s.guestsAtTable}` : ''}</div>
+            </div>
+          ${(s.guests || []).length > 1 ? `<div class="muted" style="margin-top:4px">За столом: ${s.guests.map((g) => `<b>${g.seat}</b> ${esc(g.name)}`).join(', ')}</div>` : ''}
           <div class="muted" style="font-size:13px;margin-top:4px">Открыт ${time(s.createdAt)}${s.iikoOrderId ? ` · iiko ${esc(s.iikoOrderId.slice(0, 8))}…` : ''}${s.waitingMinutes != null ? ` · ждёт ${s.waitingMinutes} мин` : ''}</div>
         </div>
         <div class="field"><label>Гостей за столом</label>
           <div class="qty"><button class="icon-btn" data-guests="-1">−</button><b>${e.guestCount}</b><button class="icon-btn" data-guests="1">+</button></div></div>
       </div>
       ${lockedByOther ? '<div class="error-box">Стол сейчас редактирует другой официант</div>' : ''}
+      ${s.readyCount ? `<div class="ready-box"><span>🔔 Готово на кухне: ${s.items.filter((i) => i.isReady).map((i) => `${esc(i.name)} ×${i.quantity}${i.guestName ? ` — ${esc(i.guestName)}` : ''}`).join(', ')}</span>
+        <button class="btn btn--sm btn--dark" data-served>Вынесено</button></div>` : ''}
       ${s.iikoLastError ? `<div class="error-box"><b>Ошибка iiko:</b> ${esc(s.iikoLastError)}<br>Корзина сохранена — исправьте и нажмите «В работу» ещё раз.</div>` : ''}
       <div>${e.items.length ? e.items.map((it, idx) => `<div class="row ${it.isLocked ? '' : 'is-new'}">
         <div><div class="row__name">${esc(it.name)}</div>
-          <div class="row__meta">${rub(it.price)} · ${it.isLocked ? `${esc(it.kitchenLabel || 'на кухне')} (партия ${it.batchNo || 1})` : '<b style="color:var(--ok)">новое</b>'}</div></div>
+          <div class="row__meta">${rub(it.price)} · ${it.isLocked ? (it.isReady ? '<b class="ready">Готово — выносить</b>' : `${esc(it.kitchenLabel || 'на кухне')} (партия ${it.batchNo || 1})`) : '<b style="color:var(--ok)">новое</b>'}${it.guestName ? ` · ${esc(it.guestName)}` : ''}</div></div>
         <div class="row__opts">
-          <select class="sel" data-seat="${idx}" title="Место"><option value="">Место —</option>${seats.map((n) => `<option value="${n}" ${Number(it.seatNumber) === n ? 'selected' : ''}>Место ${n}</option>`).join('')}</select>
+          <select class="sel" data-seat="${idx}" title="Место"><option value="">Место —</option>${seats.map((n) => `<option value="${n}" ${Number(it.seatNumber) === n ? 'selected' : ''}>${esc(seatLabel(n))}</option>`).join('')}</select>
           <select class="sel" data-course="${idx}" title="Курс подачи" ${it.isLocked ? 'disabled' : ''}><option value="">Курс —</option>${[1, 2, 3].map((n) => `<option value="${n}" ${Number(it.course) === n ? 'selected' : ''}>Курс ${n}</option>`).join('')}</select>
         </div>
         <div class="qty">${it.isLocked ? `<b>${it.quantity}</b>` : `<button class="icon-btn" data-qty="${idx}" data-d="-1">−</button><b>${it.quantity}</b><button class="icon-btn" data-qty="${idx}" data-d="1">+</button>`}</div>
@@ -217,8 +224,8 @@
             <div class="h2">Активные столы <span class="muted" style="font-weight:400">${S.sessions.filter((s) => s.status === 'open').length}</span></div>
             <div class="tables">${S.sessions.length ? S.sessions.map((s) => `<button class="table-card ${S.openId === s.sessionId ? 'is-open' : ''}" data-open="${esc(s.sessionId)}">
               <div class="table-card__num">№${esc(s.tableNumber)} ${s.isOverdue ? '<span class="overdue">⏱ ' + s.waitingMinutes + ' мин</span>' : ''}</div>
-              ${statusPill(s)}${s.kitchenLabel ? ` <span class="pill" data-tone="work">Кухня: ${esc(s.kitchenLabel)}</span>` : ''}
-              <div class="table-card__guest">${esc(s.guest?.name || 'Гость')}${s.pendingCount ? ` · новых: ${s.pendingCount}` : ''}</div>
+              ${statusPill(s)}${s.readyCount ? ` <span class="pill" data-tone="bad">🔔 Готово: ${s.readyCount}</span>` : s.kitchenLabel ? ` <span class="pill" data-tone="work">Кухня: ${esc(s.kitchenLabel)}</span>` : ''}
+              <div class="table-card__guest">${esc((s.guests || []).length > 1 ? s.guests.map((g) => g.name).join(', ') : (s.guest?.name || 'Гость'))}${s.pendingCount ? ` · новых: ${s.pendingCount}` : ''}</div>
               <div class="table-card__sum"><span class="muted" style="font-weight:400">${s.items.length} поз.</span><span>${rub(s.total)}</span></div>
             </button>`).join('') : '<div class="muted">Нет активных столов. Когда гость отсканирует QR, стол появится здесь.</div>'}</div>
             ${editorHtml()}
@@ -536,6 +543,13 @@
       if (q('[data-hide-editor]')) {
         api('POST', `/api/v1/waiter/session/${S.openId}/release`).catch(() => {});
         S.openId = null; S.edit = null; render(); return;
+      }
+      if (q('[data-served]')) {
+        const s = await api('POST', `/api/v1/waiter/session/${S.openId}/served`);
+        const i = S.sessions.findIndex((x) => x.sessionId === S.openId);
+        if (i >= 0) S.sessions[i] = s;
+        if (!S.edit.dirty) S.edit = { items: s.items.map((it) => ({ ...it })), guestCount: s.guestCount, dirty: false };
+        toast('Отмечено: вынесено'); render(); return;
       }
       if (q('[data-guests]')) { S.edit.guestCount = Math.max(1, S.edit.guestCount + Number(q('[data-guests]').dataset.guests)); S.edit.dirty = true; render(); return; }
       if (q('[data-qty]')) {

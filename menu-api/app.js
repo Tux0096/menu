@@ -21,7 +21,7 @@ import {
 } from './services/guest-auth.js';
 import { audit, listStaff, saveStaff, staffAuth, staffLogin } from './services/staff-auth.js';
 import {
-  callWaiter, enterTable, getSessionView, payBill, refreshFromIiko, requestBill, resolveRestaurant,
+  assertGuestAtTable, callWaiter, enterTable, getSessionView, markServed, payBill, refreshFromIiko, requestBill, resolveRestaurant,
   refreshKitchenStatuses, runServiceChecks, saveGuestCart, submitFeedback, submitToWaiter, trackActivity,
 } from './services/table-session.js';
 import {
@@ -188,11 +188,25 @@ app.post('/api/v1/table/enter', guestAuth(), h(async (req) => {
     tableNumber: req.body.tableNumber,
     guest: req.guest,
     previousSessionId: req.body.previousSessionId,
+    join: req.body.join === true,
+    name: req.body.name,
   });
 }));
 
+// Гость работает только со столом, к которому присоединился
+const atTable = (from) => async (req, res, next) => {
+  try {
+    if (req.guest) await assertGuestAtTable(from(req), req.guest.id);
+    next();
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message, code: err.code });
+  }
+};
+const bySessionParam = atTable((req) => req.params.sessionId);
+const bySessionBody = atTable((req) => req.body?.sessionId || '');
+
 const iikoRefreshAt = new Map();
-app.get('/api/v1/table/session/:sessionId', guestAuth(), h(async (req) => {
+app.get('/api/v1/table/session/:sessionId', guestAuth(), bySessionParam, h(async (req) => {
   const last = iikoRefreshAt.get(req.params.sessionId) || 0;
   if (Date.now() - last > 30000) {
     iikoRefreshAt.set(req.params.sessionId, Date.now());
@@ -200,31 +214,31 @@ app.get('/api/v1/table/session/:sessionId', guestAuth(), h(async (req) => {
   }
   return getSessionView(req.params.sessionId);
 }));
-app.post('/api/v1/table/activity', guestAuth(), h(async (req) => {
+app.post('/api/v1/table/activity', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId');
   return trackActivity(req.body.sessionId);
 }));
-app.post('/api/v1/table-order/cart', guestAuth(), h(async (req) => {
+app.post('/api/v1/table-order/cart', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId', 'items');
-  return saveGuestCart(req.body.sessionId, req.body.items);
+  return saveGuestCart(req.body.sessionId, req.body.items, req.guest?.id || null);
 }));
-app.post('/api/v1/table/submit-to-waiter', guestAuth(), h(async (req) => {
+app.post('/api/v1/table/submit-to-waiter', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId');
-  return submitToWaiter(req.body.sessionId, req.body.items);
+  return submitToWaiter(req.body.sessionId, req.body.items, req.guest?.id || null);
 }));
-app.post('/api/v1/table/request-bill', guestAuth(), h(async (req) => {
+app.post('/api/v1/table/request-bill', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId');
   return requestBill(req.body.sessionId);
 }));
-app.post('/api/v1/table/call-waiter', guestAuth(), h(async (req) => {
+app.post('/api/v1/table/call-waiter', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId');
   return callWaiter(req.body.sessionId, req.body.reason, req.body.comment);
 }));
-app.post('/api/v1/table/guest-pay', guestAuth(), h(async (req) => {
+app.post('/api/v1/table/guest-pay', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId');
   return payBill(req.body.sessionId, { method: req.body.method, tipAmount: req.body.tipAmount });
 }));
-app.post('/api/v1/table/feedback', guestAuth(), h(async (req) => {
+app.post('/api/v1/table/feedback', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId', 'rating');
   return submitFeedback(req.body.sessionId, req.body);
 }));
@@ -273,6 +287,7 @@ waiter.post('/notifications/:id/read', h(async (req) => { await markNotification
 waiter.get('/sessions', h(async (req) => listActiveSessions((await staffRestaurant(req)).id)));
 waiter.get('/session/:id', h(async (req) => getSessionView(req.params.id)));
 waiter.post('/session/:id/take', h(async (req) => takeSession(req.params.id, req.staff)));
+waiter.post('/session/:id/served', h(async (req) => markServed(req.params.id, req.body?.itemIds)));
 waiter.post('/session/:id/release', h(async (req) => releaseSession(req.params.id, req.staff)));
 waiter.post('/session/:id/cart', h(async (req) => {
   const result = await updateOrder(req.params.id, req.staff, req.body || {});
@@ -387,7 +402,7 @@ app.get('*', (req, res) => res.sendFile(join(WEB_DIR, 'guest', 'index.html')));
 setInterval(() => runServiceChecks().catch((e) => console.warn('service checks:', e.message)), 30000);
 
 // Статусы блюд на кухне: вебхуки iiko + страховочный опрос
-setInterval(() => refreshKitchenStatuses().catch((e) => console.warn('kitchen statuses:', e.message)), 60000);
+setInterval(() => refreshKitchenStatuses().catch((e) => console.warn('kitchen statuses:', e.message)), parseInt(process.env.KITCHEN_POLL_MS || '20000', 10));
 
 // ── Меню и стоп-листы iiko ──────────────────────────────────────────────────
 // Меню хранится на сервере (БД + память) и отдаётся мгновенно. Полная перевыгрузка — раз в сутки
