@@ -20,7 +20,7 @@ a { color: inherit; }
 }
 .brand { font-weight: 700; letter-spacing: .04em; font-size: 20px; }
 .brand small { font-weight: 400; letter-spacing: 0; color: var(--muted); font-size: 13px; margin-left: 6px; }
-.tabs { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; flex: 1; }
+.tabs { display: flex; gap: 6px; overflow-x: auto; position: relative; scrollbar-width: none; flex: 1; }
 .tabs button { padding: 10px 16px; border-radius: var(--pill); white-space: nowrap; font-weight: 500; font-size: 14px; background: var(--card); box-shadow: var(--shadow); position: relative; }
 .tabs button.is-active { background: var(--ink); color: #fff; }
 .tabs { padding: 6px 4px; }
@@ -188,3 +188,33 @@ html, body { overflow-x: hidden; }
 .ready-box > span { min-width: 0; overflow-wrap: anywhere; }
 .row__meta .ready { color: #B26A00; }
 .note[data-type="dish_ready"].is-unread { border-left: 4px solid #F0A020; }
+
+/* Каркас не шире экрана: широкие таблицы и вкладки прокручиваются внутри, а не раздвигают страницу */
+.shell { grid-template-columns: minmax(0, 1fr); }
+.shell > *, .main > *, .card { min-width: 0; }
+.tabs::-webkit-scrollbar { display: none; }
+
+/* Телефон: таблицы админки — карточками, без прокрутки вбок */
+@media (max-width: 640px) {
+  .brand { font-size: 18px; }
+  .me { width: 100%; margin-left: 0; }
+  .me .sel { flex: 1; max-width: none; }
+  .toolbar > .inp, .toolbar > .sel { flex: 1 1 100%; }
+  .tbl--cards, .tbl--cards tbody { display: block; }
+  .tbl--cards tr:first-child:has(th) { display: none; }
+  .tbl--cards tr { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .tbl--cards tr:last-child { border-bottom: 0; }
+  .tbl--cards td { display: flex; align-items: center; gap: 8px; padding: 0; border: 0; max-width: 100% !important; }
+  .tbl--cards td[data-label]::before { content: attr(data-label); font-size: 12px; color: var(--muted); }
+  .tbl--cards td:empty { display: none; }
+  .tbl--cards .td-title, .tbl--cards .td-actions { flex-basis: 100%; }
+  .tbl--cards .td-title { font-weight: 600; }
+  /* меню: фото + название в первой строке, переключатели ниже */
+  .tbl--menu td:first-child { flex: 0 0 auto; }
+  .tbl--menu td:nth-child(2) { flex: 1 1 calc(100% - 160px); min-width: 0; display: block; }
+  .tbl--menu .td-actions { flex-basis: auto; margin-left: auto; }
+  .tbl--menu td:nth-child(2) b { overflow-wrap: anywhere; }
+  .tbl--menu td[data-label="Категория"] { display: none; }
+  .tbl--menu td[data-label="Цена"]::before { content: none; }
+  .tbl--menu td[data-label="Цена"] { font-weight: 600; }
+}
