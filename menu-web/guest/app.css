@@ -367,3 +367,64 @@ html, body { overflow-x: clip; }
 .line-item .course { flex-basis: 100%; margin-top: 0; }
 .tag--served { background: #EAF8F2; color: var(--ok); font-weight: 600; }
 .line-item.is-served .line-item__name { color: var(--muted); }
+
+/* ── Телефон: весь экран, без наложений ─────────────────── */
+.topbar__rest { width: 100%; max-width: 100%; }
+.topbar__rest > span { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 480px) {
+  .topbar { padding-left: 16px; padding-right: 16px; gap: 10px; }
+  .status-chip { max-width: 46%; padding: 7px 10px; font-size: 12px; }
+}
+/* Экран AI помещается в высоту телефона: меньше шар и отступы */
+@media (max-height: 900px) {
+  .ai-hero { gap: 28px; padding-top: 4vh; }
+  .ai-hero .orb--lg { width: 104px; height: 104px; }
+  .ai-hero__hello { margin-top: -18px; }
+  .ai-bottom { padding-top: 16px; }
+}
+@media (max-height: 720px) {
+  .ai-hero { gap: 18px; padding-top: 2vh; }
+  .ai-hero .orb--lg { width: 80px; height: 80px; }
+  .ai-hero h1 { font-size: 21px; }
+  .ai-hero__hello { margin-top: -10px; }
+}
+.screen--center { min-height: calc(100svh - 60px); }
+/* Приложение с главного экрана — без полос браузера, с учётом выреза камеры */
+@media (display-mode: standalone) {
+  .topbar { padding-top: calc(12px + var(--safe-t)); }
+}
+
+/* ── Плавность ───────────────────────────────────────────── */
+.topbar { background: rgba(245, 244, 249, .94); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); }
+.screen-enter { animation: screen-in .28s cubic-bezier(.2, .8, .2, 1) both; }
+@keyframes screen-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+.dish, .line-item, .card, .btn, .round-btn, .chip, .nav__btn { transition: transform .15s ease, background-color .2s, box-shadow .2s, opacity .2s; }
+.btn:active, .round-btn:active, .chip:active, .nav__btn:active { transform: scale(.96); }
+.badge { transition: transform .2s cubic-bezier(.2, .9, .3, 1.4); }
+img { transition: opacity .25s; }
+html { scroll-behavior: smooth; -webkit-tap-highlight-color: transparent; }
+
+/* ── Свайп «Передать официанту» (как в Яндексе) ──────────── */
+.swipe {
+  --p: 0; position: relative; margin-top: 16px; height: 72px; border-radius: var(--r-pill);
+  background: var(--ink); color: #fff; overflow: hidden; touch-action: pan-y; user-select: none; -webkit-user-select: none;
+  display: flex; align-items: center; cursor: grab;
+}
+.swipe__fill { position: absolute; inset: 0 auto 0 0; width: 0; background: linear-gradient(90deg, #3B3F9E, #6C63FF); border-radius: inherit; }
+.swipe__text {
+  position: relative; flex: 1; padding: 0 20px 0 92px; font-weight: 500; font-size: 16px; line-height: 1.25;
+  opacity: calc(1 - var(--p) * 1.4); transition: opacity .15s;
+}
+.swipe__text .btn__sub { display: block; font-size: 12px; opacity: .7; font-weight: 400; margin-top: 2px; }
+.swipe__knob {
+  position: absolute; left: 8px; top: 8px; width: 56px; height: 56px; border-radius: 50%; background: #fff; color: var(--ink);
+  display: grid; place-items: center; box-shadow: 0 2px 10px rgba(0, 0, 0, .2); touch-action: none; will-change: transform;
+}
+.swipe__knob svg { width: 24px; height: 24px; }
+.swipe:not(.is-done) .swipe__knob { animation: nudge 2.4s ease-in-out 1s infinite; }
+@keyframes nudge { 0%, 70%, 100% { transform: translateX(0); } 80% { transform: translateX(14px); } 90% { transform: translateX(0); } }
+.swipe.is-busy .swipe__knob { animation: none; }
+.swipe.is-done .swipe__text { opacity: 0; }
+.swipe.is-busy::after { content: 'Передаём…'; position: absolute; left: 0; right: 0; text-align: center; font-weight: 500; }
+@media (prefers-reduced-motion: reduce) { .swipe__knob, .screen-enter { animation: none !important; } }
+.swipe.is-dragging { cursor: grabbing; } .swipe.is-dragging .swipe__knob { animation: none; }

@@ -164,7 +164,6 @@
     if (delta > 0 && S.ai.query && S.tab === 'ai') {
       api('POST', '/api/v1/ai/feedback', { query: S.ai.query, productId: product.id }).catch(() => {});
     }
-    if (delta > 0 && navigator.vibrate) navigator.vibrate(8);
     scheduleCartSave();
     render();
   }
@@ -284,6 +283,16 @@
     api('POST', '/api/v1/table/activity', { sessionId: S.sessionId }).catch(() => {});
   }
   ['click', 'scroll', 'keydown'].forEach((ev) => addEventListener(ev, pingActivity, { passive: true }));
+
+  // Виброотклик на нажатия (Android; на iPhone браузер вибрацию не поддерживает)
+  let lastBuzz = 0;
+  addEventListener('click', (e) => {
+    if (!navigator.vibrate || Date.now() - lastBuzz < 60) return;
+    const el = e.target.closest('button, a, [data-go], [data-cat], [data-chip], .dish, label');
+    if (!el || el.disabled) return;
+    lastBuzz = Date.now();
+    try { navigator.vibrate(el.matches('[data-inc], .btn--dark, [data-action="submit"]') ? 25 : 12); } catch { /* нет вибро */ }
+  }, { passive: true, capture: true });
 
   function logout() {
     S.token = null; S.guest = null;
@@ -542,10 +551,13 @@
     if (!pending) return '';
     // Уже передано и с тех пор не менялось — повторно отправлять нечего
     if (WAITING_WAITER.includes(S.session?.workflowStatus) && !S.changedSinceSubmit) return '';
-    return `<button class="btn btn--dark" data-action="submit" style="margin-top:16px">
-      <span>${reorder ? 'Передать дозаказ' : 'Передать официанту'}<span class="btn__sub">${pending} ${plural(pending, ['позиция', 'позиции', 'позиций'])} · ${rub(cartTotal())}</span></span>
-      <span class="round-btn">${ICONS.arrowRight}</span>
-    </button>`;
+    // Свайп вправо, как в Яндексе: случайным касанием заказ не уйдёт
+    return `<div class="swipe" data-swipe="submit" role="button" tabindex="0"
+        aria-label="${reorder ? 'Передать дозаказ' : 'Передать официанту'} — проведите вправо">
+      <div class="swipe__fill"></div>
+      <div class="swipe__text">${reorder ? 'Передать дозаказ' : 'Передать официанту'}<span class="btn__sub">${pending} ${plural(pending, ['позиция', 'позиции', 'позиций'])} · ${rub(cartTotal())} · проведите →</span></div>
+      <div class="swipe__knob">${ICONS.arrowRight}</div>
+    </div>`;
   }
 
   // ── Экран: меню ────────────────────────────────────────────
@@ -844,7 +856,7 @@
   // ── Действия ───────────────────────────────────────────────
   async function submitToWaiter(btn) {
     if (!pendingCount()) { toast('Корзина пуста — добавьте блюда', true); return; }
-    if (btn) { btn.disabled = true; }
+    if (btn) { btn.disabled = true; btn.classList?.add('is-busy'); }
     clearTimeout(saveTimer);
     try {
       const session = await api('POST', '/api/v1/table/submit-to-waiter', { sessionId: S.sessionId, items: payloadItems() });
@@ -855,7 +867,7 @@
       go('order');
     } catch (e) {
       toast(e.network ? 'Нет связи. Корзина сохранена — попробуйте ещё раз' : e.message, true);
-      if (btn) btn.disabled = false;
+      if (btn) { btn.disabled = false; btn.classList?.remove('is-busy', 'is-done'); resetSwipe(btn); }
     }
   }
 
@@ -874,17 +886,112 @@
     scrollTo({ top: 0 });
   }
 
+  // ── Свайп «Передать официанту» ─────────────────────────────
+  function resetSwipe(el) {
+    const knob = el?.querySelector?.('.swipe__knob'); const fill = el?.querySelector?.('.swipe__fill');
+    if (!knob) return;
+    knob.style.transition = fill.style.transition = 'transform .35s cubic-bezier(.2,.9,.3,1.3), width .35s ease';
+    knob.style.transform = 'translateX(0)'; fill.style.width = '0px';
+    el.style.setProperty('--p', 0);
+  }
+  let drag = null;
+  addEventListener('pointerdown', (e) => {
+    const el = e.target.closest('[data-swipe]');
+    if (!el || el.classList.contains('is-busy')) return;
+    const knob = el.querySelector('.swipe__knob'); const fill = el.querySelector('.swipe__fill');
+    const max = el.clientWidth - knob.offsetWidth - 16;
+    drag = { el, knob, fill, max, x0: e.clientX, moved: 0 };
+    S.dragging = true;
+    knob.style.transition = fill.style.transition = 'none';
+    el.classList.add('is-dragging');
+    el.setPointerCapture?.(e.pointerId);
+  });
+  addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const dx = Math.max(0, Math.min(drag.max, e.clientX - drag.x0));
+    drag.moved = dx;
+    drag.knob.style.transform = `translateX(${dx}px)`;
+    drag.fill.style.width = `${dx + drag.knob.offsetWidth}px`;
+    drag.el.style.setProperty('--p', (dx / drag.max).toFixed(2));
+  });
+  const endDrag = () => {
+    if (!drag) return;
+    const { el, knob, fill, max, moved } = drag;
+    drag = null; S.dragging = false;
+    el.classList.remove('is-dragging');
+    if (moved >= max * 0.75) {
+      knob.style.transition = fill.style.transition = 'transform .2s ease, width .2s ease';
+      knob.style.transform = `translateX(${max}px)`; fill.style.width = '100%';
+      el.classList.add('is-done');
+      try { navigator.vibrate?.([20, 40, 30]); } catch { /* нет вибро */ }
+      submitToWaiter(el);
+    } else {
+      if (moved < 6) toast('Проведите кнопку вправо, чтобы передать заказ');
+      resetSwipe(el);
+    }
+  };
+  addEventListener('pointerup', endDrag);
+  addEventListener('pointercancel', endDrag);
+  addEventListener('keydown', (e) => {
+    const el = e.target.closest?.('[data-swipe]');
+    if (el && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); submitToWaiter(el); }
+  });
+
   // ── Рендер ─────────────────────────────────────────────────
+  /**
+   * Плавный рендер: вместо замены всей страницы обновляем только изменившиеся узлы
+   * (картинки не перезагружаются, прокрутка лент и фокус сохраняются, экран не дёргается).
+   */
+  function morph(from, to) {
+    if (from.nodeType !== to.nodeType || from.nodeName !== to.nodeName) { from.replaceWith(to); return to; }
+    if (from.nodeType === 3 || from.nodeType === 8) { if (from.nodeValue !== to.nodeValue) from.nodeValue = to.nodeValue; return from; }
+    if (from.nodeType !== 1) return from;
+    for (const { name } of [...from.attributes]) if (!to.hasAttribute(name)) from.removeAttribute(name);
+    for (const { name, value } of [...to.attributes]) if (from.getAttribute(name) !== value) from.setAttribute(name, value);
+    if ((from.tagName === 'INPUT' || from.tagName === 'TEXTAREA') && from !== document.activeElement && from.value !== to.value) from.value = to.value;
+    // Дети: по ключу (id / data-product / data-key), без ключа — по порядку с тем же тегом
+    const keyOf = (n) => (n.nodeType === 1 ? (n.id || n.getAttribute('data-product') || n.getAttribute('data-key') || null) : null);
+    const oldKids = [...from.childNodes];
+    const byKey = new Map();
+    for (const n of oldKids) { const k = keyOf(n); if (k && !byKey.has(k)) byKey.set(k, n); }
+    const used = new Set();
+    const result = [];
+    let pos = 0;
+    for (const next of [...to.childNodes]) {
+      const k = keyOf(next);
+      let match = null;
+      if (k) {
+        const m = byKey.get(k);
+        if (m && !used.has(m)) match = m;
+      } else {
+        while (pos < oldKids.length && (used.has(oldKids[pos]) || keyOf(oldKids[pos]))) pos++;
+        if (pos < oldKids.length && oldKids[pos].nodeName === next.nodeName) match = oldKids[pos++];
+      }
+      if (match) { used.add(match); result.push(morph(match, next)); } else result.push(next);
+    }
+    result.forEach((node, i) => { if (from.childNodes[i] !== node) from.insertBefore(node, from.childNodes[i] || null); });
+    while (from.childNodes.length > result.length) from.lastChild.remove();
+    return from;
+  }
+
+  let lastHtml = '';
+  let lastTab = null;
   function render() {
+    if (S.dragging) return; // не мешаем свайпу
     const app = $('#app');
-    const active = document.activeElement?.id;
-    const caret = document.activeElement?.selectionStart;
-    const html = S.tab === 'menu' ? renderMenu() : S.tab === 'order' ? renderOrder() : renderAi();
-    app.innerHTML = html + nav();
+    const html = (S.tab === 'menu' ? renderMenu() : S.tab === 'order' ? renderOrder() : renderAi()) + nav();
+    const tabChanged = lastTab !== S.tab;
+    lastTab = S.tab;
     S.aiFresh = false;
-    if (active) {
-      const el = document.getElementById(active);
-      if (el) { el.focus(); try { el.setSelectionRange(caret, caret); } catch { /* not text */ } }
+    if (html === lastHtml) return; // ничего не изменилось — экран не трогаем
+    lastHtml = html;
+    const tpl = document.createElement('div');
+    tpl.innerHTML = html;
+    if (tabChanged || !app.firstChild) {
+      app.replaceChildren(...tpl.childNodes);
+      app.querySelector('main')?.classList.add('screen-enter');
+    } else {
+      morph(app, Object.assign(app.cloneNode(false), { innerHTML: html }));
     }
   }
 
