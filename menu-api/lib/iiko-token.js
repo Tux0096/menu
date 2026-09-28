@@ -7,7 +7,11 @@ export const IIKO_URL = process.env.IIKO_URL || 'https://api-ru.iiko.services';
  * /api/v2/access_token и требуют секрет клиента (IIKO_CLIENT_SECRET); старые — /api/1/access_token.
  * Пробуем v2, затем v1.
  */
-export async function requestIikoToken(apiLogin, clientSecret = process.env.IIKO_CLIENT_SECRET) {
+export async function requestIikoToken(
+  apiLogin,
+  // Секрет клиента ключа: IIKO_CLIENT_SECRET, либо IIKO_MENU_CLIENT_SECRET (один ключ на заказы и меню)
+  clientSecret = process.env.IIKO_CLIENT_SECRET || process.env.IIKO_MENU_CLIENT_SECRET,
+) {
   if (!apiLogin) throw new Error('IIKO_API_LOGIN не задан');
   const errors = [];
   const attempts = [
