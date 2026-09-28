@@ -66,8 +66,23 @@ async function getToken() {
       'Добавь в menu-api/.env: IIKO_API_LOGIN=<твой-ключ>'
     );
   }
-  console.log('Получаем токен iiko...');
+  console.log(`Получаем токен iiko (ключ ${maskKey(apiLogin)})...`);
   return requestIikoToken(apiLogin);
+}
+
+export function maskKey(k) {
+  return k ? `${k.slice(0, 4)}…${k.slice(-2)} (${k.length} симв.)` : 'не задан';
+}
+
+/**
+ * Токен для внешнего меню. Меню может быть подключено к отдельному API-логину
+ * (IIKO_MENU_API_LOGIN / IIKO_MENU_CLIENT_SECRET) — заказы при этом идут основным ключом.
+ */
+async function getMenuToken(mainToken) {
+  const login = process.env.IIKO_MENU_API_LOGIN;
+  if (!login || login === process.env.IIKO_API_LOGIN) return mainToken;
+  console.log(`Ключ для внешнего меню: ${maskKey(login)}`);
+  return requestIikoToken(login, process.env.IIKO_MENU_CLIENT_SECRET || process.env.IIKO_CLIENT_SECRET);
 }
 
 async function iikoPostRaw(token, path, body) {
@@ -177,32 +192,63 @@ async function upsertIikoGroups(client, groups, products) {
   }
 }
 
-/** Внешние меню iiko, подключённые к ключу; выбор — IIKO_EXTERNAL_MENU (id/часть названия) или «Ресторанное меню». */
+/**
+ * Внешнее меню iiko. IIKO_EXTERNAL_MENU_ID — брать меню по ID напрямую;
+ * иначе из списка меню ключа: IIKO_EXTERNAL_MENU (id/часть названия), «ресторан/зал/qr» или единственное.
+ */
 async function pickExternalMenu(token) {
+  const directId = String(process.env.IIKO_EXTERNAL_MENU_ID || '').trim();
+  let menus = [];
   try {
     const data = await iikoPostRaw(token, '/api/2/menu', {});
-    const menus = data.externalMenus || [];
-    console.log(`Внешние меню iiko: ${menus.length ? menus.map((m) => `${m.name} [${m.id}]`).join('; ') : 'нет (подключите «Ресторанное меню» к интеграции ключа)'}`);
-    const want = String(process.env.IIKO_EXTERNAL_MENU || '').toLowerCase();
-    const menu = want
-      ? menus.find((m) => String(m.id) === want || String(m.name).toLowerCase().includes(want))
-      : menus.find((m) => /ресторан|зал|qr/i.test(m.name)) || (menus.length === 1 ? menus[0] : null);
-    if (menu) console.log(`Используем внешнее меню «${menu.name}» [${menu.id}]`);
-    return menu || null;
+    menus = data.externalMenus || [];
+    console.log(`Внешние меню iiko: ${menus.length ? menus.map((m) => `${m.name} [${m.id}]`).join('; ') : 'нет'}`
+      + ` · ценовых категорий: ${(data.priceCategories || []).length} · поля ответа: ${Object.keys(data || {}).join(', ')}`);
   } catch (e) {
-    console.log('Внешние меню iiko: не удалось получить —', e.response?.status || '', e.response?.data?.errorDescription || e.message);
-    return null;
+    console.log('Внешние меню iiko: не удалось получить —', e.response?.status || '', JSON.stringify(e.response?.data || e.message).slice(0, 300));
   }
+  if (directId) {
+    const m = menus.find((x) => String(x.id) === directId) || { id: directId, name: `#${directId}` };
+    console.log(`Используем внешнее меню по ID из настроек: «${m.name}» [${m.id}]`);
+    return m;
+  }
+  const want = String(process.env.IIKO_EXTERNAL_MENU || '').toLowerCase();
+  const menu = want
+    ? menus.find((m) => String(m.id) === want || String(m.name).toLowerCase().includes(want))
+    : menus.find((m) => /ресторан|зал|qr/i.test(m.name)) || (menus.length === 1 ? menus[0] : null);
+  if (menu) console.log(`Используем внешнее меню «${menu.name}» [${menu.id}]`);
+  else {
+    console.log('ВНИМАНИЕ: внешнее меню не найдено. Проверьте, что меню подключено к этому API-логину'
+      + ' (или задайте IIKO_MENU_API_LOGIN — ключ, к которому подключено меню, и/или IIKO_EXTERNAL_MENU_ID)');
+  }
+  return menu || null;
 }
 
-/** Меню ресторана из внешнего меню iiko: цены и доступность — для организации ресторана. */
-async function syncFromExternalMenu(restaurant, token, menu, organizationId) {
-  const data = await iikoPostRaw(token, '/api/2/menu/by_id', {
+async function requestExternalMenu(token, menu, organizationIds) {
+  return iikoPostRaw(token, '/api/2/menu/by_id', {
     externalMenuId: String(menu.id),
-    organizationIds: [organizationId],
+    organizationIds,
     version: 2,
     language: 'ru',
   });
+}
+
+/** Цена позиции для организации: prices[] бывает с organizationId или со списком organizations. */
+function priceForOrg(prices, organizationId) {
+  const list = prices || [];
+  for (const p of list) {
+    const orgsOf = p.organizations || (p.organizationId ? [p.organizationId] : null);
+    if (orgsOf && !orgsOf.includes(organizationId)) continue;
+    if (!orgsOf && list.length > 1) continue;
+    const v = Number(p.price ?? p.currentPrice ?? 0);
+    if (v > 0) return v;
+  }
+  return 0;
+}
+
+/** Меню ресторана из внешнего меню iiko: цены и доступность — для организации ресторана. */
+async function syncFromExternalMenu(restaurant, token, menu, organizationId, preloaded = null) {
+  const data = preloaded || await requestExternalMenu(token, menu, [organizationId]);
   const categories = data.itemCategories || data.categories || [];
   const rows = [];
   for (const [ci, cat] of categories.entries()) {
@@ -211,9 +257,7 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId) {
       if (item.isHidden) continue;
       const size = (item.itemSizes || []).find((z) => z.isDefault) || (item.itemSizes || [])[0];
       if (!size) continue;
-      const prices = size.prices || [];
-      const priceRow = prices.find((p) => p.organizationId === organizationId) || (prices.length === 1 ? prices[0] : null);
-      const price = Number(priceRow?.price ?? 0);
+      const price = priceForOrg(size.prices, organizationId);
       if (!(price > 0)) continue; // блюдо не продаётся в этом ресторане
       const n = size.nutritionPerHundredGrams || size.nutritions?.[0] || {};
       rows.push({
@@ -272,7 +316,7 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId) {
   return rows.length;
 }
 
-async function syncRestaurant(restaurant, token, orgs = [], externalMenu = null) {
+async function syncRestaurant(restaurant, token, orgs = [], externalMenu = null, menuToken = token, menuData = null) {
   const { id: restaurantId, slug, name } = restaurant;
   let organizationId = restaurant.organization_id;
 
@@ -284,12 +328,17 @@ async function syncRestaurant(restaurant, token, orgs = [], externalMenu = null)
   console.log(`→ ${name} (${slug})`);
   console.log(`  organizationId: ${organizationId}`);
 
+  // Источник меню — внешнее меню iiko. Номенклатура — только если внешнее меню не подключено.
   if (externalMenu) {
     try {
-      const n = await syncFromExternalMenu(restaurant, token, externalMenu, organizationId);
+      const n = await syncFromExternalMenu(restaurant, menuToken, externalMenu, organizationId, menuData);
       if (n) return { products: n };
+      console.log('  ! во внешнем меню нет блюд с ценой для этого ресторана — оставляем прежнюю выгрузку'
+        + ' (проверьте ценовую категорию/организацию во внешнем меню)');
+      return { products: 0, error: 'external menu empty' };
     } catch (e) {
-      console.log(`  ! внешнее меню: ${e.response?.status || ''} ${e.response?.data?.errorDescription || e.message}`);
+      console.log(`  ! внешнее меню: ${e.response?.status || ''} ${JSON.stringify(e.response?.data?.errorDescription || e.response?.data || e.message).slice(0, 300)}`);
+      return { products: 0, error: e.message };
     }
   }
 
@@ -434,13 +483,27 @@ export async function syncAllRestaurants(slugArg = null) {
   } catch (e) {
     console.log('  ! не удалось получить список организаций:', e.message);
   }
-  const externalMenu = await pickExternalMenu(token);
+  const menuToken = await getMenuToken(token);
+  const externalMenu = await pickExternalMenu(menuToken);
+  // Внешнее меню — одним запросом на все рестораны (цены в нём по организациям): меньше запросов, нет 429
+  let menuData = null;
+  if (externalMenu) {
+    const orgIds = [...new Set(restaurants.map((r) => r.organization_id).filter(Boolean))];
+    try {
+      menuData = await requestExternalMenu(menuToken, externalMenu, orgIds);
+      const cats = menuData.itemCategories || menuData.categories || [];
+      console.log(`Внешнее меню «${externalMenu.name}»: категорий ${cats.length}, позиций ${cats.reduce((n, c) => n + (c.items || []).length, 0)}`);
+    } catch (e) {
+      console.log('  ! внешнее меню одним запросом не получено, запрашиваем по ресторанам:',
+        e.response?.status || '', JSON.stringify(e.response?.data?.errorDescription || e.message).slice(0, 200));
+    }
+  }
   let totalProducts = 0;
   let failed = 0;
   for (const [idx, r] of restaurants.entries()) {
-    if (idx) await new Promise((res) => setTimeout(res, 6000)); // iiko ограничивает частоту запросов (429)
+    if (idx && !menuData) await new Promise((res) => setTimeout(res, 6000)); // iiko ограничивает частоту запросов (429)
     try {
-      const res = await syncRestaurant(r, token, orgs, externalMenu);
+      const res = await syncRestaurant(r, token, orgs, externalMenu, menuToken, menuData);
       totalProducts += res.products || 0;
       if (res.error) failed++;
     } catch (e) {
