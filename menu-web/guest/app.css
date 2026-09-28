@@ -428,3 +428,11 @@ html { scroll-behavior: smooth; -webkit-tap-highlight-color: transparent; }
 .swipe.is-busy::after { content: 'Передаём…'; position: absolute; left: 0; right: 0; text-align: center; font-weight: 500; }
 @media (prefers-reduced-motion: reduce) { .swipe__knob, .screen-enter { animation: none !important; } }
 .swipe.is-dragging { cursor: grabbing; } .swipe.is-dragging .swipe__knob { animation: none; }
+
+/* Шторка: плавное закрытие */
+.sheet-backdrop { transition: background-color .22s, opacity .22s; }
+.sheet-backdrop.is-closing { opacity: 0; }
+.sheet { touch-action: pan-y; will-change: transform; }
+.sheet__grip { cursor: grab; }
+/* Полноэкранный режим: учесть вырез камеры и системные панели */
+.is-fullscreen .topbar { padding-top: calc(14px + var(--safe-t)); }

@@ -23,6 +23,8 @@ import {
   matchTableIdFromSections,
 } from '../iiko-client.js';
 import { createWaiterNotification } from './waiter-notifications.js';
+import { getSource, productSourceMap } from './sources.js';
+import { withIikoCreds } from '../iiko-client.js';
 
 export function httpError(status, message, extra = {}) {
   const err = new Error(message);
@@ -65,11 +67,13 @@ export async function resolveRestaurant(slug) {
   return restaurant;
 }
 
-export async function resolveIikoTableId(restaurant, tableNumber) {
+export async function resolveIikoTableId(restaurant, tableNumber, source = 'main') {
+  // Кэш столов: для доп. источника (бар — другая организация iiko) ключ «код:номер»
+  const cacheKey = source && source !== 'main' ? `${source}:${tableNumber}` : String(tableNumber);
   const { rows: cached } = await pool.query(
     `SELECT iiko_table_id FROM restaurant_table_cache
      WHERE restaurant_id = $1 AND table_number = $2`,
-    [restaurant.id, String(tableNumber)],
+    [restaurant.id, cacheKey],
   );
   if (cached[0]?.iiko_table_id) return cached[0].iiko_table_id;
   if (isIikoDemo()) return null;
@@ -82,7 +86,7 @@ export async function resolveIikoTableId(restaurant, tableNumber) {
        VALUES ($1, $2, $3, $4)
        ON CONFLICT (restaurant_id, table_number) DO UPDATE SET
          iiko_table_id = EXCLUDED.iiko_table_id, updated_at = NOW()`,
-      [restaurant.id, String(tableNumber), tableId, `Стол ${tableNumber}`],
+      [restaurant.id, cacheKey, tableId, `Стол ${tableNumber}`],
     );
   }
   return tableId;
@@ -151,6 +155,7 @@ function mapItem(row) {
     seatNumber: row.seat_number || null,
     guestId: row.guest_id || null,
     guestName: row.guest_name || null,
+    source: row.source || 'main',
     course: row.course || null,
     batchNo: row.batch_no,
     isLocked: row.is_locked,
@@ -436,6 +441,7 @@ async function writeGuestCart(client, ctx, cartItems, guestId) {
   const prevPending = new Map(items.filter((i) => !i.is_locked).map((i) => [String(i.iiko_product_id), i]));
   await client.query('DELETE FROM table_order_items WHERE session_id = $1 AND is_locked = FALSE AND guest_id IS NOT DISTINCT FROM $2::uuid', [session.id, guestId]);
   const nextBatch = Math.max(0, ...ctx.items.filter((i) => i.is_locked).map((i) => i.batch_no)) + 1;
+  const sources = await productSourceMap(ctx.restaurant.id, [...incoming.keys()]);
 
   for (const [key, line] of incoming) {
     const pendingQty = line.quantity - (lockedQty.get(key) || 0);
@@ -444,11 +450,11 @@ async function writeGuestCart(client, ctx, cartItems, guestId) {
     await client.query(
       `INSERT INTO table_order_items
          (session_id, product_id, iiko_product_id, name, price, quantity, line_total, seat_number, course, batch_no, is_locked,
-          guest_id, guest_name)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12)`,
+          guest_id, guest_name, source)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12,$13)`,
       [session.id, line.productId, key, line.name, line.price, pendingQty, line.price * pendingQty,
         prev?.seat_number || me?.seat || null, line.course !== undefined ? line.course : (prev?.course || null), nextBatch,
-        guestId, me?.name || null],
+        guestId, me?.name || null, sources.get(key) || 'main'],
     );
   }
   return recalcTotal(client, session.id);
@@ -739,7 +745,9 @@ function demoKitchenStatus(row) {
 export async function refreshFromIiko(sessionId) {
   const demo = isIikoDemo();
   const ctx = await getSessionContext(sessionId);
-  if (!ctx?.session.iiko_order_id || !ctx.session.sent_to_production_at) return;
+  const orders = { ...(ctx?.session.iiko_orders || {}) };
+  if (ctx?.session.iiko_order_id && !orders.main) orders.main = { orderId: ctx.session.iiko_order_id };
+  if (!ctx || !Object.keys(orders).length || !ctx.session.sent_to_production_at) return;
   try {
     const locked = ctx.items.filter((i) => i.is_locked && !i.served_at);
     let orderStatus = null;
@@ -748,21 +756,29 @@ export async function refreshFromIiko(sessionId) {
       statusOf = demoKitchenStatus;
       orderStatus = 'New';
     } else {
-      const data = await getOrdersByIds(ctx.restaurant.organization_id, [ctx.session.iiko_order_id]);
-      const info = (data?.orders || [])[0];
-      const order = info?.order || info;
-      if (!order) return;
-      orderStatus = order.status || info?.creationStatus || null;
-      const items = (order.items || []).filter((i) => (i.type || 'Product') === 'Product');
-      // Для каждого блюда — наименее продвинутый статус среди строк iiko с этим блюдом
-      const byProduct = new Map();
-      for (const it of items) {
-        const pid = String(it.product?.id || it.productId || '');
-        if (!pid || !it.status) continue;
-        const prev = byProduct.get(pid);
-        if (!prev || KITCHEN_ORDER.indexOf(it.status) < KITCHEN_ORDER.indexOf(prev)) byProduct.set(pid, it.status);
+      // Заказ каждого источника (кухня, бар) — в своём iiko
+      const maps = new Map();
+      for (const [code, o] of Object.entries(orders)) {
+        if (!o?.orderId) continue;
+        const src = await getSource(ctx.restaurant, code);
+        const data = await withIikoCreds(src.creds, () => getOrdersByIds(src.organization_id, [o.orderId]));
+        const info = (data?.orders || [])[0];
+        const order = info?.order || info;
+        if (!order) continue;
+        if (code === 'main' || !orderStatus) orderStatus = order.status || info?.creationStatus || null;
+        const items = (order.items || []).filter((i) => (i.type || 'Product') === 'Product');
+        // Для каждого блюда — наименее продвинутый статус среди строк iiko с этим блюдом
+        const byProduct = new Map();
+        for (const it of items) {
+          const pid = String(it.product?.id || it.productId || '');
+          if (!pid || !it.status) continue;
+          const prev = byProduct.get(pid);
+          if (!prev || KITCHEN_ORDER.indexOf(it.status) < KITCHEN_ORDER.indexOf(prev)) byProduct.set(pid, it.status);
+        }
+        maps.set(code, byProduct);
       }
-      statusOf = (row) => byProduct.get(String(row.iiko_product_id)) || null;
+      if (!maps.size) return;
+      statusOf = (row) => maps.get(row.source || 'main')?.get(String(row.iiko_product_id)) || null;
     }
 
     const ready = [];
@@ -834,7 +850,7 @@ export async function markServed(sessionId, itemIds = null) {
 export async function refreshKitchenStatuses() {
   const { rows } = await pool.query(
     `SELECT id FROM table_sessions
-     WHERE status = 'open' AND iiko_order_id IS NOT NULL AND sent_to_production_at IS NOT NULL`,
+     WHERE status = 'open' AND (iiko_order_id IS NOT NULL OR iiko_orders <> '{}'::jsonb) AND sent_to_production_at IS NOT NULL`,
   );
   for (const r of rows) await refreshFromIiko(r.id);
 }

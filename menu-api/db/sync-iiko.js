@@ -15,7 +15,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import axios from 'axios';
 import { default as pool } from './pool.js';
-import { iikoApiLogin, maskIikoKey, requestIikoToken } from '../lib/iiko-token.js';
+import { iikoApiLogin, maskIikoKey, requestIikoToken, requestIikoTokenFor } from '../lib/iiko-token.js';
 
 const IIKO_URL = process.env.IIKO_URL || 'https://api-ru.iiko.services';
 
@@ -181,8 +181,8 @@ async function upsertIikoGroups(client, groups, products) {
  * Внешнее меню iiko. IIKO_EXTERNAL_MENU_ID — брать меню по ID напрямую;
  * иначе из списка меню ключа: IIKO_EXTERNAL_MENU (id/часть названия), «ресторан/зал/qr» или единственное.
  */
-async function pickExternalMenu(token) {
-  const directId = String(process.env.IIKO_EXTERNAL_MENU_ID || '').trim();
+async function pickExternalMenu(token, { directId: forcedId = null, prefer = /ресторан|зал|qr/i, fromEnv = true } = {}) {
+  const directId = String(forcedId || (fromEnv ? process.env.IIKO_EXTERNAL_MENU_ID : '') || '').trim();
   let menus = [];
   try {
     const data = await iikoPostRaw(token, '/api/2/menu', {});
@@ -197,10 +197,10 @@ async function pickExternalMenu(token) {
     console.log(`Используем внешнее меню по ID из настроек: «${m.name}» [${m.id}]`);
     return m;
   }
-  const want = String(process.env.IIKO_EXTERNAL_MENU || '').toLowerCase();
+  const want = String((fromEnv && process.env.IIKO_EXTERNAL_MENU) || '').toLowerCase();
   const menu = want
     ? menus.find((m) => String(m.id) === want || String(m.name).toLowerCase().includes(want))
-    : menus.find((m) => /ресторан|зал|qr/i.test(m.name)) || (menus.length === 1 ? menus[0] : null);
+    : menus.find((m) => prefer.test(m.name)) || (menus.length === 1 ? menus[0] : null);
   if (menu) console.log(`Используем внешнее меню «${menu.name}» [${menu.id}]`);
   else {
     console.log('ВНИМАНИЕ: внешнее меню не найдено. Проверьте, что меню подключено к этому API-логину'
@@ -232,7 +232,7 @@ function priceForOrg(prices, organizationId) {
 }
 
 /** Меню ресторана из внешнего меню iiko: цены и доступность — для организации ресторана. */
-async function syncFromExternalMenu(restaurant, token, menu, organizationId, preloaded = null) {
+async function syncFromExternalMenu(restaurant, token, menu, organizationId, preloaded = null, source = 'main') {
   const data = preloaded || await requestExternalMenu(token, menu, [organizationId]);
   const categories = data.itemCategories || data.categories || [];
   const rows = [];
@@ -278,16 +278,17 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
         [r.category.id, r.category.name, r.category.id, r.category.order],
       );
     }
-    await client.query('DELETE FROM products WHERE restaurant_id = $1', [restaurant.id]);
+    // Меню каждого источника (кухня, бар…) перезаписывается отдельно
+    await client.query('DELETE FROM products WHERE restaurant_id = $1 AND source = $2', [restaurant.id, source]);
     for (const r of rows) {
       await client.query(
         `INSERT INTO products
            (iiko_id, restaurant_id, name, slug, description, price, weight, image_url,
-            category_id, sort_order, is_published, energy, proteins, fats, carbs)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,$11,$12,$13,$14)
+            category_id, sort_order, is_published, energy, proteins, fats, carbs, source)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,$11,$12,$13,$14,$15)
          ON CONFLICT (restaurant_id, iiko_id) DO NOTHING`,
         [r.id, restaurant.id, r.name, r.name, r.description, r.price, r.weight, r.image,
-          r.category.id, r.order, r.energy, r.proteins, r.fats, r.carbs],
+          r.category.id, (source === 'main' ? 0 : 100000) + r.order, r.energy, r.proteins, r.fats, r.carbs, source],
       );
     }
     await client.query('COMMIT');
@@ -387,7 +388,7 @@ async function syncRestaurant(restaurant, token, orgs = [], externalMenu = null,
     await ensureCategoriesMerged(client, iikoGroupMap);
     if (useIikoGroups) await upsertIikoGroups(client, groups, relevantProducts);
 
-    await client.query(`DELETE FROM products WHERE restaurant_id = $1`, [restaurantId]);
+    await client.query(`DELETE FROM products WHERE restaurant_id = $1 AND source = 'main'`, [restaurantId]);
 
     let inserted = 0;
     for (const [i, p] of relevantProducts.entries()) {
@@ -503,8 +504,39 @@ export async function syncAllRestaurants(slugArg = null) {
       console.error(`  ! ошибка по ${r.slug}: ${e.message}`);
     }
   }
+  const extra = await syncExtraSources(restaurants);
+  totalProducts += extra.products;
+  failed += extra.failed;
   console.log(`✓ Готово. Ресторанов: ${restaurants.length}, всего продуктов: ${totalProducts}, ошибок: ${failed}`);
   return { restaurants: restaurants.length, products: totalProducts, failed };
+}
+
+/** Дополнительные источники (например, бар с алкоголем в другой организации/аккаунте iiko). */
+async function syncExtraSources(restaurants) {
+  const ids = restaurants.map((r) => r.id);
+  const { rows: sources } = await pool.query(
+    `SELECT * FROM restaurant_sources WHERE is_enabled AND restaurant_id = ANY($1::uuid[]) ORDER BY sort_order`,
+    [ids],
+  );
+  let products = 0;
+  let failed = 0;
+  for (const src of sources) {
+    const r = restaurants.find((x) => x.id === src.restaurant_id);
+    console.log(`→ ${r.name} · источник «${src.name}» (${src.code}, org ${src.organization_id}${src.creds ? `, ключ ${src.creds}` : ''})`);
+    try {
+      const token = await requestIikoTokenFor(src.creds);
+      const menu = await pickExternalMenu(token, { directId: src.external_menu_id, prefer: /бар|алко|напит/i, fromEnv: false });
+      if (!menu) { failed++; continue; }
+      const data = await requestExternalMenu(token, menu, [src.organization_id]);
+      const n = await syncFromExternalMenu(r, token, menu, src.organization_id, data, src.code);
+      if (!n) console.log('  ! во внешнем меню нет блюд с ценой для этой организации — прежняя выгрузка сохраняется');
+      products += n || 0;
+    } catch (e) {
+      failed++;
+      console.log(`  ! источник «${src.name}»: ${e.response?.status || ''} ${JSON.stringify(e.response?.data?.errorDescription || e.message).slice(0, 300)}`);
+    }
+  }
+  return { products, failed };
 }
 
 if (process.argv[1] && process.argv[1].endsWith('sync-iiko.js')) {

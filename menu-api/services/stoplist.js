@@ -4,7 +4,8 @@
  */
 import { createHmac } from 'crypto';
 import pool from '../db/pool.js';
-import { accessibleOrgIds, iikoRequest, isIikoDemo } from '../iiko-client.js';
+import { accessibleOrgIds, iikoRequest, isIikoDemo, withIikoCreds } from '../iiko-client.js';
+import { allOrgTargets } from './sources.js';
 import { PUBLIC_MENU_URL } from '../lib/qr-config.js';
 
 const memory = new Map(); // restaurantId -> Set(productId)
@@ -32,49 +33,53 @@ export async function getStopListIds(restaurantId) {
  */
 export async function refreshStopLists(orgIds = null) {
   if (isIikoDemo()) return 0;
-  const { rows: restaurants } = await pool.query(
-    `SELECT id, slug, organization_id, terminal_group_id FROM restaurants
-     WHERE is_disabled = FALSE AND organization_id IS NOT NULL`,
-  );
-  const allowed = await accessibleOrgIds();
-  const targets = restaurants.filter((r) => (!orgIds || orgIds.includes(r.organization_id))
-    && (!allowed || allowed.has(r.organization_id)));
-  if (!targets.length) return 0;
-  const orgs = [...new Set(targets.map((r) => r.organization_id))];
-  const data = await iikoRequest('/api/1/stop_lists', { organizationIds: orgs });
-
-  const byOrg = new Map();
-  for (const org of data?.terminalGroupStopLists || []) byOrg.set(org.organizationId, org.items || []);
-
-  for (const r of targets) {
-    const groups = byOrg.get(r.organization_id) || [];
-    const items = [];
-    for (const g of groups) {
-      if (r.terminal_group_id && g.terminalGroupId && g.terminalGroupId !== r.terminal_group_id) continue;
-      for (const it of g.items || []) items.push({ productId: String(it.productId), balance: Number(it.balance) || 0 });
-    }
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-      await client.query('DELETE FROM stop_lists WHERE restaurant_id = $1', [r.id]);
-      for (const it of items) {
-        await client.query(
-          `INSERT INTO stop_lists (restaurant_id, product_id, balance) VALUES ($1, $2, $3)
-           ON CONFLICT (restaurant_id, product_id) DO UPDATE SET balance = EXCLUDED.balance, updated_at = NOW()`,
-          [r.id, it.productId, it.balance],
-        );
-      }
-      await client.query('COMMIT');
-    } catch (e) {
-      await client.query('ROLLBACK');
-      throw e;
-    } finally {
-      client.release();
-    }
-    memory.set(r.id, new Set(items.filter((i) => i.balance <= 0).map((i) => i.productId)));
+  // Кухня и доп. источники (бар) — у каждого своя организация и, возможно, свой ключ iiko
+  const all = (await allOrgTargets()).filter((t) => !orgIds || orgIds.includes(t.organization_id));
+  const byCreds = new Map();
+  for (const t of all) {
+    if (!byCreds.has(t.creds)) byCreds.set(t.creds, []);
+    byCreds.get(t.creds).push(t);
   }
-  loaded = true;
-  return targets.length;
+  let updated = 0;
+  for (const [creds, list] of byCreds) {
+    await withIikoCreds(creds, async () => {
+      const allowed = await accessibleOrgIds();
+      const targets = list.filter((t) => !allowed || allowed.has(t.organization_id));
+      if (!targets.length) return;
+      const orgs = [...new Set(targets.map((t) => t.organization_id))];
+      const data = await iikoRequest('/api/1/stop_lists', { organizationIds: orgs });
+      const byOrg = new Map();
+      for (const org of data?.terminalGroupStopLists || []) byOrg.set(org.organizationId, org.items || []);
+      for (const t of targets) {
+        const items = [];
+        for (const g of byOrg.get(t.organization_id) || []) {
+          if (t.terminal_group_id && g.terminalGroupId && g.terminalGroupId !== t.terminal_group_id) continue;
+          for (const it of g.items || []) items.push({ productId: String(it.productId), balance: Number(it.balance) || 0 });
+        }
+        const client = await pool.connect();
+        try {
+          await client.query('BEGIN');
+          await client.query('DELETE FROM stop_lists WHERE restaurant_id = $1 AND source = $2', [t.restaurant_id, t.source]);
+          for (const it of items) {
+            await client.query(
+              `INSERT INTO stop_lists (restaurant_id, product_id, balance, source) VALUES ($1, $2, $3, $4)
+               ON CONFLICT (restaurant_id, product_id) DO UPDATE SET balance = EXCLUDED.balance, source = EXCLUDED.source, updated_at = NOW()`,
+              [t.restaurant_id, it.productId, it.balance, t.source],
+            );
+          }
+          await client.query('COMMIT');
+        } catch (e) {
+          await client.query('ROLLBACK');
+          throw e;
+        } finally {
+          client.release();
+        }
+        updated++;
+      }
+    });
+  }
+  await loadFromDb();
+  return updated;
 }
 
 // ── Вебхуки iiko ────────────────────────────────────────────────────────────
@@ -94,19 +99,26 @@ export function webhookUrl() {
  */
 export async function registerWebhooks() {
   if (isIikoDemo() || process.env.IIKO_WEBHOOKS_DISABLED === 'true') return;
-  const { rows } = await pool.query(
-    'SELECT DISTINCT organization_id FROM restaurants WHERE is_disabled = FALSE AND organization_id IS NOT NULL',
-  );
   const url = webhookUrl();
+  const seen = new Set();
+  for (const t of await allOrgTargets()) {
+    const key = `${t.creds}|${t.organization_id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    await withIikoCreds(t.creds, () => registerWebhookFor(t.organization_id, url));
+  }
+}
+
+async function registerWebhookFor(organizationId, url) {
   const allowed = await accessibleOrgIds();
-  for (const { organization_id: organizationId } of rows) {
-    if (allowed && !allowed.has(organizationId)) continue; // точка не подключена к API-логину
+  if (allowed && !allowed.has(organizationId)) return; // точка не подключена к API-логину
+  {
     try {
       const current = await iikoRequest('/api/1/webhooks/settings', { organizationId });
       const existing = current?.webHooksUri || '';
       if (existing && existing !== url) {
         console.log(`iiko webhook ${organizationId}: уже настроен на ${existing} — не меняю (укажите ${url} вручную, если нужно)`);
-        continue;
+        return;
       }
       await iikoRequest('/api/1/webhooks/update_settings', {
         organizationId,

@@ -3,8 +3,9 @@
  */
 import pool from '../db/pool.js';
 import { NOTIFY_TYPES, WAITER_RESPONSE_SLA_MS, WORKFLOW } from '../lib/table-workflow-config.js';
-import { addItemsToOrder, createTableOrder, isIikoDemo } from '../iiko-client.js';
+import { addItemsToOrder, createTableOrder, isIikoDemo, withIikoCreds } from '../iiko-client.js';
 import { createWaiterNotification } from './waiter-notifications.js';
+import { getSource, MAIN, productSourceMap } from './sources.js';
 import {
   getSessionContext,
   getSessionView,
@@ -88,6 +89,7 @@ export async function updateOrder(sessionId, staff, { items = [], guestCount } =
 
     await client.query('DELETE FROM table_order_items WHERE session_id = $1 AND is_locked = FALSE', [sessionId]);
     const nextBatch = Math.max(0, ...ctx.items.filter((i) => i.is_locked).map((i) => i.batch_no)) + 1;
+    const sources = await productSourceMap(ctx.restaurant.id, items.map((i) => i.iikoProductId).filter(Boolean));
     for (const it of items.filter((i) => !(i.id && lockedIds.has(i.id)))) {
       const qty = Math.floor(Number(it.quantity) || 0);
       if (qty <= 0 || !it.iikoProductId) continue;
@@ -96,11 +98,12 @@ export async function updateOrder(sessionId, staff, { items = [], guestCount } =
       await client.query(
         `INSERT INTO table_order_items
            (session_id, product_id, iiko_product_id, name, price, quantity, line_total, seat_number, course, batch_no, is_locked,
-            guest_id, guest_name)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12)`,
+            guest_id, guest_name, source)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12,$13)`,
         [sessionId, it.productId || null, it.iikoProductId, String(it.name || 'Позиция').slice(0, 300),
           price, qty, price * qty, it.seatNumber || null, it.course || null, nextBatch,
-          guestOf(it.seatNumber)?.id || null, guestOf(it.seatNumber)?.name || null],
+          guestOf(it.seatNumber)?.id || null, guestOf(it.seatNumber)?.name || null,
+          sources.get(String(it.iikoProductId)) || 'main'],
       );
     }
     await recalcTotal(client, sessionId);
@@ -122,7 +125,9 @@ export async function updateOrder(sessionId, staff, { items = [], guestCount } =
 
 /**
  * «В работу» (кейс 8): отправить новые позиции в iiko на стол.
- * При ошибке iiko корзина не теряется, официант видит причину и может повторить.
+ * Позиции делятся по источникам iiko: кухня — в iiko ресторана, алкоголь — в iiko бара
+ * (свой заказ на тот же стол). При ошибке одного iiko остальное уходит, не отправленное остаётся
+ * в корзине, официант видит причину и может повторить.
  */
 export async function sendToKitchen(sessionId, staff) {
   const ctx = await getSessionContext(sessionId);
@@ -133,72 +138,97 @@ export async function sendToKitchen(sessionId, staff) {
   if (!pending.length) throw httpError(400, 'Нет новых позиций для отправки');
 
   const demo = isIikoDemo();
-  let iikoOrderId = session.iiko_order_id;
-  try {
-    // Курс подачи и место гостя уходят в iiko комментарием к позиции (печатается на кухонном чеке);
-    // позиции отправляются по порядку курсов
-    const delta = [...pending]
-      .sort((a, b) => (a.course || 1) - (b.course || 1))
-      .map((i) => ({
-        productId: i.iiko_product_id,
-        amount: i.quantity,
-        comment: [i.guest_name || null, i.seat_number ? `место ${i.seat_number}` : null, i.course ? `курс ${i.course}` : null]
-          .filter(Boolean).join(', ') || undefined,
-      }));
-    if (!iikoOrderId) {
-      let tableId = session.iiko_table_id;
-      if (!tableId && !demo) {
-        tableId = await resolveIikoTableId(restaurant, session.table_number);
-        if (!tableId) throw new Error(`Стол №${session.table_number} не найден в схеме зала iiko`);
-        await pool.query('UPDATE table_sessions SET iiko_table_id = $2 WHERE id = $1', [sessionId, tableId]);
-      }
-      const created = await createTableOrder({
-        organizationId: restaurant.organization_id,
-        terminalGroupId: restaurant.terminal_group_id,
-        tableIds: tableId ? [tableId] : [],
-        items: delta,
-        guestCount: session.guest_count || 1,
+  const orders = { ...(session.iiko_orders || {}) };
+  if (session.iiko_order_id && !orders[MAIN]) orders[MAIN] = { orderId: session.iiko_order_id, tableId: session.iiko_table_id };
+  const groups = new Map();
+  for (const i of pending) {
+    const code = i.source || MAIN;
+    if (!groups.has(code)) groups.set(code, []);
+    groups.get(code).push(i);
+  }
+
+  const sentIds = [];
+  const errors = [];
+  for (const [code, items] of groups) {
+    const src = await getSource(restaurant, code);
+    try {
+      await withIikoCreds(src.creds, async () => {
+        // Имя гостя, место и курс — комментарием к позиции (печатается на чеке); по порядку курсов
+        const delta = [...items]
+          .sort((a, b) => (a.course || 1) - (b.course || 1))
+          .map((i) => ({
+            productId: i.iiko_product_id,
+            amount: i.quantity,
+            comment: [i.guest_name || null, i.seat_number ? `место ${i.seat_number}` : null, i.course ? `курс ${i.course}` : null]
+              .filter(Boolean).join(', ') || undefined,
+          }));
+        let orderId = orders[code]?.orderId;
+        if (!orderId) {
+          let tableId = orders[code]?.tableId || (code === MAIN ? session.iiko_table_id : null);
+          if (!tableId && !demo) {
+            tableId = await resolveIikoTableId(
+              { id: restaurant.id, organization_id: src.organization_id, terminal_group_id: src.terminal_group_id },
+              session.table_number, code,
+            );
+            if (!tableId) throw new Error(`Стол №${session.table_number} не найден в схеме зала iiko`);
+          }
+          const created = await createTableOrder({
+            organizationId: src.organization_id,
+            terminalGroupId: src.terminal_group_id,
+            tableIds: tableId ? [tableId] : [],
+            items: delta,
+            guestCount: session.guest_count || 1,
+          });
+          if (created?.orderInfo?.creationStatus === 'Error') {
+            throw new Error(created.orderInfo.errorInfo?.message || 'iiko отклонил заказ');
+          }
+          orderId = created?.orderInfo?.id || created?.order?.id || created?.id || null;
+          if (!orderId) throw new Error('iiko не вернул номер заказа');
+          orders[code] = { orderId, tableId: tableId || null };
+        } else {
+          await addItemsToOrder({ organizationId: src.organization_id, orderId, items: delta });
+        }
       });
-      iikoOrderId = created?.orderInfo?.id || created?.order?.id || created?.id || null;
-      if (created?.orderInfo?.creationStatus === 'Error') {
-        throw new Error(created.orderInfo.errorInfo?.message || 'iiko отклонил заказ');
-      }
-      if (!iikoOrderId) throw new Error('iiko не вернул номер заказа');
-    } else {
-      await addItemsToOrder({ organizationId: restaurant.organization_id, orderId: iikoOrderId, items: delta });
+      sentIds.push(...items.map((i) => i.id));
+    } catch (e) {
+      const reason = e.response?.data?.errorDescription || e.response?.data?.message || e.message || 'Ошибка iiko';
+      errors.push(groups.size > 1 || code !== MAIN ? `${src.name}: ${reason}` : reason);
     }
-  } catch (e) {
-    const reason = e.response?.data?.errorDescription || e.response?.data?.message || e.message || 'Ошибка iiko';
+  }
+
+  if (sentIds.length) {
     await pool.query(
-      'UPDATE table_sessions SET iiko_last_error = $2, updated_at = NOW() WHERE id = $1',
-      [sessionId, reason],
+      `UPDATE table_order_items SET is_locked = TRUE, synced_to_iiko = TRUE, sent_at = NOW(), kitchen_status = COALESCE(kitchen_status, 'Added'), updated_at = NOW()
+       WHERE id = ANY($1::uuid[])`,
+      [sentIds],
     );
+  }
+  const errorText = errors.length ? errors.join('; ') : null;
+  await pool.query(
+    `UPDATE table_sessions SET iiko_orders = $2, iiko_order_id = COALESCE($3, iiko_order_id),
+       iiko_table_id = COALESCE($4, iiko_table_id), iiko_last_error = $5,
+       workflow_status = CASE WHEN $6 AND workflow_status <> 'bill_requested' THEN $7 ELSE workflow_status END,
+       sent_to_production_at = CASE WHEN $6 THEN NOW() ELSE sent_to_production_at END,
+       waiter_id = COALESCE(waiter_id, $8),
+       locked_by = CASE WHEN $6 AND $5::text IS NULL THEN NULL ELSE locked_by END,
+       locked_until = CASE WHEN $6 AND $5::text IS NULL THEN NULL ELSE locked_until END,
+       wait_notified_at = NULL, updated_at = NOW()
+     WHERE id = $1`,
+    [sessionId, JSON.stringify(orders), orders[MAIN]?.orderId || null, orders[MAIN]?.tableId || null,
+      errorText, sentIds.length > 0, WORKFLOW.IN_PRODUCTION, staff.id],
+  );
+  if (errors.length) {
     await createWaiterNotification({
       restaurantId: restaurant.id,
       sessionId,
       tableNumber: session.table_number,
       type: NOTIFY_TYPES.IIKO_ERROR,
       title: `Стол №${session.table_number} — ошибка iiko`,
-      body: `${reason}. Корзина сохранена, можно повторить отправку.`,
+      body: `${errorText}.${sentIds.length ? ' Остальное отправлено.' : ''} Не отправленное сохранено, можно повторить.`,
       payload: { sessionId },
     });
-    throw httpError(502, `iiko: ${reason}`, { details: e.response?.data });
+    throw httpError(502, `iiko: ${errorText}${sentIds.length ? ' (остальные позиции отправлены)' : ''}`);
   }
-
-  const ids = pending.map((i) => i.id);
-  await pool.query(
-    `UPDATE table_order_items SET is_locked = TRUE, synced_to_iiko = TRUE, sent_at = NOW(), kitchen_status = COALESCE(kitchen_status, 'Added'), updated_at = NOW()
-     WHERE id = ANY($1::uuid[])`,
-    [ids],
-  );
-  await pool.query(
-    `UPDATE table_sessions SET iiko_order_id = $2, iiko_last_error = NULL,
-       workflow_status = CASE WHEN workflow_status = 'bill_requested' THEN workflow_status ELSE $3 END,
-       sent_to_production_at = NOW(), waiter_id = COALESCE(waiter_id, $4),
-       locked_by = NULL, locked_until = NULL, wait_notified_at = NULL, updated_at = NOW()
-     WHERE id = $1`,
-    [sessionId, iikoOrderId, WORKFLOW.IN_PRODUCTION, staff.id],
-  );
   await markSessionNotificationsRead(sessionId);
   return getSessionView(sessionId);
 }
