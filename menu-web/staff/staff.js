@@ -100,7 +100,7 @@
     return `<div class="shell">
       <header class="top">
         <div class="brand">ФУДЖИ<small>${esc({ waiter: 'официант', manager: 'управляющий', admin: 'администратор' }[S.staff.role])}</small></div>
-        <nav class="tabs">${tabs.map(([k, l]) => `<button data-tab="${k}" class="${S.tab === k ? 'is-active' : ''}">${l}${k === 'tables' && unread ? `<span class="dot">${unread}</span>` : ''}</button>`).join('')}</nav>
+        ${tabs.length > 1 ? `<nav class="tabs">${tabs.map(([k, l]) => `<button data-tab="${k}" class="${S.tab === k ? 'is-active' : ''}">${l}${k === 'tables' && unread ? `<span class="dot">${unread}</span>` : ''}</button>`).join('')}</nav>` : ''}
         <div class="me">
           <select class="sel" id="rest-select">${S.restaurants.map((r) => `<option value="${esc(r.slug)}" ${r.slug === S.restaurant ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select>
           <span class="muted">${esc(S.staff.name)}</span>
@@ -118,6 +118,8 @@
     try {
       const tabsScroll = $('.tabs')?.scrollLeft || 0;
       $('#app').innerHTML = shell(await view.render());
+      // Телефон, открыт стол: общая шапка скрыта — у экрана стола своя, со стрелкой «назад»
+      document.body.classList.toggle('table-open', S.tab === 'tables' && Boolean(S.openId && S.edit));
       // Лента вкладок на телефоне: сохраняем прокрутку и показываем активную вкладку
       const tabsEl = $('.tabs');
       const active = $('.tabs .is-active');
@@ -157,94 +159,147 @@
     return `<span class="pill" data-tone="${tone}">${esc(label)}</span>`;
   }
 
+  // ── Экран стола (официант): отдельный экран, блюда по гостям, панель действий снизу ──
+  const COURSES = [[null, 'сразу'], [1, '1'], [2, '2'], [3, '3']];
   function editorHtml() {
     const s = S.sessions.find((x) => x.sessionId === S.openId);
     if (!s || !S.edit) return '';
     const e = S.edit;
     const total = e.items.reduce((sum, i) => sum + i.price * i.quantity, 0);
-    // Место = гость за столом (по порядку присоединения по QR)
-    const guestBySeat = new Map((s.guests || []).map((g) => [g.seat, g.name]));
-    const seats = Array.from({ length: Math.max(e.guestCount, (s.guests || []).length, 1) }, (_, i) => i + 1);
-    const seatLabel = (n) => (guestBySeat.has(n) ? `${n} · ${guestBySeat.get(n)}` : `Место ${n}`);
+    const guests = s.guests || [];
+    const seats = Array.from({ length: Math.max(e.guestCount, guests.length, 1) }, (_, i) => i + 1);
+    const nameOf = (n) => guests.find((g) => g.seat === n)?.name || `Гость ${n}`;
     const lockedByOther = s.lockedBy && s.lockedBy !== S.staff.id;
+    const pending = e.items.filter((i) => !i.isLocked);
+    const pendingQty = pending.reduce((n, i) => n + i.quantity, 0);
+    if (S.pickSeat && !seats.includes(S.pickSeat)) S.pickSeat = null;
+
+    const row = (it, idx) => {
+      const served = it.servedAt || it.kitchenStatus === 'Served';
+      const src = it.source && it.source !== 'main' ? `<span class="pill" data-tone="work">${esc(sourceLabel(it.source))}</span>` : '';
+      if (it.isLocked) {
+        return `<div class="trow is-sent ${served ? 'is-served' : ''} ${it.isReady ? 'is-ready' : ''}">
+          <div class="trow__main"><div class="trow__name">${esc(it.name)} <span class="muted">×${it.quantity}</span></div>
+            <div class="trow__meta">${src}${served ? '<b class="served">✓ Вынесено</b>' : it.isReady ? '<b class="ready">Готово — выносить</b>' : esc(it.kitchenLabel || 'на кухне')}${it.course ? ` · курс ${it.course}` : ''}</div></div>
+          ${it.isReady && !served ? `<button class="btn btn--sm btn--dark" data-served-item="${esc(it.id)}">Вынесено</button>` : `<b class="trow__sum">${rub(it.price * it.quantity)}</b>`}
+        </div>`;
+      }
+      return `<div class="trow is-new">
+        <div class="trow__main"><div class="trow__name">${esc(it.name)}</div>
+          <div class="trow__meta">${src}${rub(it.price)} · <b style="color:var(--ok)">новое</b></div></div>
+        <div class="qty"><button class="icon-btn" data-qty="${idx}" data-d="-1" aria-label="Меньше">−</button><b>${it.quantity}</b><button class="icon-btn icon-btn--dark" data-qty="${idx}" data-d="1" aria-label="Больше">+</button></div>
+        <div class="trow__opts">
+          <div class="seg" role="group" aria-label="Курс подачи"><span>Курс</span>${COURSES.map(([c, l]) => `<button class="${(it.course || null) === c ? 'is-on' : ''}" data-course-set="${idx}" data-c="${c ?? ''}">${l}</button>`).join('')}</div>
+          <select class="sel sel--sm" data-seat="${idx}" aria-label="Гость"><option value="">Без гостя</option>${seats.map((n) => `<option value="${n}" ${Number(it.seatNumber) === n ? 'selected' : ''}>${esc(`${n} · ${nameOf(n)}`)}</option>`).join('')}</select>
+        </div>
+      </div>`;
+    };
+    // Блюда по гостям (место = гость по порядку присоединения), без места — отдельно
+    const blocks = [...seats, null].map((seat) => {
+      const list = e.items.map((it, idx) => [it, idx]).filter(([it]) => (Number(it.seatNumber) || null) === seat);
+      if (!list.length) return '';
+      const sum = list.reduce((n, [it]) => n + it.price * it.quantity, 0);
+      return `<div class="gblock"><div class="gblock__title"><span>${seat ? `<b>${seat}</b> ${esc(nameOf(seat))}` : 'Без гостя'}</span><span>${rub(sum)}</span></div>
+        ${list.map(([it, idx]) => row(it, idx)).join('')}</div>`;
+    }).join('');
+
+    return `<section class="tscreen" id="editor">
+      <div class="tscreen__head">
+        <button class="back-btn" data-hide-editor aria-label="К списку столов"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
+        <div class="tscreen__title"><div class="h2" style="margin:0">Стол №${esc(s.tableNumber)}</div>
+          <div class="muted" style="font-size:12px">Открыт ${time(s.createdAt)}${s.waitingMinutes != null ? ` · ждёт ${s.waitingMinutes} мин` : ''}${s.guest?.visitsCount ? ` · визитов: ${s.guest.visitsCount}` : ''}</div></div>
+        ${statusPill(s)}
+      </div>
+      ${lockedByOther ? '<div class="error-box">Стол сейчас редактирует другой официант</div>' : ''}
+      ${s.readyCount ? `<div class="ready-box"><span>🔔 Готово на кухне: ${s.items.filter((i) => i.isReady).map((i) => `${esc(i.name)} ×${i.quantity}${i.guestName ? ` — ${esc(i.guestName)}` : ''}`).join(', ')}</span>
+        <button class="btn btn--sm btn--dark" data-served>Вынесено всё</button></div>` : ''}
+      ${s.iikoLastError ? `<div class="error-box"><b>Ошибка iiko:</b> ${esc(s.iikoLastError)}<br>Не отправленное сохранено — нажмите «В работу» ещё раз.</div>` : ''}
+      <div class="gbar">
+        <span class="muted">Гостей</span>
+        <div class="qty"><button class="icon-btn" data-guests="-1" aria-label="Меньше гостей">−</button><b>${e.guestCount}</b><button class="icon-btn" data-guests="1" aria-label="Больше гостей">+</button></div>
+        <div class="gbar__names">${guests.map((g) => `<span class="gchip"><b>${g.seat}</b> ${esc(g.name)}</span>`).join('')}</div>
+      </div>
+      <div class="tscreen__items">${blocks || '<div class="empty-note">Заказа пока нет. Нажмите «+ Блюдо», чтобы добавить из меню.</div>'}</div>
+      <div class="tscreen__total"><span class="muted">Итого по столу</span><b>${rub(total)}</b></div>
+      <div class="tbar">
+        <div class="tbar__status muted">${S.saving ? 'Сохраняем…' : e.dirty ? 'Есть несохранённые правки' : pendingQty ? `Новых: ${pendingQty} — ещё не на кухне` : 'Всё отправлено'}</div>
+        <div class="tbar__btns">
+          <button class="btn" data-open-picker ${lockedByOther ? 'disabled' : ''}>+ Блюдо</button>
+          <button class="btn btn--dark grow" data-send ${pending.length && !lockedByOther ? '' : 'disabled'}>В работу${pendingQty ? ` · ${pendingQty}` : ''}</button>
+        </div>
+      </div>
+      ${S.picker ? pickerHtml(seats, nameOf) : ''}
+    </section>`;
+  }
+
+  /** Выбор блюд — шторка поверх экрана стола: поиск, категории, «+» добавляет выбранному гостю. */
+  function pickerHtml(seats, nameOf) {
     const q = S.productSearch.trim().toLowerCase();
     const products = S.catalog?.products || [];
     const groups = (S.catalog?.groups || []).filter((g) => products.some((p) => p.parentGroup === g.id));
     if (!S.pickCat || !groups.some((g) => g.id === S.pickCat)) S.pickCat = groups[0]?.id || null;
-    const found = q
-      ? products.filter((p) => p.name.toLowerCase().includes(q)).slice(0, 30)
-      : products.filter((p) => p.parentGroup === S.pickCat);
-    const pending = e.items.filter((i) => !i.isLocked).length;
-    return `<section class="card editor" id="editor">
-      <div class="editor__head">
-        <div>
-          <div class="h2" style="margin-bottom:6px">Стол №${esc(s.tableNumber)} ${statusPill(s)}</div>
-          <div class="muted">${s.guest ? `${esc(s.guest.name)} · ${esc(s.guest.phoneMasked || '')} · визитов: ${s.guest.visitsCount}` : 'Гость не идентифицирован'}
-            </div>
-          ${(s.guests || []).length > 1 ? `<div class="muted" style="margin-top:4px">За столом: ${s.guests.map((g) => `<b>${g.seat}</b> ${esc(g.name)}`).join(', ')}</div>` : ''}
-          <div class="muted" style="font-size:13px;margin-top:4px">Открыт ${time(s.createdAt)}${s.iikoOrderId ? ` · iiko ${esc(s.iikoOrderId.slice(0, 8))}…` : ''}${s.waitingMinutes != null ? ` · ждёт ${s.waitingMinutes} мин` : ''}</div>
-        </div>
-        <div class="field"><label>Гостей за столом</label>
-          <div class="qty"><button class="icon-btn" data-guests="-1">−</button><b>${e.guestCount}</b><button class="icon-btn" data-guests="1">+</button></div></div>
+    const found = q ? products.filter((p) => p.name.toLowerCase().includes(q)).slice(0, 40) : products.filter((p) => p.parentGroup === S.pickCat);
+    const inCart = (p) => S.edit.items.filter((i) => !i.isLocked && String(i.productId) === String(p.id) && (Number(i.seatNumber) || null) === (S.pickSeat || null)).reduce((n, i) => n + i.quantity, 0);
+    return `<div class="pick-backdrop" data-close-picker>
+      <div class="pick-sheet" role="dialog" aria-label="Добавить блюда">
+        <div class="pick-sheet__grip"></div>
+        <div class="pick-sheet__head"><div class="h3" style="margin:0">Добавить блюда</div><button class="btn btn--sm btn--dark" data-close-picker-btn>Готово</button></div>
+        <div class="seg seg--wide" role="group" aria-label="Кому">${[null, ...seats].map((n) => `<button class="${(S.pickSeat || null) === n ? 'is-on' : ''}" data-pick-seat="${n ?? ''}">${n ? esc(`${n} · ${nameOf(n)}`) : 'Всем'}</button>`).join('')}</div>
+        ${products.length ? `<input class="inp" id="prod-search" style="width:100%" placeholder="Поиск блюда" value="${esc(S.productSearch)}" autocomplete="off">
+          ${q ? '' : `<div class="picker__cats">${groups.map((g) => `<button class="${g.id === S.pickCat ? 'is-active' : ''}" data-pick-cat="${esc(g.id)}">${esc(g.name)}</button>`).join('')}</div>`}
+          <div class="pick-list">${found.map((p) => { const n = inCart(p); return `<button class="pick-item" data-add="${esc(p.id)}" ${p.isInStopList ? 'disabled' : ''}>
+            <span class="pick-item__name">${esc(p.name)}${p.source && p.source !== 'main' ? ` <span class="pill" data-tone="work">${esc(sourceLabel(p.source))}</span>` : ''}${p.isInStopList ? ' <span class="pill" data-tone="bad">стоп</span>' : ''}</span>
+            <span class="pick-item__price">${rub(p.price)}</span><span class="pick-item__add ${n ? 'has' : ''}">${n || '+'}</span></button>`; }).join('') || '<div class="muted" style="padding:12px">Ничего не найдено</div>'}</div>`
+    : '<div class="error-box">Меню этого ресторана пустое — выгрузите его из iiko (админка → «Меню и стоп-лист»).</div>'}
       </div>
-      ${lockedByOther ? '<div class="error-box">Стол сейчас редактирует другой официант</div>' : ''}
-      ${s.readyCount ? `<div class="ready-box"><span>🔔 Готово на кухне: ${s.items.filter((i) => i.isReady).map((i) => `${esc(i.name)} ×${i.quantity}${i.guestName ? ` — ${esc(i.guestName)}` : ''}`).join(', ')}</span>
-        <button class="btn btn--sm btn--dark" data-served>Вынесено</button></div>` : ''}
-      ${s.iikoLastError ? `<div class="error-box"><b>Ошибка iiko:</b> ${esc(s.iikoLastError)}<br>Корзина сохранена — исправьте и нажмите «В работу» ещё раз.</div>` : ''}
-      <div>${e.items.length ? e.items.map((it, idx) => `<div class="row ${it.isLocked ? '' : 'is-new'}">
-        <div><div class="row__name">${esc(it.name)}</div>
-          <div class="row__meta">${it.source && it.source !== 'main' ? `<span class="pill" data-tone="work">${esc(sourceLabel(it.source))}</span> ` : ''}${rub(it.price)} · ${it.isLocked ? (it.servedAt || it.kitchenStatus === 'Served' ? '<b class="served">✓ Вынесено</b>' : it.isReady ? `<b class="ready">Готово — выносить</b> <button class="btn btn--sm btn--dark" data-served-item="${esc(it.id)}">Вынесено</button>` : `${esc(it.kitchenLabel || 'на кухне')} (партия ${it.batchNo || 1})`) : '<b style="color:var(--ok)">новое</b>'}${it.guestName ? ` · ${esc(it.guestName)}` : ''}</div></div>
-        <div class="row__opts">
-          <select class="sel" data-seat="${idx}" title="Место"><option value="">Место —</option>${seats.map((n) => `<option value="${n}" ${Number(it.seatNumber) === n ? 'selected' : ''}>${esc(seatLabel(n))}</option>`).join('')}</select>
-          <select class="sel" data-course="${idx}" title="Курс подачи" ${it.isLocked ? 'disabled' : ''}><option value="">Курс —</option>${[1, 2, 3].map((n) => `<option value="${n}" ${Number(it.course) === n ? 'selected' : ''}>Курс ${n}</option>`).join('')}</select>
-        </div>
-        <div class="qty">${it.isLocked ? `<b>${it.quantity}</b>` : `<button class="icon-btn" data-qty="${idx}" data-d="-1">−</button><b>${it.quantity}</b><button class="icon-btn" data-qty="${idx}" data-d="1">+</button>`}</div>
-        <b class="hide-sm" style="min-width:80px;text-align:right">${rub(it.price * it.quantity)}</b>
-      </div>`).join('') : '<div class="muted">Позиции не выбраны</div>'}</div>
-      <div style="display:flex;justify-content:space-between;margin-top:12px;font-size:18px"><span class="muted">Итого</span><b>${rub(total)}</b></div>
-      <div class="picker">
-        <div class="h3" style="margin:0 0 8px">Добавить из меню</div>
-        ${products.length ? `<input class="inp" id="prod-search" style="width:100%" placeholder="Поиск блюда" value="${esc(S.productSearch)}">
-        ${q ? '' : `<div class="picker__cats">${groups.map((g) => `<button class="${g.id === S.pickCat ? 'is-active' : ''}" data-pick-cat="${esc(g.id)}">${esc(g.name)}</button>`).join('')}</div>`}
-        <div class="search-results">${found.map((p) => `<button data-add="${esc(p.id)}" ${p.isInStopList ? 'disabled' : ''}><span>${esc(p.name)}${p.source && p.source !== 'main' ? ` · ${esc(sourceLabel(p.source))}` : ''}${p.isInStopList ? ' · стоп-лист' : ''}</span><b>${rub(p.price)}</b></button>`).join('') || '<div class="muted">Ничего не найдено</div>'}</div>`
-    : '<div class="error-box">Меню этого ресторана пустое — выгрузите его из iiko (админка → «Меню и стоп-лист» → «Перевыгрузить из iiko»).</div>'}
-      </div>
-      <div class="footer-actions">
-        <button class="btn" data-save ${e.dirty && !lockedByOther ? '' : 'disabled'}>Сохранить правки</button>
-        <button class="btn btn--dark" data-send ${pending && !lockedByOther ? '' : 'disabled'}>В работу → iiko (${pending})</button>
-        <button class="btn" data-hide-editor>Свернуть</button>
-      </div>
-    </section>`;
+    </div>`;
   }
 
   const VIEWS = {
     tables: {
       async render() {
         await loadWaiter();
-        const unread = S.notes.filter((n) => !n.is_read).length;
-        return `<div class="grid-waiter">
-          <section>
-            <div class="toolbar"><div class="h2 grow" style="margin:0">Уведомления ${unread ? `<span class="pill" data-tone="bad">${unread}</span>` : ''}</div>
-              ${unread ? '<button class="btn btn--sm" data-read-all>Прочитать все</button>' : ''}</div>
-            <div class="feed">${S.notes.length ? S.notes.map((n) => `<button class="note ${n.is_read ? '' : 'is-unread'}" data-type="${esc(n.type)}" data-note="${esc(n.id)}" data-session="${esc(n.session_id || '')}">
-              <div class="note__head"><span>${esc(n.title)}</span><span class="note__time">${time(n.created_at)}</span></div>
-              <div class="note__body">${esc(n.body)}</div></button>`).join('') : '<div class="muted">Пока тихо</div>'}</div>
+        const unread = S.notes.filter((n) => !n.is_read);
+        const open = S.sessions.filter((x) => x.status === 'open' || x.sessionId === S.openId);
+        const unreadBy = new Set(unread.map((n) => n.session_id));
+        // Сверху — столы, которые ждут официанта: новый заказ/дозаказ, счёт, готовые блюда, долгое ожидание, вызов
+        const needs = (x) => ['cart_ready', 'reorder_pending', 'bill_requested'].includes(x.workflowStatus) || x.readyCount > 0 || x.isOverdue || unreadBy.has(x.sessionId);
+        const hot = open.filter(needs);
+        const rest = open.filter((x) => !needs(x));
+        const card = (x) => `<button class="tcard ${S.openId === x.sessionId ? 'is-open' : ''} ${needs(x) ? 'is-hot' : ''}" data-open="${esc(x.sessionId)}">
+          <div class="tcard__num">${esc(x.tableNumber)}</div>
+          <div class="tcard__body">
+            <div class="tcard__pills">${statusPill(x)}${x.readyCount ? ` <span class="pill" data-tone="bad">🔔 Готово ${x.readyCount}</span>` : ''}${x.isOverdue ? ` <span class="overdue">⏱ ${x.waitingMinutes} мин</span>` : ''}</div>
+            <div class="tcard__guest">${esc((x.guests || []).length ? x.guests.map((g) => g.name).join(', ') : (x.guest?.name || 'Гость'))}${x.pendingCount ? ` · новых: ${x.pendingCount}` : ''}</div>
+          </div>
+          <div class="tcard__sum">${rub(x.total)}</div>
+        </button>`;
+        const tablesHtml = open.length
+          ? `${hot.length ? `<div class="tsection">Ждут вас · ${hot.length}</div><div class="tlist">${hot.map(card).join('')}</div>` : ''}
+             ${rest.length ? `<div class="tsection">${hot.length ? 'Остальные' : 'Активные столы'} · ${rest.length}</div><div class="tlist">${rest.map(card).join('')}</div>` : ''}`
+          : '<div class="empty-note">Нет активных столов. Когда гость отсканирует QR, стол появится здесь.</div>';
+        const notesHtml = `<div class="toolbar" style="margin-bottom:8px"><div class="grow muted">${unread.length ? `Непрочитанных: ${unread.length}` : 'Все прочитаны'}</div>
+            ${unread.length ? '<button class="btn btn--sm" data-read-all>Прочитать все</button>' : ''}</div>
+          <div class="feed">${S.notes.length ? S.notes.map((n) => `<button class="note ${n.is_read ? '' : 'is-unread'}" data-type="${esc(n.type)}" data-note="${esc(n.id)}" data-session="${esc(n.session_id || '')}">
+            <div class="note__head"><span>${esc(n.title)}</span><span class="note__time">${time(n.created_at)}</span></div>
+            <div class="note__body">${esc(n.body)}</div></button>`).join('') : '<div class="muted">Пока тихо</div>'}</div>`;
+        const view = S.wview === 'notes' ? 'notes' : 'tables';
+        return `<div class="waiter ${S.openId && S.edit ? 'has-open' : ''}">
+          <section class="waiter__list">
+            <div class="seg seg--wide seg--tabs" role="tablist">
+              <button class="${view === 'tables' ? 'is-on' : ''}" data-wview="tables">Столы · ${open.length}</button>
+              <button class="${view === 'notes' ? 'is-on' : ''}" data-wview="notes">Уведомления${unread.length ? ` <span class="dot-inline">${unread.length}</span>` : ''}</button>
+            </div>
+            ${view === 'notes' ? notesHtml : tablesHtml}
           </section>
-          <section>
-            <div class="h2">Активные столы <span class="muted" style="font-weight:400">${S.sessions.filter((s) => s.status === 'open').length}</span></div>
-            <div class="tables">${S.sessions.length ? S.sessions.map((s) => `<button class="table-card ${S.openId === s.sessionId ? 'is-open' : ''}" data-open="${esc(s.sessionId)}">
-              <div class="table-card__num">№${esc(s.tableNumber)} ${s.isOverdue ? '<span class="overdue">⏱ ' + s.waitingMinutes + ' мин</span>' : ''}</div>
-              ${statusPill(s)}${s.readyCount ? ` <span class="pill" data-tone="bad">🔔 Готово: ${s.readyCount}</span>` : s.kitchenLabel ? ` <span class="pill" data-tone="work">Кухня: ${esc(s.kitchenLabel)}</span>` : ''}
-              <div class="table-card__guest">${esc((s.guests || []).length > 1 ? s.guests.map((g) => g.name).join(', ') : (s.guest?.name || 'Гость'))}${s.pendingCount ? ` · новых: ${s.pendingCount}` : ''}</div>
-              <div class="table-card__sum"><span class="muted" style="font-weight:400">${s.items.length} поз.</span><span>${rub(s.total)}</span></div>
-            </button>`).join('') : '<div class="muted">Нет активных столов. Когда гость отсканирует QR, стол появится здесь.</div>'}</div>
-            ${editorHtml()}
-          </section>
+          <section class="waiter__table">${editorHtml() || '<div class="empty-note hide-sm">Выберите стол слева</div>'}</section>
         </div>`;
       },
       mounted() {
         const inp = $('#prod-search');
         if (inp && S.productSearch) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+        const list = $('.pick-list');
+        if (list && S.pickScroll) list.scrollTop = S.pickScroll;
       },
     },
 
@@ -594,14 +649,40 @@
     // Меню ресторана — свежее при каждом открытии стола (стоп-лист мог измениться)
     const slug = S.restaurant || S.restaurants[0]?.slug;
     S.catalog = await fetch(`/api/v1/restaurants/${slug}/catalog`).then((r) => r.json()).catch(() => S.catalog);
+    S.picker = false; S.pickSeat = null;
     await render();
-    $('#editor')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (matchMedia('(max-width: 900px)').matches) scrollTo({ top: 0 });
   }
 
   async function saveEdit() {
+    const version = S.editVersion || 0;
     const s = await api('POST', `/api/v1/waiter/session/${S.openId}/cart`, { items: S.edit.items, guestCount: S.edit.guestCount });
-    S.edit = { items: s.items.map((i) => ({ ...i })), guestCount: s.guestCount, dirty: false };
+    const i = S.sessions.findIndex((x) => x.sessionId === S.openId);
+    if (i >= 0) S.sessions[i] = s;
+    // Пока сохраняли, официант мог ещё что-то поменять — тогда локальные правки не затираем
+    if ((S.editVersion || 0) === version) S.edit = { items: s.items.map((it) => ({ ...it })), guestCount: s.guestCount, dirty: false };
     return s;
+  }
+
+  /** Автосохранение правок официанта: без отдельной кнопки «Сохранить». */
+  let saveT;
+  function changed() {
+    S.edit.dirty = true;
+    S.editVersion = (S.editVersion || 0) + 1;
+    clearTimeout(saveT);
+    saveT = setTimeout(async () => {
+      if (!S.edit?.dirty) return;
+      S.saving = true;
+      try { await saveEdit(); } catch (err) { toast(err.message, true); }
+      S.saving = false;
+      if (S.edit?.dirty) changed(); else rerender();
+    }, 700);
+    rerender();
+  }
+  /** Перерисовка с сохранением прокрутки списка блюд в шторке. */
+  function rerender() {
+    S.pickScroll = $('.pick-list')?.scrollTop || 0;
+    return render();
   }
 
   // ── События ────────────────────────────────────────────────
@@ -619,9 +700,19 @@
         return;
       }
       if (q('[data-open]')) { await openTable(q('[data-open]').dataset.open); return; }
+      if (q('[data-wview]')) { S.wview = q('[data-wview]').dataset.wview; render(); return; }
       if (q('[data-hide-editor]')) {
+        if (S.edit?.dirty) { clearTimeout(saveT); await saveEdit().catch(() => {}); }
         api('POST', `/api/v1/waiter/session/${S.openId}/release`).catch(() => {});
-        S.openId = null; S.edit = null; render(); return;
+        S.openId = null; S.edit = null; S.picker = false; render(); return;
+      }
+      if (q('[data-open-picker]')) { S.picker = true; S.productSearch = ''; S.pickScroll = 0; render(); return; }
+      if (q('[data-close-picker-btn]') || (t.matches?.('[data-close-picker]'))) { S.picker = false; render(); return; }
+      if (q('[data-pick-seat]')) { S.pickSeat = Number(q('[data-pick-seat]').dataset.pickSeat) || null; rerender(); return; }
+      if (q('[data-course-set]')) {
+        const b = q('[data-course-set]');
+        S.edit.items[Number(b.dataset.courseSet)].course = b.dataset.c ? Number(b.dataset.c) : null;
+        changed(); return;
       }
       if (q('[data-served]') || q('[data-served-item]')) {
         const one = q('[data-served-item]')?.dataset.servedItem;
@@ -631,20 +722,22 @@
         if (!S.edit.dirty) S.edit = { items: s.items.map((it) => ({ ...it })), guestCount: s.guestCount, dirty: false };
         toast('Отмечено: вынесено'); render(); return;
       }
-      if (q('[data-guests]')) { S.edit.guestCount = Math.max(1, S.edit.guestCount + Number(q('[data-guests]').dataset.guests)); S.edit.dirty = true; render(); return; }
+      if (q('[data-guests]')) { S.edit.guestCount = Math.max(1, S.edit.guestCount + Number(q('[data-guests]').dataset.guests)); changed(); return; }
       if (q('[data-qty]')) {
         const b = q('[data-qty]'); const it = S.edit.items[Number(b.dataset.qty)];
         it.quantity += Number(b.dataset.d);
         if (it.quantity <= 0) S.edit.items.splice(Number(b.dataset.qty), 1);
-        S.edit.dirty = true; render(); return;
+        changed(); return;
       }
-      if (q('[data-pick-cat]')) { S.pickCat = q('[data-pick-cat]').dataset.pickCat; render(); return; }
+      if (q('[data-pick-cat]')) { S.pickCat = q('[data-pick-cat]').dataset.pickCat; S.pickScroll = 0; render(); return; }
       if (q('[data-add]')) {
         const p = S.catalog.products.find((x) => String(x.id) === q('[data-add]').dataset.add);
-        const existing = S.edit.items.find((i) => !i.isLocked && String(i.productId) === String(p.id));
+        const seat = S.pickSeat || null;
+        const existing = S.edit.items.find((i) => !i.isLocked && String(i.productId) === String(p.id) && (Number(i.seatNumber) || null) === seat);
         if (existing) existing.quantity += 1;
-        else S.edit.items.push({ productId: p.id, iikoProductId: p.iikoId || p.id, name: p.name, price: p.price, quantity: 1, isLocked: false });
-        S.productSearch = ''; S.edit.dirty = true; render(); return;
+        else S.edit.items.push({ productId: p.id, iikoProductId: p.iikoId || p.id, name: p.name, price: p.price, quantity: 1, isLocked: false, seatNumber: seat, source: p.source });
+        if (navigator.vibrate) try { navigator.vibrate(10); } catch { /* нет вибро */ }
+        changed(); return;
       }
       if (q('[data-save]')) { await saveEdit(); toast('Правки сохранены — гость видит актуальный заказ'); render(); return; }
       if (q('[data-send]')) {
@@ -693,8 +786,7 @@
       S.restaurant = e.target.value; ls.set('restaurant', S.restaurant);
       S.openId = null; S.edit = null; S.catalog = null; S.adminMenu = null; S.lastUnreadIds = new Set();
       render();
-    } else if (e.target.dataset.seat != null) { S.edit.items[Number(e.target.dataset.seat)].seatNumber = Number(e.target.value) || null; S.edit.dirty = true; render(); }
-    else if (e.target.dataset.course != null) { S.edit.items[Number(e.target.dataset.course)].course = Number(e.target.value) || null; S.edit.dirty = true; render(); }
+    } else if (e.target.dataset.seat != null) { S.edit.items[Number(e.target.dataset.seat)].seatNumber = Number(e.target.value) || null; changed(); }
     else if (e.target.id === 'menu-group') { S.menu.group = e.target.value; render(); }
   });
   let inputT;
@@ -722,7 +814,7 @@
     poll = setInterval(() => {
       const busy = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
       if (document.hidden || busy || $('#modal-root').innerHTML) return;
-      if (S.tab === 'tables' && !(S.edit?.dirty)) render();
+      if (S.tab === 'tables' && !S.edit?.dirty && !S.saving && !S.picker) render();
       else if (S.tab === 'hall') render();
     }, 5000);
   }
