@@ -284,6 +284,25 @@
   }
   ['click', 'scroll', 'keydown'].forEach((ev) => addEventListener(ev, pingActivity, { passive: true }));
 
+  // ── Весь экран ─────────────────────────────────────────────
+  // В Telegram — развернуть Mini App на весь экран. В Chrome на Android сайт не может убрать адресную строку сам,
+  // поэтому после первого касания включаем полноэкранный режим; если гость вышел из него — больше не навязываем.
+  const tg = window.Telegram?.WebApp;
+  if (tg) { try { tg.ready(); tg.expand(); tg.requestFullscreen?.(); tg.setHeaderColor?.('#F5F4F9'); tg.disableVerticalSwipes?.(); } catch { /* старый Telegram */ } }
+  const standalone = matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches;
+  const isAndroid = /Android/i.test(navigator.userAgent);
+  let fsDeclined = sessionStorage.getItem('fsDeclined') === '1';
+  document.addEventListener('fullscreenchange', () => {
+    document.documentElement.classList.toggle('is-fullscreen', Boolean(document.fullscreenElement));
+    if (!document.fullscreenElement) { fsDeclined = true; try { sessionStorage.setItem('fsDeclined', '1'); } catch { /* приватный режим */ } }
+  });
+  const goFullscreen = () => {
+    if (tg || standalone || !isAndroid || fsDeclined || document.fullscreenElement || !document.documentElement.requestFullscreen) return;
+    document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
+  };
+  addEventListener('touchend', goFullscreen, { passive: true });
+  addEventListener('click', goFullscreen);
+
   // Виброотклик на нажатия (Android; на iPhone браузер вибрацию не поддерживает)
   let lastBuzz = 0;
   addEventListener('click', (e) => {
@@ -718,10 +737,59 @@
     const root = $('#sheet-root');
     root.innerHTML = `<div class="sheet-backdrop" data-close><div class="sheet" role="dialog" aria-modal="true"><div class="sheet__grip"></div>${html}</div></div>`;
     const backdrop = root.firstElementChild;
+    const sheet = backdrop.querySelector('.sheet');
     backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeSheet(); });
-    onMount?.(root.querySelector('.sheet'));
+    enableSheetDrag(backdrop, sheet);
+    onMount?.(sheet);
   }
-  function closeSheet() { $('#sheet-root').innerHTML = ''; }
+  /** Шторка закрывается плавно — уезжает вниз. */
+  function closeSheet() {
+    const root = $('#sheet-root');
+    const backdrop = root.firstElementChild;
+    if (!backdrop) return;
+    const sheet = backdrop.querySelector('.sheet');
+    backdrop.classList.add('is-closing');
+    sheet.style.transition = 'transform .22s ease-in';
+    sheet.style.transform = 'translateY(105%)';
+    setTimeout(() => { if (root.firstElementChild === backdrop) root.innerHTML = ''; }, 220);
+  }
+  /** Смахнуть шторку вниз пальцем (как в приложениях): тянется за пальцем, отпустил — закрылась или вернулась. */
+  function enableSheetDrag(backdrop, sheet) {
+    let y0 = null; let dy = 0; let t0 = 0; let dragging = false;
+    const start = (y, target) => {
+      if (target.closest('input, textarea, select') || sheet.scrollTop > 0) return;
+      y0 = y; dy = 0; t0 = Date.now(); dragging = false;
+    };
+    const move = (y, e) => {
+      if (y0 == null) return;
+      dy = y - y0;
+      if (!dragging && dy > 8) { dragging = true; sheet.style.transition = 'none'; }
+      if (!dragging) return;
+      if (e?.cancelable) e.preventDefault(); // не прокручиваем страницу, пока тянем шторку
+      const d = Math.max(0, dy);
+      sheet.style.transform = `translateY(${d}px)`;
+      backdrop.style.backgroundColor = `rgba(9, 16, 39, ${Math.max(0, 0.28 * (1 - d / 400))})`;
+    };
+    const end = () => {
+      if (y0 == null) return;
+      const fast = dy > 60 && Date.now() - t0 < 250;
+      y0 = null;
+      if (!dragging) return;
+      if (dy > 110 || fast) { closeSheet(); return; }
+      sheet.style.transition = 'transform .3s cubic-bezier(.2,.9,.3,1.2)';
+      sheet.style.transform = 'translateY(0)';
+      backdrop.style.backgroundColor = '';
+    };
+    sheet.addEventListener('touchstart', (e) => start(e.touches[0].clientY, e.target), { passive: true });
+    sheet.addEventListener('touchmove', (e) => move(e.touches[0].clientY, e), { passive: false });
+    sheet.addEventListener('touchend', end);
+    sheet.addEventListener('touchcancel', end);
+    sheet.addEventListener('mousedown', (e) => start(e.clientY, e.target));
+    addEventListener('mousemove', (e) => move(e.clientY, e));
+    addEventListener('mouseup', end);
+    // Клик после перетаскивания не должен нажимать кнопку под пальцем
+    sheet.addEventListener('click', (e) => { if (dragging) { e.stopPropagation(); e.preventDefault(); dragging = false; } }, true);
+  }
 
   function openCallSheet() {
     const hasItems = (S.session?.items || []).length > 0 && !S.session?.isPaid;

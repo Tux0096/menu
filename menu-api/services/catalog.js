@@ -17,7 +17,7 @@ async function getCatalogFromDb(restaurantId) {
   const { rows: products } = await pool.query(
     `SELECT p.id, p.iiko_id, p.name, p.slug, p.description, p.price, p.old_price,
             p.weight, p.image_url, p.category_id, p.sort_order, p.is_published,
-            p.energy, p.proteins, p.fats, p.carbs
+            p.energy, p.proteins, p.fats, p.carbs, p.source
      FROM products p
      WHERE p.restaurant_id = $1 AND p.is_published = TRUE AND p.price > 0
      ORDER BY p.sort_order`,
@@ -69,6 +69,7 @@ async function getCatalogFromDb(restaurantId) {
       code: p.slug,
       parentGroup: p.category_id,
       parentGroupName: null,
+      source: p.source || 'main',
       price: parseFloat(p.price),
       oldPrice: num(p.old_price),
       weight: fmtWeight(p.weight),

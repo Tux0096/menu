@@ -8,7 +8,9 @@ import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import pool from './db/pool.js';
 import { QR_RESTAURANT_SLUG } from './lib/qr-config.js';
-import { isIikoDemo, accessibleOrgIds } from './iiko-client.js';
+import { isIikoDemo, accessibleOrgIds, accessibleOrgs, iikoRequest, withIikoCreds } from './iiko-client.js';
+import { iikoCredsList, iikoApiLogin, maskIikoKey } from './lib/iiko-token.js';
+import { listSources } from './services/sources.js';
 import legacyRoutes from './routes/legacy.js';
 import { syncAllRestaurants } from './db/sync-iiko.js';
 import { refreshStopLists, registerWebhooks, webhookToken } from './services/stoplist.js';
@@ -146,7 +148,12 @@ app.post('/api/v1/iiko/webhook', (req, res) => {
     for (const ev of events) {
       if (ev?.eventType === 'StopListUpdate' && ev.organizationId) stopOrgs.add(ev.organizationId);
       if (ev?.eventType === 'TableOrderUpdate' && ev.eventInfo?.id) {
-        const { rows } = await pool.query('SELECT id FROM table_sessions WHERE iiko_order_id::text = $1', [String(ev.eventInfo.id)]);
+        // Заказ кухни или доп. источника (бар) — ищем по всем заказам визита
+        const { rows } = await pool.query(
+          `SELECT id FROM table_sessions WHERE iiko_order_id::text = $1
+              OR EXISTS (SELECT 1 FROM jsonb_each(iiko_orders) e WHERE e.value->>'orderId' = $1)`,
+          [String(ev.eventInfo.id)],
+        );
         for (const r of rows) await refreshFromIiko(r.id);
       }
     }
@@ -338,10 +345,67 @@ admin.post('/upload', express.raw({ type: Object.keys(IMAGE_TYPES), limit: '8mb'
 admin.post('/menu/sync', h(async (req) => {
   const r = await staffRestaurant(req);
   await syncIikoMenu({ slugs: [r.slug] });
-  await refreshStopLists([r.organization_id]).catch(() => {});
+  const extraOrgs = (await listSources(r)).map((x) => x.organization_id);
+  await refreshStopLists([r.organization_id, ...extraOrgs]).catch(() => {});
   invalidateCatalogCache(r.id);
   audit(req.staff, 'menu.sync', 'restaurant', r.slug);
   return getAdminMenu(r, { force: true });
+}));
+// Источники iiko ресторана: кухня (основной) + доп. (бар с алкоголем в другой организации/аккаунте iiko)
+admin.get('/sources', h(async (req) => {
+  const r = await staffRestaurant(req);
+  return {
+    sources: await listSources(r, { all: true }),
+    creds: iikoCredsList().map((c) => ({ code: c, label: c ? `Ключ ${c} (${maskIikoKey(iikoApiLogin(c))})` : `Основной ключ (${maskIikoKey()})` })),
+  };
+}));
+admin.get('/sources/options', h(async (req) => {
+  const creds = String(req.query.creds || '');
+  if (creds && !iikoCredsList().includes(creds)) {
+    const err = new Error(`Ключ ${creds} не задан на сервере (секреты IIKO_${creds}_API_LOGIN / _CLIENT_SECRET)`);
+    err.status = 400;
+    throw err;
+  }
+  if (isIikoDemo()) return { orgs: [], menus: [] };
+  const [orgs, menus] = await Promise.all([
+    accessibleOrgs(creds),
+    withIikoCreds(creds, () => iikoRequest('/api/2/menu', {})).then((d) => (d.externalMenus || []).map((m) => ({ id: String(m.id), name: m.name }))).catch(() => []),
+  ]);
+  return { orgs: orgs || [], menus };
+}));
+admin.post('/sources', h(async (req) => {
+  requireBody(req.body, 'name', 'organizationId');
+  const r = await staffRestaurant(req);
+  const creds = String(req.body.creds || '');
+  const code = String(req.body.code || 'bar').toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 30) || 'bar';
+  if (code === 'main') { const err = new Error('Код main занят основным источником'); err.status = 400; throw err; }
+  // Группа терминалов организации — для заказа на стол и схемы зала
+  let terminalGroupId = req.body.terminalGroupId || null;
+  if (!terminalGroupId && !isIikoDemo()) {
+    const tg = await withIikoCreds(creds, () => iikoRequest('/api/1/terminal_groups', { organizationIds: [req.body.organizationId], includeDisabled: false }))
+      .catch(() => null);
+    terminalGroupId = tg?.terminalGroups?.[0]?.items?.[0]?.id || null;
+  }
+  const { rows } = await pool.query(
+    `INSERT INTO restaurant_sources (restaurant_id, code, name, organization_id, terminal_group_id, creds, external_menu_id, is_enabled)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     ON CONFLICT (restaurant_id, code) DO UPDATE SET name = EXCLUDED.name, organization_id = EXCLUDED.organization_id,
+       terminal_group_id = EXCLUDED.terminal_group_id, creds = EXCLUDED.creds, external_menu_id = EXCLUDED.external_menu_id,
+       is_enabled = EXCLUDED.is_enabled
+     RETURNING *`,
+    [r.id, code, String(req.body.name).slice(0, 100), req.body.organizationId, terminalGroupId, creds,
+      req.body.externalMenuId || null, req.body.isEnabled !== false],
+  );
+  audit(req.staff, 'source.save', 'restaurant', r.slug, rows[0]);
+  return rows[0];
+}));
+admin.delete('/sources/:code', h(async (req) => {
+  const r = await staffRestaurant(req);
+  await pool.query('DELETE FROM restaurant_sources WHERE restaurant_id = $1 AND code = $2', [r.id, req.params.code]);
+  await pool.query('DELETE FROM products WHERE restaurant_id = $1 AND source = $2', [r.id, req.params.code]);
+  invalidateCatalogCache(r.id);
+  audit(req.staff, 'source.delete', 'restaurant', r.slug, { code: req.params.code });
+  return { ok: true };
 }));
 admin.post('/menu/override', h(async (req) => {
   requireBody(req.body, 'productId');

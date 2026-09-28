@@ -193,7 +193,7 @@
       ${s.iikoLastError ? `<div class="error-box"><b>Ошибка iiko:</b> ${esc(s.iikoLastError)}<br>Корзина сохранена — исправьте и нажмите «В работу» ещё раз.</div>` : ''}
       <div>${e.items.length ? e.items.map((it, idx) => `<div class="row ${it.isLocked ? '' : 'is-new'}">
         <div><div class="row__name">${esc(it.name)}</div>
-          <div class="row__meta">${rub(it.price)} · ${it.isLocked ? (it.servedAt || it.kitchenStatus === 'Served' ? '<b class="served">✓ Вынесено</b>' : it.isReady ? `<b class="ready">Готово — выносить</b> <button class="btn btn--sm btn--dark" data-served-item="${esc(it.id)}">Вынесено</button>` : `${esc(it.kitchenLabel || 'на кухне')} (партия ${it.batchNo || 1})`) : '<b style="color:var(--ok)">новое</b>'}${it.guestName ? ` · ${esc(it.guestName)}` : ''}</div></div>
+          <div class="row__meta">${it.source && it.source !== 'main' ? `<span class="pill" data-tone="work">${esc(sourceLabel(it.source))}</span> ` : ''}${rub(it.price)} · ${it.isLocked ? (it.servedAt || it.kitchenStatus === 'Served' ? '<b class="served">✓ Вынесено</b>' : it.isReady ? `<b class="ready">Готово — выносить</b> <button class="btn btn--sm btn--dark" data-served-item="${esc(it.id)}">Вынесено</button>` : `${esc(it.kitchenLabel || 'на кухне')} (партия ${it.batchNo || 1})`) : '<b style="color:var(--ok)">новое</b>'}${it.guestName ? ` · ${esc(it.guestName)}` : ''}</div></div>
         <div class="row__opts">
           <select class="sel" data-seat="${idx}" title="Место"><option value="">Место —</option>${seats.map((n) => `<option value="${n}" ${Number(it.seatNumber) === n ? 'selected' : ''}>${esc(seatLabel(n))}</option>`).join('')}</select>
           <select class="sel" data-course="${idx}" title="Курс подачи" ${it.isLocked ? 'disabled' : ''}><option value="">Курс —</option>${[1, 2, 3].map((n) => `<option value="${n}" ${Number(it.course) === n ? 'selected' : ''}>Курс ${n}</option>`).join('')}</select>
@@ -206,7 +206,7 @@
         <div class="h3" style="margin:0 0 8px">Добавить из меню</div>
         ${products.length ? `<input class="inp" id="prod-search" style="width:100%" placeholder="Поиск блюда" value="${esc(S.productSearch)}">
         ${q ? '' : `<div class="picker__cats">${groups.map((g) => `<button class="${g.id === S.pickCat ? 'is-active' : ''}" data-pick-cat="${esc(g.id)}">${esc(g.name)}</button>`).join('')}</div>`}
-        <div class="search-results">${found.map((p) => `<button data-add="${esc(p.id)}" ${p.isInStopList ? 'disabled' : ''}><span>${esc(p.name)}${p.isInStopList ? ' · стоп-лист' : ''}</span><b>${rub(p.price)}</b></button>`).join('') || '<div class="muted">Ничего не найдено</div>'}</div>`
+        <div class="search-results">${found.map((p) => `<button data-add="${esc(p.id)}" ${p.isInStopList ? 'disabled' : ''}><span>${esc(p.name)}${p.source && p.source !== 'main' ? ` · ${esc(sourceLabel(p.source))}` : ''}${p.isInStopList ? ' · стоп-лист' : ''}</span><b>${rub(p.price)}</b></button>`).join('') || '<div class="muted">Ничего не найдено</div>'}</div>`
     : '<div class="error-box">Меню этого ресторана пустое — выгрузите его из iiko (админка → «Меню и стоп-лист» → «Перевыгрузить из iiko»).</div>'}
       </div>
       <div class="footer-actions">
@@ -285,7 +285,8 @@
         if (!S.adminMenu || S.adminMenu.restaurant !== S.restaurant) {
           S.adminMenu = { restaurant: S.restaurant, ...(await api('GET', '/api/v1/admin/menu')) };
         }
-        return menuTable();
+        S.adminSources = await api('GET', '/api/v1/admin/sources').catch(() => null);
+        return sourcesCard() + menuTable();
       },
     },
 
@@ -355,6 +356,74 @@
       },
     },
   };
+
+  // ── Админ: источники iiko (кухня + бар в другом iiko) ─────
+  const SOURCE_LABEL = { main: 'Кухня', bar: 'Бар' };
+  const sourceLabel = (code) => SOURCE_LABEL[code] || code;
+  function sourcesCard() {
+    const d = S.adminSources;
+    if (!d) return '';
+    const credsLabel = (c) => d.creds.find((x) => x.code === c)?.label || (c ? `Ключ ${c} — не задан на сервере` : 'Основной ключ');
+    return `<div class="card" style="margin-bottom:16px">
+      <div class="toolbar"><div class="h2 grow" style="margin:0">Источники iiko</div>
+        <button class="btn btn--sm btn--dark" data-src-add>Добавить бар / другой iiko</button></div>
+      <p class="muted" style="margin-top:0">Меню собирается из всех источников в одно — гость и официант видят один список.
+        При «В работу» заказ делится: каждая часть уходит в свой iiko на тот же стол.</p>
+      <div class="tbl-wrap"><table class="tbl tbl--cards"><tr><th>Источник</th><th>Организация iiko</th><th>Ключ</th><th>Внешнее меню</th><th></th></tr>
+        ${d.sources.map((x) => `<tr>
+          <td class="td-title">${esc(x.isMain ? 'Кухня (основной)' : x.name)}${x.is_enabled === false ? ' <span class="pill">выключен</span>' : ''}</td>
+          <td data-label="Организация" style="font-size:12px;overflow-wrap:anywhere">${esc(x.organization_id || '—')}</td>
+          <td data-label="Ключ">${esc(credsLabel(x.creds))}</td>
+          <td data-label="Меню">${esc(x.isMain ? 'из настроек ресторана' : (x.external_menu_id ? `#${x.external_menu_id}` : 'авто'))}</td>
+          <td class="td-actions">${x.isMain ? '' : `<button class="btn btn--sm" data-src-edit='${esc(JSON.stringify(x))}'>Изменить</button>
+            <button class="btn btn--sm btn--danger" data-src-del="${esc(x.code)}">Удалить</button>`}</td></tr>`).join('')}
+      </table></div>
+    </div>`;
+  }
+
+  function openSourceForm(x = {}) {
+    const d = S.adminSources;
+    modal(`<div class="h2">${x.code ? 'Источник iiko' : 'Новый источник iiko'}</div>
+      <p class="muted" style="margin-top:0">Например, бар: алкоголь продаётся через другую организацию iiko. Если она в другом аккаунте iiko —
+        добавьте на сервер секреты IIKO_BAR_API_LOGIN, IIKO_BAR_CLIENT_SECRET (и IIKO_BAR_APP_ID, если отличается) и выберите «Ключ BAR».</p>
+      <form id="src-form"><div class="form-grid">
+        <div class="field"><label>Название</label><input class="inp" name="name" value="${esc(x.name || 'Бар')}" required></div>
+        <div class="field"><label>Код</label><input class="inp" name="code" value="${esc(x.code || 'bar')}" ${x.code ? 'readonly' : ''} pattern="[a-z0-9_]+" required></div>
+        <div class="field"><label>Ключ iiko</label><select class="sel" name="creds" id="src-creds">${d.creds.map((c) => `<option value="${esc(c.code)}" ${(x.creds || '') === c.code ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}</select></div>
+        <div class="field"><label>Организация iiko</label><select class="sel" name="organizationId" id="src-org" required><option value="">Загрузка…</option></select></div>
+        <div class="field"><label>Внешнее меню</label><select class="sel" name="externalMenuId" id="src-menu"><option value="">Авто</option></select></div>
+        <label style="display:flex;gap:10px;align-items:center;margin-top:20px"><input type="checkbox" name="isEnabled" ${x.is_enabled !== false ? 'checked' : ''}> Включён</label>
+      </div>
+      <div class="error-box hidden" id="src-err"></div>
+      <div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить и выгрузить меню</button><button class="btn" type="button" data-modal-close>Отмена</button></div></form>`, (root) => {
+      const load = async () => {
+        const creds = $('#src-creds', root).value;
+        const err = $('#src-err', root);
+        err.classList.add('hidden');
+        try {
+          const o = await api('GET', `/api/v1/admin/sources/options?creds=${encodeURIComponent(creds)}`);
+          $('#src-org', root).innerHTML = o.orgs.length
+            ? o.orgs.map((g) => `<option value="${esc(g.id)}" ${g.id === x.organization_id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')
+            : `<option value="${esc(x.organization_id || '')}">${x.organization_id ? esc(x.organization_id) : 'iiko не вернул организаций'}</option>`;
+          $('#src-menu', root).innerHTML = `<option value="">Авто</option>${o.menus.map((m) => `<option value="${esc(m.id)}" ${m.id === String(x.external_menu_id || '') ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}`;
+        } catch (e) { err.textContent = e.message; err.classList.remove('hidden'); }
+      };
+      $('#src-creds', root).addEventListener('change', load);
+      load();
+      $('#src-form', root).addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const fd = Object.fromEntries(new FormData(e.target));
+        fd.isEnabled = e.target.elements.isEnabled.checked;
+        const btn = e.submitter; if (btn) { btn.disabled = true; btn.textContent = 'Сохраняем и выгружаем…'; }
+        try {
+          await api('POST', '/api/v1/admin/sources', fd);
+          S.adminMenu = await api('POST', '/api/v1/admin/menu/sync');
+          S.adminMenu.restaurant = S.restaurant;
+          closeModal(); toast('Источник сохранён, меню перевыгружено'); render();
+        } catch (err) { toast(err.message, true); if (btn) { btn.disabled = false; btn.textContent = 'Сохранить и выгрузить меню'; } }
+      });
+    });
+  }
 
   // ── Админ: меню ────────────────────────────────────────────
   function menuTable() {
@@ -594,6 +663,14 @@
         S.openId = null; S.edit = null; toast('Стол закрыт'); render(); return;
       }
       // админ
+      if (q('[data-src-add]')) { openSourceForm(); return; }
+      if (q('[data-src-edit]')) { openSourceForm(JSON.parse(q('[data-src-edit]').dataset.srcEdit)); return; }
+      if (q('[data-src-del]')) {
+        const code = q('[data-src-del]').dataset.srcDel;
+        if (!confirm(`Удалить источник «${code}»? Его блюда пропадут из меню.`)) return;
+        await api('DELETE', `/api/v1/admin/sources/${encodeURIComponent(code)}`);
+        S.adminMenu = null; toast('Источник удалён'); render(); return;
+      }
       if (q('[data-menu-refresh]')) {
         const b = q('[data-menu-refresh]'); b.disabled = true; b.textContent = 'Выгружаем из iiko…';
         S.adminMenu = { restaurant: S.restaurant, ...(await api('POST', '/api/v1/admin/menu/sync')) };

@@ -1,6 +1,15 @@
 import axios from 'axios';
 import { randomUUID } from 'crypto';
-import { IIKO_URL, requestIikoToken, iikoApiLogin } from './lib/iiko-token.js';
+import { AsyncLocalStorage } from 'async_hooks';
+import { IIKO_URL, requestIikoTokenFor, iikoApiLogin } from './lib/iiko-token.js';
+
+/**
+ * Несколько iiko: вызовы внутри withIikoCreds('BAR', fn) идут ключом IIKO_BAR_* (например, бар с алкоголем
+ * в отдельной организации/аккаунте iiko). Вне — основным ключом.
+ */
+const credsStore = new AsyncLocalStorage();
+export const withIikoCreds = (creds, fn) => credsStore.run({ creds: creds || '' }, fn);
+const currentCreds = () => credsStore.getStore()?.creds || '';
 
 
 /**
@@ -11,16 +20,15 @@ export function isIikoDemo() {
   return process.env.IIKO_DEMO === 'true' || !iikoApiLogin();
 }
 
-let cachedToken = null;
-let tokenExpiresAt = 0;
+const tokens = new Map(); // creds -> { token, exp }
 
-export async function getIikoToken() {
-  if (cachedToken && Date.now() < tokenExpiresAt) {
-    return cachedToken;
-  }
-  cachedToken = await requestIikoToken();
-  tokenExpiresAt = Date.now() + 50 * 60 * 1000;
-  return cachedToken;
+export async function getIikoToken(creds = currentCreds()) {
+  const hit = tokens.get(creds);
+  if (hit && Date.now() < hit.exp) return hit.token;
+  if (creds && !iikoApiLogin(creds)) throw new Error(`Ключ iiko «${creds}» не задан (IIKO_${creds}_API_LOGIN)`);
+  const token = await requestIikoTokenFor(creds);
+  tokens.set(creds, { token, exp: Date.now() + 50 * 60 * 1000 });
+  return token;
 }
 
 async function iikoPost(path, body) {
@@ -179,15 +187,22 @@ export function matchTableIdFromSections(sectionsResponse, tableNumber) {
 }
 
 // Организации, подключённые к API-логину (кэш 10 мин). Запросы по неподключённым iiko отклоняет целиком (403).
-let orgCache = { at: 0, ids: null };
-export async function accessibleOrgIds() {
+const orgCache = new Map(); // creds -> { at, ids, list }
+export async function accessibleOrgs(creds = currentCreds()) {
   if (isIikoDemo()) return null;
-  if (orgCache.ids && Date.now() - orgCache.at < 10 * 60 * 1000) return orgCache.ids;
+  const hit = orgCache.get(creds);
+  if (hit?.list && Date.now() - hit.at < 10 * 60 * 1000) return hit.list;
   try {
-    const data = await iikoRequest('/api/1/organizations', { returnAdditionalInfo: false, includeDisabled: false });
-    orgCache = { at: Date.now(), ids: new Set((data?.organizations || []).map((o) => o.id)) };
+    const data = await withIikoCreds(creds, () => iikoRequest('/api/1/organizations', { returnAdditionalInfo: false, includeDisabled: false }));
+    const list = (data?.organizations || []).map((o) => ({ id: o.id, name: o.name }));
+    orgCache.set(creds, { at: Date.now(), list });
+    return list;
   } catch (e) {
-    console.warn('iiko organizations:', e.response?.data?.errorDescription || e.message);
+    console.warn(`iiko organizations${creds ? ` (${creds})` : ''}:`, e.response?.data?.errorDescription || e.message);
+    return hit?.list || null;
   }
-  return orgCache.ids;
+}
+export async function accessibleOrgIds(creds = currentCreds()) {
+  const list = await accessibleOrgs(creds);
+  return list ? new Set(list.map((o) => o.id)) : null;
 }

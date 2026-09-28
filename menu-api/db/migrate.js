@@ -312,6 +312,27 @@ const SCHEMA = `
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (restaurant_id, product_id)
   );
+  ALTER TABLE stop_lists ADD COLUMN IF NOT EXISTS source VARCHAR(30) NOT NULL DEFAULT 'main';
+
+  -- Дополнительные источники iiko ресторана (например, бар с алкоголем в отдельной организации iiko).
+  -- Основной источник — сама организация ресторана (restaurants.organization_id), код 'main'.
+  CREATE TABLE IF NOT EXISTS restaurant_sources (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+    code VARCHAR(30) NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    organization_id VARCHAR(64) NOT NULL,
+    terminal_group_id VARCHAR(64),
+    creds VARCHAR(30) NOT NULL DEFAULT '',
+    external_menu_id VARCHAR(64),
+    is_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+    sort_order INT NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (restaurant_id, code)
+  );
+  ALTER TABLE products ADD COLUMN IF NOT EXISTS source VARCHAR(30) NOT NULL DEFAULT 'main';
+  ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS source VARCHAR(30) NOT NULL DEFAULT 'main';
+  ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS iiko_orders JSONB NOT NULL DEFAULT '{}';
 
   -- Персонал
   CREATE TABLE IF NOT EXISTS staff_users (

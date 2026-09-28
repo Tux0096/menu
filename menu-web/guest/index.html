@@ -22,6 +22,12 @@
   </div>
   <div id="sheet-root"></div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script>
+    // Меню открыто внутри Telegram — подключаем Telegram Mini App (весь экран, без браузерной шапки)
+    if (/Telegram/i.test(navigator.userAgent) || location.hash.includes('tgWebApp') || window.TelegramWebviewProxy) {
+      document.write('<script src="https://telegram.org/js/telegram-web-app.js"><\/script>');
+    }
+  </script>
   <script src="/app.js"></script>
 </body>
 </html>
