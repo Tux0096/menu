@@ -116,7 +116,17 @@
     if (!tabs.includes(S.tab)) S.tab = 'tables';
     const view = VIEWS[S.tab];
     try {
+      const tabsScroll = $('.tabs')?.scrollLeft || 0;
       $('#app').innerHTML = shell(await view.render());
+      // Лента вкладок на телефоне: сохраняем прокрутку и показываем активную вкладку
+      const tabsEl = $('.tabs');
+      const active = $('.tabs .is-active');
+      if (tabsEl) {
+        tabsEl.scrollLeft = tabsScroll;
+        if (active && (active.offsetLeft < tabsEl.scrollLeft || active.offsetLeft + active.offsetWidth > tabsEl.scrollLeft + tabsEl.clientWidth)) {
+          tabsEl.scrollLeft = active.offsetLeft - 12;
+        }
+      }
       view.mounted?.();
     } catch (e) {
       $('#app').innerHTML = shell(`<div class="card error-box">${esc(e.message)}</div>`);
@@ -310,12 +320,12 @@
     feedback: {
       async render() {
         const rows = await api('GET', '/api/v1/manager/feedback');
-        return `<div class="card"><div class="h2">Отзывы гостей</div><div class="tbl-wrap"><table class="tbl">
+        return `<div class="card"><div class="h2">Отзывы гостей</div><div class="tbl-wrap"><table class="tbl tbl--cards">
           <tr><th>Когда</th><th>Стол</th><th>Оценка</th><th>Комментарий</th><th>Гость</th><th>Официант</th><th>Сумма</th></tr>
-          ${rows.map((f) => `<tr><td>${dateTime(f.created_at)}</td><td>№${esc(f.table_number)}</td>
-            <td><span class="stars">${'★'.repeat(f.rating)}</span><span class="muted">${'★'.repeat(5 - f.rating)}</span></td>
-            <td>${f.rating <= 3 ? '<span class="pill" data-tone="bad">эскалация</span> ' : ''}${esc(f.comment || '')}</td>
-            <td>${esc(f.guest_name || '—')}</td><td>${esc(f.waiter_name || '—')}</td><td>${rub(f.total)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Отзывов пока нет</td></tr>'}
+          ${rows.map((f) => `<tr><td data-label="Когда">${dateTime(f.created_at)}</td><td data-label="Стол">№${esc(f.table_number)}</td>
+            <td data-label="Оценка"><span class="stars">${'★'.repeat(f.rating)}</span><span class="muted">${'★'.repeat(5 - f.rating)}</span></td>
+            <td data-label="Комментарий">${f.rating <= 3 ? '<span class="pill" data-tone="bad">эскалация</span> ' : ''}${esc(f.comment || '')}</td>
+            <td data-label="Гость">${esc(f.guest_name || '—')}</td><td data-label="Официант">${esc(f.waiter_name || '—')}</td><td data-label="Сумма">${rub(f.total)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Отзывов пока нет</td></tr>'}
         </table></div></div>`;
       },
     },
@@ -326,10 +336,10 @@
         S.staffRests = rests;
         const roleName = { admin: 'Администратор', manager: 'Управляющий', waiter: 'Официант' };
         return `<div class="card"><div class="toolbar"><div class="h2 grow" style="margin:0">Сотрудники</div><button class="btn btn--dark btn--sm" data-staff-new>Добавить</button></div>
-          <div class="tbl-wrap"><table class="tbl"><tr><th>Имя</th><th>Логин</th><th>Роль</th><th>Ресторан</th><th>Статус</th><th></th></tr>
-          ${rows.map((u) => `<tr><td>${esc(u.name)}</td><td>${esc(u.login)}</td><td>${roleName[u.role]}</td>
-            <td>${esc(rests.find((r) => r.id === u.restaurantId)?.name || 'Все')}</td><td>${u.isActive ? '<span class="pill" data-tone="ok">активен</span>' : '<span class="pill">отключён</span>'}</td>
-            <td><button class="btn btn--sm" data-staff-edit='${esc(JSON.stringify(u))}'>Изменить</button></td></tr>`).join('')}
+          <div class="tbl-wrap"><table class="tbl tbl--cards"><tr><th>Имя</th><th>Логин</th><th>Роль</th><th>Ресторан</th><th>Статус</th><th></th></tr>
+          ${rows.map((u) => `<tr><td class="td-title">${esc(u.name)}</td><td data-label="Логин">${esc(u.login)}</td><td data-label="Роль">${roleName[u.role]}</td>
+            <td data-label="Ресторан">${esc(rests.find((r) => r.id === u.restaurantId)?.name || 'Все')}</td><td data-label="Статус">${u.isActive ? '<span class="pill" data-tone="ok">активен</span>' : '<span class="pill">отключён</span>'}</td>
+            <td class="td-actions"><button class="btn btn--sm" data-staff-edit='${esc(JSON.stringify(u))}'>Изменить</button></td></tr>`).join('')}
           </table></div></div>`;
       },
     },
@@ -337,10 +347,10 @@
     audit: {
       async render() {
         const rows = await api('GET', '/api/v1/admin/audit');
-        return `<div class="card"><div class="h2">Журнал изменений</div><div class="tbl-wrap"><table class="tbl">
+        return `<div class="card"><div class="h2">Журнал изменений</div><div class="tbl-wrap"><table class="tbl tbl--cards">
           <tr><th>Когда</th><th>Кто</th><th>Действие</th><th>Объект</th><th>Детали</th></tr>
-          ${rows.map((a) => `<tr><td>${dateTime(a.created_at)}</td><td>${esc(a.staff_name || '')}</td><td>${esc(a.action)}</td>
-            <td>${esc(a.entity || '')} ${esc((a.entity_id || '').slice(0, 12))}</td><td class="muted" style="font-size:12px;max-width:380px">${esc(JSON.stringify(a.payload || {})).slice(0, 200)}</td></tr>`).join('')}
+          ${rows.map((a) => `<tr><td data-label="Когда">${dateTime(a.created_at)}</td><td data-label="Кто">${esc(a.staff_name || '')}</td><td data-label="Действие">${esc(a.action)}</td>
+            <td data-label="Объект">${esc(a.entity || '')} ${esc((a.entity_id || '').slice(0, 12))}</td><td class="muted" data-label="Детали" style="font-size:12px;max-width:380px;overflow-wrap:anywhere">${esc(JSON.stringify(a.payload || {})).slice(0, 200)}</td></tr>`).join('')}
         </table></div></div>`;
       },
     },
@@ -364,16 +374,16 @@
         <select class="sel" id="menu-group"><option value="">Все категории</option>${groups.map((g) => `<option ${g === S.menu.group ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select>
         <label style="display:flex;gap:8px;align-items:center">${sw(S.menu.onlyStop, 'data-only-stop')} Только стоп/скрытые</label>
       </div>
-      <div class="tbl-wrap"><table class="tbl">
+      <div class="tbl-wrap"><table class="tbl tbl--cards tbl--menu">
         <tr><th></th><th>Блюдо</th><th>Категория</th><th>Цена</th><th>Стоп-лист</th><th>Скрыть</th><th>Рекомендуем</th><th></th></tr>
         ${rows.map((p) => `<tr>
           <td>${p.image ? `<img class="thumb" src="${esc(p.image)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">` : '<div class="thumb">🍽</div>'}</td>
           <td><b>${esc(p.name)}</b><div class="muted" style="font-size:12px">${esc(p.weight || '')}${p.energy ? ` · ${Math.round(p.energy)} ккал` : ''}${p.allergens?.length ? ` · аллергены: ${esc(p.allergens.join(', '))}` : ''}</div></td>
-          <td class="muted">${esc(p.group)}</td><td>${p.price ? rub(p.price) : ''}</td>
-          <td>${sw(p.isInStopList, `data-ov="${esc(p.id)}" data-field="is_stopped" data-val="${!p.isInStopList}"`, true)}</td>
-          <td>${sw(p.isHidden, `data-ov="${esc(p.id)}" data-field="is_hidden" data-val="${!p.isHidden}"`)}</td>
-          <td>${p.isHidden ? '' : sw(p.isRecommended, `data-ov="${esc(p.id)}" data-field="is_recommended" data-val="${!p.isRecommended}"`)}</td>
-          <td>${p.isHidden ? '' : `<button class="btn btn--sm" data-edit-product="${esc(p.id)}">Карточка</button>`}</td>
+          <td class="muted" data-label="Категория">${esc(p.group)}</td><td data-label="Цена">${p.price ? rub(p.price) : ''}</td>
+          <td data-label="Стоп-лист">${sw(p.isInStopList, `data-ov="${esc(p.id)}" data-field="is_stopped" data-val="${!p.isInStopList}"`, true)}</td>
+          <td data-label="Скрыть">${sw(p.isHidden, `data-ov="${esc(p.id)}" data-field="is_hidden" data-val="${!p.isHidden}"`)}</td>
+          <td data-label="Рекомендуем">${p.isHidden ? '' : sw(p.isRecommended, `data-ov="${esc(p.id)}" data-field="is_recommended" data-val="${!p.isRecommended}"`)}</td>
+          <td class="td-actions">${p.isHidden ? '' : `<button class="btn btn--sm" data-edit-product="${esc(p.id)}">Карточка</button>`}</td>
         </tr>`).join('')}
       </table></div>
       <p class="muted" style="font-size:12px;margin-top:12px">Стоп-лист: блюдо остаётся в меню, но заказать его нельзя. Скрыть: блюдо пропадает из QR-меню. Правки действуют поверх выгрузки iiko и не теряются при обновлении меню.</p>
@@ -446,9 +456,9 @@
         const rows = await api('GET', path);
         return `<div class="card"><div class="toolbar"><div class="h2 grow" style="margin:0">${title}</div><button class="btn btn--dark btn--sm" data-crud-new="${path}">Добавить</button></div>
           <p class="muted" style="margin-top:0">${hint}</p>
-          <div class="tbl-wrap"><table class="tbl"><tr>${fields.map(([, l]) => `<th>${l}</th>`).join('')}<th></th></tr>
-          ${rows.map((r) => `<tr>${fields.map(([k, , t]) => `<td>${t === 'bool' ? (r[k] ? '✓' : '—') : esc(r[k] ?? '')}</td>`).join('')}
-            <td style="white-space:nowrap"><button class="btn btn--sm" data-crud-edit='${esc(JSON.stringify({ path, row: r }))}'>Изменить</button>
+          <div class="tbl-wrap"><table class="tbl tbl--cards"><tr>${fields.map(([, l]) => `<th>${l}</th>`).join('')}<th></th></tr>
+          ${rows.map((r) => `<tr>${fields.map(([k, l, t]) => `<td data-label="${esc(l)}">${t === 'bool' ? (r[k] ? '✓' : '—') : esc(r[k] ?? '')}</td>`).join('')}
+            <td class="td-actions" style="white-space:nowrap"><button class="btn btn--sm" data-crud-edit='${esc(JSON.stringify({ path, row: r }))}'>Изменить</button>
             <button class="btn btn--sm btn--danger" data-crud-del="${path}/${r.id}">Удалить</button></td></tr>`).join('')}
           </table></div></div>`;
       },
