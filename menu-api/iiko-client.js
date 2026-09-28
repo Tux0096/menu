@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { randomUUID } from 'crypto';
-import { IIKO_URL, requestIikoToken } from './lib/iiko-token.js';
+import { IIKO_URL, requestIikoToken, iikoApiLogin } from './lib/iiko-token.js';
 
 
 /**
@@ -8,7 +8,7 @@ import { IIKO_URL, requestIikoToken } from './lib/iiko-token.js';
  * Заказы «создаются» локально с фиктивным orderId — прототип работает без доступа к iiko.
  */
 export function isIikoDemo() {
-  return process.env.IIKO_DEMO === 'true' || !process.env.IIKO_API_LOGIN;
+  return process.env.IIKO_DEMO === 'true' || !iikoApiLogin();
 }
 
 let cachedToken = null;
@@ -18,7 +18,7 @@ export async function getIikoToken() {
   if (cachedToken && Date.now() < tokenExpiresAt) {
     return cachedToken;
   }
-  cachedToken = await requestIikoToken(process.env.IIKO_API_LOGIN);
+  cachedToken = await requestIikoToken();
   tokenExpiresAt = Date.now() + 50 * 60 * 1000;
   return cachedToken;
 }

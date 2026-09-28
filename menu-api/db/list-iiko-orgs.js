@@ -5,12 +5,12 @@
 import dotenv from 'dotenv';
 dotenv.config();
 import axios from 'axios';
-import { requestIikoToken } from '../lib/iiko-token.js';
+import { iikoApiLogin, requestIikoToken } from '../lib/iiko-token.js';
 
 const IIKO_URL = 'https://api-ru.iiko.services';
 
 async function main() {
-  const apiLogin = process.env.IIKO_API_LOGIN;
+  const apiLogin = iikoApiLogin();
   if (!apiLogin) {
     console.error('IIKO_API_LOGIN не задан в .env');
     process.exit(1);

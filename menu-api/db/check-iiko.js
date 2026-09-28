@@ -6,18 +6,17 @@ import dotenv from 'dotenv';
 dotenv.config();
 import axios from 'axios';
 import pool from './pool.js';
-import { requestIikoToken } from '../lib/iiko-token.js';
+import { iikoApiLogin, iikoClientSecret, maskIikoKey, requestIikoToken } from '../lib/iiko-token.js';
 
-const IIKO_URL = 'https://api-ru.iiko.services';
+const IIKO_URL = process.env.IIKO_URL || 'https://api-ru.iiko.services';
 
 async function main() {
-  if (!process.env.IIKO_API_LOGIN || process.env.IIKO_DEMO === 'true') {
+  if (!iikoApiLogin() || process.env.IIKO_DEMO === 'true') {
     console.log('iiko: ключ не задан — демо-режим, заказы в iiko не уходят');
     return;
   }
-  const mask = (k) => (k ? `${k.slice(0, 4)}…${k.slice(-2)} (${k.length} симв.)` : 'не задан');
-  console.log(`iiko: ключ заказов ${mask(process.env.IIKO_API_LOGIN)}${(process.env.IIKO_CLIENT_SECRET || process.env.IIKO_MENU_CLIENT_SECRET) ? ', секрет клиента задан' : ', секрета клиента нет'}`);
-  const headers = { Authorization: `Bearer ${await requestIikoToken(process.env.IIKO_API_LOGIN)}` };
+  console.log(`iiko: ключ ${maskIikoKey()}${iikoClientSecret() ? ', секрет клиента задан' : ', секрета клиента нет'}`);
+  const headers = { Authorization: `Bearer ${await requestIikoToken()}` };
   const { data } = await axios.post(`${IIKO_URL}/api/1/organizations`, { returnAdditionalInfo: false, includeDisabled: false }, { headers, timeout: 15000 });
   const orgs = data.organizations || [];
   console.log(`iiko: ключу доступно организаций — ${orgs.length}`);
@@ -30,14 +29,8 @@ async function main() {
     console.log(`  ${visible.has(r.organization_id) ? '✓' : '✗'} ${r.slug.padEnd(20)} ${r.organization_id}  ${r.name}`);
   }
   try {
-    const menuLogin = process.env.IIKO_MENU_API_LOGIN;
-    let menuHeaders = headers;
-    if (menuLogin && menuLogin !== process.env.IIKO_API_LOGIN) {
-      console.log(`iiko: ключ внешнего меню ${mask(menuLogin)}`);
-      menuHeaders = { Authorization: `Bearer ${await requestIikoToken(menuLogin, process.env.IIKO_MENU_CLIENT_SECRET || process.env.IIKO_CLIENT_SECRET)}` };
-    }
     if (process.env.IIKO_EXTERNAL_MENU_ID) console.log(`iiko: ID внешнего меню из настроек ${process.env.IIKO_EXTERNAL_MENU_ID}`);
-    const { data: menus } = await axios.post(`${IIKO_URL}/api/2/menu`, {}, { headers: menuHeaders, timeout: 15000 });
+    const { data: menus } = await axios.post(`${IIKO_URL}/api/2/menu`, {}, { headers, timeout: 15000 });
     const ext = menus.externalMenus || [];
     console.log(`Внешние меню iiko: ${ext.length ? ext.map((m) => `${m.name} [${m.id}]`).join('; ') : 'нет'}`);
     const cats = menus.priceCategories || [];

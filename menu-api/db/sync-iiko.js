@@ -15,7 +15,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import axios from 'axios';
 import { default as pool } from './pool.js';
-import { requestIikoToken } from '../lib/iiko-token.js';
+import { iikoApiLogin, maskIikoKey, requestIikoToken } from '../lib/iiko-token.js';
 
 const IIKO_URL = process.env.IIKO_URL || 'https://api-ru.iiko.services';
 
@@ -59,30 +59,15 @@ const CATALOG_MENU = [
 const CATALOG_IDS = new Set(CATALOG_MENU.map(c => c.id));
 
 async function getToken() {
-  const apiLogin = process.env.IIKO_API_LOGIN;
+  const apiLogin = iikoApiLogin();
   if (!apiLogin) {
     throw new Error(
       'IIKO_API_LOGIN не задан в .env\n' +
       'Добавь в menu-api/.env: IIKO_API_LOGIN=<твой-ключ>'
     );
   }
-  console.log(`Получаем токен iiko (ключ ${maskKey(apiLogin)})...`);
+  console.log(`Получаем токен iiko (ключ ${maskIikoKey(apiLogin)})...`);
   return requestIikoToken(apiLogin);
-}
-
-export function maskKey(k) {
-  return k ? `${k.slice(0, 4)}…${k.slice(-2)} (${k.length} симв.)` : 'не задан';
-}
-
-/**
- * Токен для внешнего меню. Меню может быть подключено к отдельному API-логину
- * (IIKO_MENU_API_LOGIN / IIKO_MENU_CLIENT_SECRET) — заказы при этом идут основным ключом.
- */
-async function getMenuToken(mainToken) {
-  const login = process.env.IIKO_MENU_API_LOGIN;
-  if (!login || login === process.env.IIKO_API_LOGIN) return mainToken;
-  console.log(`Ключ для внешнего меню: ${maskKey(login)}`);
-  return requestIikoToken(login, process.env.IIKO_MENU_CLIENT_SECRET || process.env.IIKO_CLIENT_SECRET);
 }
 
 async function iikoPostRaw(token, path, body) {
@@ -219,7 +204,7 @@ async function pickExternalMenu(token) {
   if (menu) console.log(`Используем внешнее меню «${menu.name}» [${menu.id}]`);
   else {
     console.log('ВНИМАНИЕ: внешнее меню не найдено. Проверьте, что меню подключено к этому API-логину'
-      + ' (или задайте IIKO_MENU_API_LOGIN — ключ, к которому подключено меню, и/или IIKO_EXTERNAL_MENU_ID)');
+      + ' в iikoWeb (Настройки Cloud API → API-логин → внешние меню) или задайте IIKO_EXTERNAL_MENU_ID');
   }
   return menu || null;
 }
@@ -483,7 +468,7 @@ export async function syncAllRestaurants(slugArg = null) {
   } catch (e) {
     console.log('  ! не удалось получить список организаций:', e.message);
   }
-  const menuToken = await getMenuToken(token);
+  const menuToken = token;
   const externalMenu = await pickExternalMenu(menuToken);
   // Внешнее меню — одним запросом на все рестораны (цены в нём по организациям): меньше запросов, нет 429
   let menuData = null;

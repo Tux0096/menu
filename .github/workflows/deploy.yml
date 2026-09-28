@@ -8,7 +8,7 @@
 #   OPENROUTER_API_KEY  — ключ AI (OpenRouter)
 # Необязательные:
 #   IIKO_API_LOGIN, IIKO_CLIENT_SECRET (для ключей iiko нового поколения), ADMIN_PASSWORD, MANAGER_PASSWORD, WAITER_PASSWORD
-#   IIKO_MENU_API_LOGIN, IIKO_MENU_CLIENT_SECRET — ключ, к которому подключено внешнее меню (если другой)
+#   IIKO_MENU_API_LOGIN / IIKO_MENU_CLIENT_SECRET — то же, что IIKO_API_LOGIN / IIKO_CLIENT_SECRET (один ключ на всё)
 #   IIKO_EXTERNAL_MENU_ID — ID внешнего меню iiko (если не задан — выбирается из меню ключа)
 name: Deploy
 
