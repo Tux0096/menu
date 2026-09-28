@@ -6,7 +6,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import axios from 'axios';
 import pool from './pool.js';
-import { iikoApiLogin, iikoClientSecret, maskIikoKey, requestIikoToken } from '../lib/iiko-token.js';
+import { iikoApiLogin, iikoAppId, iikoClientSecret, maskIikoKey, requestIikoToken } from '../lib/iiko-token.js';
 
 const IIKO_URL = process.env.IIKO_URL || 'https://api-ru.iiko.services';
 
@@ -15,7 +15,7 @@ async function main() {
     console.log('iiko: ключ не задан — демо-режим, заказы в iiko не уходят');
     return;
   }
-  console.log(`iiko: ключ ${maskIikoKey()}${iikoClientSecret() ? ', секрет клиента задан' : ', секрета клиента нет'}`);
+  console.log(`iiko: ключ ${maskIikoKey()}${iikoAppId() ? ', ID приложения задан' : ', ID приложения нет'}${iikoClientSecret() ? ', секрет клиента задан' : ', секрета клиента нет'}`);
   const headers = { Authorization: `Bearer ${await requestIikoToken()}` };
   const { data } = await axios.post(`${IIKO_URL}/api/1/organizations`, { returnAdditionalInfo: false, includeDisabled: false }, { headers, timeout: 15000 });
   const orgs = data.organizations || [];

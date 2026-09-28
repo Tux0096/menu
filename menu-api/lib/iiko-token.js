@@ -3,11 +3,6 @@ import axios from 'axios';
 export const IIKO_URL = process.env.IIKO_URL || 'https://api-ru.iiko.services';
 
 /**
- * Токен iiko Cloud API. Новые ключи (созданные в 2026+) работают только через
- * /api/v2/access_token и требуют секрет клиента (IIKO_CLIENT_SECRET); старые — /api/1/access_token.
- * Пробуем v2, затем v1.
- */
-/**
  * Один ключ iiko на всё: меню, заказы, стоп-лист, статусы кухни, вебхуки.
  * Имя секрета любое из двух: IIKO_MENU_API_LOGIN (если задан) или IIKO_API_LOGIN.
  */
@@ -20,15 +15,27 @@ export function iikoClientSecret() {
   return process.env.IIKO_CLIENT_SECRET || process.env.IIKO_MENU_CLIENT_SECRET || '';
 }
 
+/** ID приложения (appId) — новые ключи iiko выдают токен только вместе с ним: IIKO_APP_ID или IIKO_MENU_APP_ID. */
+export function iikoAppId() {
+  return process.env.IIKO_APP_ID || process.env.IIKO_MENU_APP_ID || '';
+}
+
 export function maskIikoKey(k = iikoApiLogin()) {
   return k ? `${k.slice(0, 4)}…${k.slice(-2)} (${k.length} симв.)` : 'не задан';
 }
 
-export async function requestIikoToken(apiLogin = iikoApiLogin(), clientSecret = iikoClientSecret()) {
+/**
+ * Токен iiko Cloud API. Новые ключи работают только через /api/v2/access_token
+ * (ключ + ID приложения + секрет клиента); старые — через /api/1/access_token. Пробуем v2, затем v1.
+ */
+export async function requestIikoToken(apiLogin = iikoApiLogin(), clientSecret = iikoClientSecret(), appId = iikoAppId()) {
   if (!apiLogin) throw new Error('IIKO_API_LOGIN не задан');
   const errors = [];
+  const v2 = { apiLogin };
+  if (appId) v2.appId = appId;
+  if (clientSecret) v2.clientSecret = clientSecret;
   const attempts = [
-    ['/api/v2/access_token', clientSecret ? { apiLogin, clientSecret } : { apiLogin }],
+    ['/api/v2/access_token', v2],
     ['/api/1/access_token', { apiLogin }],
   ];
   for (const [path, body] of attempts) {
