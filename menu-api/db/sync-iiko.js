@@ -473,7 +473,9 @@ export async function syncAllRestaurants(slugArg = null) {
   // Внешнее меню — одним запросом на все рестораны (цены в нём по организациям): меньше запросов, нет 429
   let menuData = null;
   if (externalMenu) {
-    const orgIds = [...new Set(restaurants.map((r) => r.organization_id).filter(Boolean))];
+    // Только организации, подключённые к ключу (иначе iiko отвечает 403 на весь запрос)
+    const visible = new Set(orgs.map((o) => o.id));
+    const orgIds = [...new Set(restaurants.map((r) => r.organization_id).filter((id) => id && (!visible.size || visible.has(id))))];
     try {
       menuData = await requestExternalMenu(menuToken, externalMenu, orgIds);
       const cats = menuData.itemCategories || menuData.categories || [];
@@ -485,7 +487,12 @@ export async function syncAllRestaurants(slugArg = null) {
   }
   let totalProducts = 0;
   let failed = 0;
+  const visibleOrgs = new Set(orgs.map((o) => o.id));
   for (const [idx, r] of restaurants.entries()) {
+    if (visibleOrgs.size && r.organization_id && !visibleOrgs.has(r.organization_id)) {
+      console.log(`→ ${r.name} (${r.slug}): точка не подключена к API-логину iiko — пропускаем (прежняя выгрузка сохраняется)`);
+      continue;
+    }
     if (idx && !menuData) await new Promise((res) => setTimeout(res, 6000)); // iiko ограничивает частоту запросов (429)
     try {
       const res = await syncRestaurant(r, token, orgs, externalMenu, menuToken, menuData);

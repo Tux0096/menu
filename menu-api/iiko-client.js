@@ -177,3 +177,17 @@ export function matchTableIdFromSections(sectionsResponse, tableNumber) {
   }
   return null;
 }
+
+// Организации, подключённые к API-логину (кэш 10 мин). Запросы по неподключённым iiko отклоняет целиком (403).
+let orgCache = { at: 0, ids: null };
+export async function accessibleOrgIds() {
+  if (isIikoDemo()) return null;
+  if (orgCache.ids && Date.now() - orgCache.at < 10 * 60 * 1000) return orgCache.ids;
+  try {
+    const data = await iikoRequest('/api/1/organizations', { returnAdditionalInfo: false, includeDisabled: false });
+    orgCache = { at: Date.now(), ids: new Set((data?.organizations || []).map((o) => o.id)) };
+  } catch (e) {
+    console.warn('iiko organizations:', e.response?.data?.errorDescription || e.message);
+  }
+  return orgCache.ids;
+}

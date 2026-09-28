@@ -4,7 +4,7 @@
  */
 import { createHmac } from 'crypto';
 import pool from '../db/pool.js';
-import { iikoRequest, isIikoDemo } from '../iiko-client.js';
+import { accessibleOrgIds, iikoRequest, isIikoDemo } from '../iiko-client.js';
 import { PUBLIC_MENU_URL } from '../lib/qr-config.js';
 
 const memory = new Map(); // restaurantId -> Set(productId)
@@ -36,7 +36,9 @@ export async function refreshStopLists(orgIds = null) {
     `SELECT id, slug, organization_id, terminal_group_id FROM restaurants
      WHERE is_disabled = FALSE AND organization_id IS NOT NULL`,
   );
-  const targets = restaurants.filter((r) => !orgIds || orgIds.includes(r.organization_id));
+  const allowed = await accessibleOrgIds();
+  const targets = restaurants.filter((r) => (!orgIds || orgIds.includes(r.organization_id))
+    && (!allowed || allowed.has(r.organization_id)));
   if (!targets.length) return 0;
   const orgs = [...new Set(targets.map((r) => r.organization_id))];
   const data = await iikoRequest('/api/1/stop_lists', { organizationIds: orgs });
@@ -96,7 +98,9 @@ export async function registerWebhooks() {
     'SELECT DISTINCT organization_id FROM restaurants WHERE is_disabled = FALSE AND organization_id IS NOT NULL',
   );
   const url = webhookUrl();
+  const allowed = await accessibleOrgIds();
   for (const { organization_id: organizationId } of rows) {
+    if (allowed && !allowed.has(organizationId)) continue; // точка не подключена к API-логину
     try {
       const current = await iikoRequest('/api/1/webhooks/settings', { organizationId });
       const existing = current?.webHooksUri || '';
