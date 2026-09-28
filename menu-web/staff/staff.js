@@ -193,7 +193,7 @@
       ${s.iikoLastError ? `<div class="error-box"><b>Ошибка iiko:</b> ${esc(s.iikoLastError)}<br>Корзина сохранена — исправьте и нажмите «В работу» ещё раз.</div>` : ''}
       <div>${e.items.length ? e.items.map((it, idx) => `<div class="row ${it.isLocked ? '' : 'is-new'}">
         <div><div class="row__name">${esc(it.name)}</div>
-          <div class="row__meta">${rub(it.price)} · ${it.isLocked ? (it.isReady ? '<b class="ready">Готово — выносить</b>' : `${esc(it.kitchenLabel || 'на кухне')} (партия ${it.batchNo || 1})`) : '<b style="color:var(--ok)">новое</b>'}${it.guestName ? ` · ${esc(it.guestName)}` : ''}</div></div>
+          <div class="row__meta">${rub(it.price)} · ${it.isLocked ? (it.servedAt || it.kitchenStatus === 'Served' ? '<b class="served">✓ Вынесено</b>' : it.isReady ? `<b class="ready">Готово — выносить</b> <button class="btn btn--sm btn--dark" data-served-item="${esc(it.id)}">Вынесено</button>` : `${esc(it.kitchenLabel || 'на кухне')} (партия ${it.batchNo || 1})`) : '<b style="color:var(--ok)">новое</b>'}${it.guestName ? ` · ${esc(it.guestName)}` : ''}</div></div>
         <div class="row__opts">
           <select class="sel" data-seat="${idx}" title="Место"><option value="">Место —</option>${seats.map((n) => `<option value="${n}" ${Number(it.seatNumber) === n ? 'selected' : ''}>${esc(seatLabel(n))}</option>`).join('')}</select>
           <select class="sel" data-course="${idx}" title="Курс подачи" ${it.isLocked ? 'disabled' : ''}><option value="">Курс —</option>${[1, 2, 3].map((n) => `<option value="${n}" ${Number(it.course) === n ? 'selected' : ''}>Курс ${n}</option>`).join('')}</select>
@@ -554,8 +554,9 @@
         api('POST', `/api/v1/waiter/session/${S.openId}/release`).catch(() => {});
         S.openId = null; S.edit = null; render(); return;
       }
-      if (q('[data-served]')) {
-        const s = await api('POST', `/api/v1/waiter/session/${S.openId}/served`);
+      if (q('[data-served]') || q('[data-served-item]')) {
+        const one = q('[data-served-item]')?.dataset.servedItem;
+        const s = await api('POST', `/api/v1/waiter/session/${S.openId}/served`, one ? { itemIds: [one] } : undefined);
         const i = S.sessions.findIndex((x) => x.sessionId === S.openId);
         if (i >= 0) S.sessions[i] = s;
         if (!S.edit.dirty) S.edit = { items: s.items.map((it) => ({ ...it })), guestCount: s.guestCount, dirty: false };

@@ -353,3 +353,17 @@ textarea.field {
 .rest-item span { font-size: 13px; color: var(--muted); }
 .rest-item i { font-style: normal; font-size: 12px; color: var(--ok); }
 .rest-item.is-current { border-color: currentColor; }
+
+/* Узкие телефоны (Galaxy S23 — 360px): шапка сжимается, страница никогда не шире экрана,
+   иначе мобильный Chrome уменьшает масштаб («браузерная версия») и нижняя панель уезжает */
+html, body { overflow-x: clip; }
+.topbar > :first-child { flex: 1 1 auto; min-width: 0; }
+.topbar__rest .topbar__guest { max-width: 100%; }
+.topbar__table { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-chip { flex: 0 1 auto; min-width: 0; max-width: 55%; overflow: hidden; text-overflow: ellipsis; }
+
+/* Строка корзины: курс подачи — отдельной строкой на всю ширину; поданные блюда отмечены */
+.line-item { flex-wrap: wrap; }
+.line-item .course { flex-basis: 100%; margin-top: 0; }
+.tag--served { background: #EAF8F2; color: var(--ok); font-weight: 600; }
+.line-item.is-served .line-item__name { color: var(--muted); }

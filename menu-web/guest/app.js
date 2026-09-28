@@ -433,6 +433,8 @@
   async function openRestaurantSheet() {
     let list = [];
     try { list = await api('GET', '/api/v1/restaurants'); } catch (e) { toast(e.message, true); return; }
+    // Только рестораны, где QR-меню уже работает (меню из iiko есть), и текущий
+    list = list.filter((r) => r.hasMenu !== false || r.slug === S.restaurant);
     const pending = pendingCount();
     openSheet(`<h2>Ресторан</h2>
       <p class="sheet__hint" style="margin-top:0">${S.session ? `Сейчас вы за столом №${esc(S.table)}. При смене ресторана стол нужно будет выбрать заново${pending ? ', неотправленные блюда из корзины удалятся' : ''}.` : 'Выберите, в каком ресторане вы находитесь'}</p>
@@ -599,6 +601,20 @@
     paid: 'Спасибо, что были с нами!',
   };
 
+  /** Статусы уже отправленных порций блюда гостя: [{ label, qty, served, ready }]. */
+  function kitchenBreakdown(pid) {
+    const map = new Map();
+    for (const i of myItems()) {
+      if (!i.isLocked || !(String(i.productId) === String(pid) || String(i.iikoProductId) === String(pid))) continue;
+      const served = Boolean(i.servedAt) || i.kitchenStatus === 'Served';
+      const label = served ? 'подано' : (i.kitchenLabel || 'на кухне');
+      const prev = map.get(label) || { label, qty: 0, served, ready: i.isReady };
+      prev.qty += i.quantity;
+      map.set(label, prev);
+    }
+    return [...map.values()];
+  }
+
   function kitchenLabelFor(pid) {
     const it = myItems().find((i) => i.isLocked && (String(i.productId) === String(pid) || String(i.iikoProductId) === String(pid)));
     return it?.kitchenLabel || null;
@@ -615,23 +631,25 @@
     const items = lines.map((l) => {
       const locked = lockedQty(l.product.id);
       const fresh = l.qty - locked;
+      const parts = locked ? kitchenBreakdown(l.product.id) : [];
+      const allServed = locked && fresh <= 0 && parts.length && parts.every((b) => b.served);
       const tags = [
-        locked ? `<span class="tag ${kitchenLabelFor(l.product.id) === 'Готово' ? 'tag--ready' : 'tag--kitchen'}">${esc(kitchenLabelFor(l.product.id) || 'на кухне')} ${locked}</span>` : '',
+        ...parts.map((b) => `<span class="tag ${b.served ? 'tag--served' : b.ready ? 'tag--ready' : 'tag--kitchen'}">${b.served ? '✓ ' : ''}${esc(b.label)} ${b.qty}</span>`),
         locked && fresh > 0 ? `<span class="tag tag--new">+${fresh} новое</span>` : '',
       ].join('');
-      return `<div class="line-item">
+      return `<div class="line-item ${allServed ? 'is-served' : ''}">
         <div class="line-item__main">
           <div class="line-item__name">${esc(l.product.name)}</div>
           <div class="line-item__meta">${rub(l.product.price)} × ${l.qty} ${tags}</div>
-          ${!s?.isPaid && fresh > 0 ? `<div class="course" role="group" aria-label="Курс подачи">
-            <span>Подать:</span>${[[null, 'сразу'], [1, '1-м'], [2, '2-м'], [3, '3-м']].map(([c, t]) => `<button class="${(l.course || null) === c ? 'is-on' : ''}" data-course="${esc(l.product.id)}" data-c="${c ?? ''}">${t}</button>`).join('')}
-          </div>` : ''}
         </div>
         ${s?.isPaid ? `<b>${rub(l.qty * l.product.price)}</b>` : `<div class="qty">
           <button class="round-btn round-btn--sm round-btn--light" data-dec="${esc(l.product.id)}" ${l.qty <= locked ? 'disabled' : ''} aria-label="Убрать">${ICONS.minus}</button>
           <b>${l.qty}</b>
           <button class="round-btn round-btn--sm" data-inc="${esc(l.product.id)}" aria-label="Добавить">${ICONS.plus}</button>
         </div>`}
+        ${!s?.isPaid && fresh > 0 ? `<div class="course" role="group" aria-label="Курс подачи">
+          <span>Подать:</span>${[[null, 'сразу'], [1, '1-м'], [2, '2-м'], [3, '3-м']].map(([c, t]) => `<button class="${(l.course || null) === c ? 'is-on' : ''}" data-course="${esc(l.product.id)}" data-c="${c ?? ''}">${t}</button>`).join('')}
+        </div>` : ''}
       </div>`;
     }).join('');
 
@@ -648,7 +666,7 @@
     const table = [...byWho].map(([who, list]) => `<div class="table-guest">
         <div class="table-guest__name">${esc(who)}</div>
         ${list.map((i) => `<div class="table-guest__item"><span>${esc(i.name)} × ${i.quantity}</span>
-          <span class="tag ${i.isReady ? 'tag--ready' : i.isLocked ? 'tag--kitchen' : ''}">${esc(i.isLocked ? (i.kitchenLabel || 'на кухне') : 'в корзине')}</span></div>`).join('')}
+          <span class="tag ${i.servedAt ? 'tag--served' : i.isReady ? 'tag--ready' : i.isLocked ? 'tag--kitchen' : ''}">${i.servedAt ? '✓ подано' : esc(i.isLocked ? (i.kitchenLabel || 'на кухне') : 'в корзине')}</span></div>`).join('')}
       </div>`).join('');
     const multi = (s?.guests || []).length > 1;
     return `${topbar()}<main class="screen">

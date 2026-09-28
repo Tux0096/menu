@@ -218,3 +218,5 @@ html, body { overflow-x: hidden; }
   .tbl--menu td[data-label="Цена"]::before { content: none; }
   .tbl--menu td[data-label="Цена"] { font-weight: 600; }
 }
+.row__meta .served { color: var(--ok); }
+.row__meta .btn--sm { padding: 4px 10px; font-size: 12px; margin-left: 4px; vertical-align: middle; }
