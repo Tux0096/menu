@@ -217,6 +217,7 @@ export function mapSession({ session, restaurant, items, guests = [] }, extra = 
     waitingMinutes,
     isOverdue: waitingMinutes != null && waitingMinutes * 60000 >= WAITER_RESPONSE_SLA_MS,
     lockedBy: session.locked_until && new Date(session.locked_until) > new Date() ? session.locked_by : null,
+    waiterId: session.waiter_id || null,
     canGuestRemoveItems: !isPaid,
     canGuestSubmit: !isPaid && pending.length > 0,
     canGuestPay: PAYMENTS_ENABLED && PAYABLE.includes(wf) && !isPaid && parseFloat(session.total || 0) > 0,

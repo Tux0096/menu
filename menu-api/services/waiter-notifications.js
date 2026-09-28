@@ -1,3 +1,4 @@
+import { pushToRestaurant } from './push.js';
 import pool from '../db/pool.js';
 
 export async function createWaiterNotification({
@@ -16,6 +17,8 @@ export async function createWaiterNotification({
      RETURNING *`,
     [restaurantId, sessionId, String(tableNumber), type, title, body, JSON.stringify(payload)],
   );
+  // Push на телефоны официантов (приложение), не задерживая основной запрос
+  pushToRestaurant(restaurantId, { title, body, type, sessionId, tableNumber }).catch((e) => console.warn('push:', e.message));
   return rows[0];
 }
 

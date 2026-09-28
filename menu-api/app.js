@@ -21,7 +21,8 @@ import { logAiQuery, recordAiFeedback } from './services/ai-learning.js';
 import {
   getGuestByToken, guestAuth, guestTokenFromRequest, loginByFujiToken, loginByPhone, updateGuestProfile,
 } from './services/guest-auth.js';
-import { audit, listStaff, saveStaff, staffAuth, staffLogin } from './services/staff-auth.js';
+import { audit, listStaff, pinLogin, saveStaff, staffAuth, staffLogin } from './services/staff-auth.js';
+import { isPushEnabled, registerDevice, unregisterDevice } from './services/push.js';
 import {
   assertGuestAtTable, callWaiter, enterTable, getSessionView, markServed, payBill, refreshFromIiko, requestBill, resolveRestaurant,
   refreshKitchenStatuses, runServiceChecks, saveGuestCart, submitFeedback, submitToWaiter, trackActivity,
@@ -284,6 +285,12 @@ app.post('/api/v1/staff/login', h(async (req) => {
   return staffLogin(req.body.login, req.body.password);
 }));
 app.get('/api/v1/staff/me', staffAuth(), h(async (req) => req.staff));
+// Приложение официанта: вход по PIN в выбранном ресторане
+app.post('/api/v1/staff/pin-login', h(async (req) => {
+  requireBody(req.body, 'restaurant', 'pin');
+  const r = await resolveRestaurant(req.body.restaurant);
+  return pinLogin(r.id, req.body.pin, req.ip);
+}));
 app.get('/api/v1/staff/restaurants', staffAuth(), h(async () => listRestaurants()));
 
 const waiter = express.Router();
@@ -298,6 +305,58 @@ waiter.post('/notifications/read-all', h(async (req) => {
 }));
 waiter.post('/notifications/:id/read', h(async (req) => { await markNotificationRead(req.params.id); }));
 waiter.get('/sessions', h(async (req) => listActiveSessions((await staffRestaurant(req)).id)));
+// Схема зала: все столы ресторана — свободные и занятые, со статусом, суммой и таймерами
+waiter.get('/hall', h(async (req) => {
+  const r = await staffRestaurant(req);
+  const sessions = await listActiveSessions(r.id);
+  const byTable = new Map(sessions.filter((x) => x.status === 'open').map((x) => [String(x.tableNumber), x]));
+  const tone = (x) => {
+    if (!x) return 'free';
+    if (x.readyCount > 0) return 'ready';
+    if (['cart_ready', 'reorder_pending'].includes(x.workflowStatus)) return 'waiting';
+    if (x.workflowStatus === 'bill_requested') return 'bill';
+    if (['waiter_review', 'in_production'].includes(x.workflowStatus)) return 'work';
+    return 'guests';
+  };
+  const numbers = Array.from({ length: r.tables_count || 0 }, (_, i) => String(i + 1));
+  for (const t of byTable.keys()) if (!numbers.includes(t)) numbers.push(t);
+  return {
+    restaurant: { slug: r.slug, name: r.name },
+    pushEnabled: isPushEnabled(),
+    tables: numbers.map((n) => {
+      const x = byTable.get(n);
+      return {
+        number: n,
+        tone: tone(x),
+        sessionId: x?.sessionId || null,
+        statusLabel: x?.workflowLabel || 'Свободен',
+        guests: x ? (x.guests || []).map((g) => g.name) : [],
+        guestCount: x?.guestCount || 0,
+        total: x?.total || 0,
+        pendingCount: x?.pendingCount || 0,
+        readyCount: x?.readyCount || 0,
+        waitingMinutes: x?.waitingMinutes ?? null,
+        isOverdue: Boolean(x?.isOverdue),
+        openedAt: x?.createdAt || null,
+        mine: Boolean(x && x.waiterId && x.waiterId === req.staff.id),
+      };
+    }),
+  };
+}));
+// Официант сам открывает стол (гость без QR) — дальше заказ как обычно
+waiter.post('/tables/:number/open', h(async (req) => {
+  const r = await staffRestaurant(req);
+  const view = await enterTable({ restaurantSlug: r.slug, tableNumber: req.params.number, guest: null });
+  return takeSession(view.sessionId, req.staff);
+}));
+// Телефон официанта для push-уведомлений
+waiter.post('/devices', h(async (req) => {
+  requireBody(req.body, 'token');
+  const r = await staffRestaurant(req);
+  await registerDevice(req.staff, r.id, req.body.token, req.body.platform);
+  return { ok: true, pushEnabled: isPushEnabled() };
+}));
+waiter.delete('/devices/:token', h(async (req) => { await unregisterDevice(req.params.token); }));
 waiter.get('/session/:id', h(async (req) => getSessionView(req.params.id)));
 waiter.post('/session/:id/take', h(async (req) => takeSession(req.params.id, req.staff)));
 waiter.post('/session/:id/served', h(async (req) => markServed(req.params.id, req.body?.itemIds)));

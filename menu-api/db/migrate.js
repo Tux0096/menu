@@ -346,6 +346,16 @@ const SCHEMA = `
     created_at TIMESTAMPTZ DEFAULT NOW()
   );
 
+  ALTER TABLE staff_users ADD COLUMN IF NOT EXISTS pin_hash TEXT;
+  -- Телефоны официантов для push-уведомлений (Firebase Cloud Messaging)
+  CREATE TABLE IF NOT EXISTS waiter_devices (
+    token TEXT PRIMARY KEY,
+    staff_id UUID REFERENCES staff_users(id) ON DELETE CASCADE,
+    restaurant_id UUID REFERENCES restaurants(id) ON DELETE CASCADE,
+    platform VARCHAR(20),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+  );
+
   CREATE TABLE IF NOT EXISTS audit_log (
     id SERIAL PRIMARY KEY,
     staff_id UUID,

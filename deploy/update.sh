@@ -2,7 +2,7 @@
 # Обновление прода QR-меню на уже настроенном сервере (запускается из GitHub Actions или вручную).
 #   BRANCH=main bash deploy/update.sh
 # Секреты берутся из переменных окружения и дописываются в menu-api/.env (в репозиторий не попадают):
-#   OPENROUTER_API_KEY, IIKO_API_LOGIN, IIKO_CLIENT_SECRET, IIKO_MENU_API_LOGIN, IIKO_MENU_CLIENT_SECRET, IIKO_APP_ID, IIKO_EXTERNAL_MENU_ID, ADMIN_PASSWORD, MANAGER_PASSWORD, WAITER_PASSWORD
+#   FCM_SERVICE_ACCOUNT, OPENROUTER_API_KEY, IIKO_API_LOGIN, IIKO_CLIENT_SECRET, IIKO_MENU_API_LOGIN, IIKO_MENU_CLIENT_SECRET, IIKO_APP_ID, IIKO_EXTERNAL_MENU_ID, ADMIN_PASSWORD, MANAGER_PASSWORD, WAITER_PASSWORD
 set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-/home/ubuntu/menu}"
@@ -53,7 +53,7 @@ rand() { openssl rand -hex "${1:-16}"; }
 
 # Секреты из GitHub Secrets перезаписывают значения в .env
 # Какие секреты пришли из GitHub (только факт, без значений)
-for v in OPENROUTER_API_KEY IIKO_API_LOGIN IIKO_CLIENT_SECRET IIKO_MENU_API_LOGIN IIKO_MENU_CLIENT_SECRET IIKO_APP_ID IIKO_EXTERNAL_MENU_ID IIKO_BAR_API_LOGIN IIKO_BAR_APP_ID IIKO_BAR_CLIENT_SECRET; do
+for v in OPENROUTER_API_KEY IIKO_API_LOGIN IIKO_CLIENT_SECRET IIKO_MENU_API_LOGIN IIKO_MENU_CLIENT_SECRET IIKO_APP_ID IIKO_EXTERNAL_MENU_ID IIKO_BAR_API_LOGIN IIKO_BAR_APP_ID IIKO_BAR_CLIENT_SECRET FCM_SERVICE_ACCOUNT; do
   if [ -n "${!v:-}" ]; then echo "  секрет $v: задан"; else echo "  секрет $v: —"; fi
 done
 [ -n "${OPENROUTER_API_KEY:-}" ] && set_env OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
@@ -67,6 +67,14 @@ done
 [ -n "${IIKO_BAR_APP_ID:-}" ] && set_env IIKO_BAR_APP_ID "$IIKO_BAR_APP_ID"
 [ -n "${IIKO_BAR_CLIENT_SECRET:-}" ] && set_env IIKO_BAR_CLIENT_SECRET "$IIKO_BAR_CLIENT_SECRET"
 [ -n "${IIKO_EXTERNAL_MENU_ID:-}" ] && set_env IIKO_EXTERNAL_MENU_ID "$IIKO_EXTERNAL_MENU_ID"
+# Push в приложение официанта: JSON ключа Firebase — в .env одной строкой (base64)
+if [ -n "${FCM_SERVICE_ACCOUNT:-}" ]; then
+  if printf '%s' "$FCM_SERVICE_ACCOUNT" | grep -q '{'; then
+    set_env FCM_SERVICE_ACCOUNT "$(printf '%s' "$FCM_SERVICE_ACCOUNT" | base64 -w0)"
+  else
+    set_env FCM_SERVICE_ACCOUNT "$(printf '%s' "$FCM_SERVICE_ACCOUNT" | tr -d '[:space:]')"
+  fi
+fi
 
 ensure_env AUTH_SECRET "$(rand 32)"
 ensure_env QR_RESTAURANT_SLUG "novo-sadovaya"
