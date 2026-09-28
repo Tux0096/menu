@@ -72,7 +72,8 @@ chmod 600 "$ENV_FILE"
 echo "=== 4. База данных ==="
 node db/migrate.js
 timeout 60 node db/check-iiko.js || true
-# Меню из iiko сервер выгружает сам при старте и каждые 30 минут
+# Меню из iiko сервер выгружает сам: после деплоя — полностью (сбрасываем отметку), дальше раз в сутки
+node --input-type=module -e "import pool from './db/pool.js'; await pool.query(\"DELETE FROM settings WHERE name = 'iiko_menu_synced_at'\"); await pool.end();" || true
 
 echo "=== 5. Сервис ==="
 sudo cp "$REPO_DIR/deploy/systemd/menu-api.service" /etc/systemd/system/menu-api.service

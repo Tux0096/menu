@@ -186,7 +186,7 @@ async function pickExternalMenu(token) {
     const want = String(process.env.IIKO_EXTERNAL_MENU || '').toLowerCase();
     const menu = want
       ? menus.find((m) => String(m.id) === want || String(m.name).toLowerCase().includes(want))
-      : menus.find((m) => /ресторан|зал|qr/i.test(m.name));
+      : menus.find((m) => /ресторан|зал|qr/i.test(m.name)) || (menus.length === 1 ? menus[0] : null);
     if (menu) console.log(`Используем внешнее меню «${menu.name}» [${menu.id}]`);
     return menu || null;
   } catch (e) {
