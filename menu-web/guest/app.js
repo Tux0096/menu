@@ -19,6 +19,8 @@
   };
 
   const ICONS = {
+    expand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
+    collapse: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>',
     arrowRight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
     arrowUp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>',
     plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
@@ -289,19 +291,20 @@
   // поэтому после первого касания включаем полноэкранный режим; если гость вышел из него — больше не навязываем.
   const tg = window.Telegram?.WebApp;
   if (tg) { try { tg.ready(); tg.expand(); tg.requestFullscreen?.(); tg.setHeaderColor?.('#F5F4F9'); tg.disableVerticalSwipes?.(); } catch { /* старый Telegram */ } }
+  // Кнопка «развернуть» в шапке — только там, где браузер умеет полноэкранный режим (Chrome на Android)
   const standalone = matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches;
-  const isAndroid = /Android/i.test(navigator.userAgent);
-  let fsDeclined = sessionStorage.getItem('fsDeclined') === '1';
+  const canFullscreen = !tg && !standalone && /Android/i.test(navigator.userAgent) && Boolean(document.documentElement.requestFullscreen);
   document.addEventListener('fullscreenchange', () => {
     document.documentElement.classList.toggle('is-fullscreen', Boolean(document.fullscreenElement));
-    if (!document.fullscreenElement) { fsDeclined = true; try { sessionStorage.setItem('fsDeclined', '1'); } catch { /* приватный режим */ } }
+    render();
   });
-  const goFullscreen = () => {
-    if (tg || standalone || !isAndroid || fsDeclined || document.fullscreenElement || !document.documentElement.requestFullscreen) return;
-    document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => {});
-  };
-  addEventListener('touchend', goFullscreen, { passive: true });
-  addEventListener('click', goFullscreen);
+  function toggleFullscreen() {
+    if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    else document.documentElement.requestFullscreen({ navigationUI: 'hide' }).catch(() => toast('Браузер не разрешил полноэкранный режим', true));
+  }
+  const fsButton = () => (canFullscreen
+    ? `<button class="icon-btn fs-btn" data-action="fullscreen" aria-label="${document.fullscreenElement ? 'Свернуть' : 'На весь экран'}">${document.fullscreenElement ? ICONS.collapse : ICONS.expand}</button>`
+    : '');
 
   // Виброотклик на нажатия (Android; на iPhone браузер вибрацию не поддерживает)
   let lastBuzz = 0;
@@ -338,7 +341,7 @@
           <span class="topbar__table">${esc(S.config?.restaurant?.name || 'Фуджи')} ▾</span>
           <span class="topbar__guest">${esc(S.config?.restaurant?.address || '')}</span></button>
       </div>
-      <button class="status-chip" data-action="seat" data-tone="idle">${S.table ? `Стол №${esc(S.table)} · войти` : 'Выбрать стол'}</button>
+      <div class="topbar__right">${fsButton()}<button class="status-chip" data-action="seat" data-tone="idle">${S.table ? `Стол №${esc(S.table)} · войти` : 'Выбрать стол'}</button></div>
     </header>`;
     }
     return `<header class="topbar">
@@ -347,7 +350,7 @@
         <button class="topbar__rest" data-action="restaurant" aria-label="Сменить ресторан">
           <span class="topbar__guest">${esc(who ? `${who} · ` : '')}${esc(S.config?.restaurant?.name || '')} ▾</span></button>
       </div>
-      ${s ? `<button class="status-chip" data-go="order" data-tone="${STATUS_TONE[s.workflowStatus] || 'idle'}">${esc(s.workflowLabel)}</button>` : ''}
+      <div class="topbar__right">${fsButton()}${s ? `<button class="status-chip" data-go="order" data-tone="${STATUS_TONE[s.workflowStatus] || 'idle'}">${esc(s.workflowLabel)}</button>` : ''}</div>
     </header>`;
   }
 
@@ -367,7 +370,7 @@
     const qty = S.cart[String(p.id)]?.qty || 0;
     const stopped = isStopped(p);
     const sub = reason || p.description || '';
-    return `<article class="dish ${stopped ? 'is-stopped' : ''}" data-product="${esc(p.id)}">
+    return `<article class="dish ${stopped ? 'is-stopped' : ''} ${qty && !stopped ? 'has-qty' : ''}" data-product="${esc(p.id)}">
       ${imgHtml(p)}
       <div class="dish__body">
         <div>
@@ -1102,6 +1105,7 @@
     if (!action) return;
     if (action === 'seat') openSeatSheet();
     else if (action === 'restaurant') openRestaurantSheet();
+    else if (action === 'fullscreen') toggleFullscreen();
     else if (action === 'call') { if (S.session) openCallSheet(); else openSeatSheet(openCallSheet); }
     else if (action === 'submit') submitToWaiter(t.closest('button'));
     else if (action === 'pay') openPaySheet();

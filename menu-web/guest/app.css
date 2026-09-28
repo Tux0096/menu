@@ -436,3 +436,25 @@ html { scroll-behavior: smooth; -webkit-tap-highlight-color: transparent; }
 .sheet__grip { cursor: grab; }
 /* Полноэкранный режим: учесть вырез камеры и системные панели */
 .is-fullscreen .topbar { padding-top: calc(14px + var(--safe-t)); }
+
+/* Карточка блюда в корзине: переключатель «− N +» не наезжает на цену и вес */
+.dish__price b { flex-shrink: 0; }
+.dish__price span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dish.has-qty .dish__body { padding-right: 0; }
+.dish.has-qty .dish__price { padding-right: 108px; min-height: 40px; align-items: center; }
+.dish.has-qty .dish__price b { font-size: 18px; }
+.dish__action .qty { gap: 2px; padding: 3px; }
+.dish__action .qty .round-btn--sm { width: 36px; height: 36px; }
+.dish__action .qty b { min-width: 24px; }
+
+/* Кнопка «на весь экран» в шапке */
+.topbar__right { display: flex; align-items: center; gap: 8px; flex: 0 1 auto; min-width: 0; max-width: 60%; }
+.topbar__right .status-chip { max-width: 100%; }
+.fs-btn { width: 36px; height: 36px; flex-shrink: 0; border-radius: 50%; background: var(--card); box-shadow: var(--shadow); display: grid; place-items: center; color: var(--ink); border: 0; }
+.fs-btn svg { width: 18px; height: 18px; }
+/* В корзине: вес — мелкой строкой под ценой, а не обрезкой */
+.dish.has-qty .dish__price { flex-direction: column; align-items: flex-start; justify-content: center; gap: 0; line-height: 1.15; }
+.dish.has-qty .dish__price span { font-size: 12px; }
+/* Статус в шапке обрезается с многоточием */
+.topbar__right .status-chip { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.topbar__right .status-chip::before { display: inline-block; margin-right: 6px; vertical-align: middle; }
