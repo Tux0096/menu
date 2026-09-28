@@ -9,6 +9,7 @@
 # Необязательные:
 #   IIKO_API_LOGIN, IIKO_CLIENT_SECRET (для ключей iiko нового поколения), ADMIN_PASSWORD, MANAGER_PASSWORD, WAITER_PASSWORD
 #   IIKO_MENU_API_LOGIN / IIKO_MENU_CLIENT_SECRET — то же, что IIKO_API_LOGIN / IIKO_CLIENT_SECRET (один ключ на всё)
+#   IIKO_APP_ID — ID приложения iiko (новые ключи выдают токен только с ним)
 #   IIKO_EXTERNAL_MENU_ID — ID внешнего меню iiko (если не задан — выбирается из меню ключа)
 name: Deploy
 
@@ -34,6 +35,7 @@ jobs:
           IIKO_CLIENT_SECRET: ${{ secrets.IIKO_CLIENT_SECRET }}
           IIKO_MENU_API_LOGIN: ${{ secrets.IIKO_MENU_API_LOGIN }}
           IIKO_MENU_CLIENT_SECRET: ${{ secrets.IIKO_MENU_CLIENT_SECRET }}
+          IIKO_APP_ID: ${{ secrets.IIKO_APP_ID }}
           IIKO_EXTERNAL_MENU_ID: ${{ secrets.IIKO_EXTERNAL_MENU_ID }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           MANAGER_PASSWORD: ${{ secrets.MANAGER_PASSWORD }}
@@ -42,7 +44,7 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: BRANCH,OPENROUTER_API_KEY,IIKO_API_LOGIN,IIKO_CLIENT_SECRET,IIKO_MENU_API_LOGIN,IIKO_MENU_CLIENT_SECRET,IIKO_EXTERNAL_MENU_ID,ADMIN_PASSWORD,MANAGER_PASSWORD,WAITER_PASSWORD
+          envs: BRANCH,OPENROUTER_API_KEY,IIKO_API_LOGIN,IIKO_CLIENT_SECRET,IIKO_MENU_API_LOGIN,IIKO_MENU_CLIENT_SECRET,IIKO_APP_ID,IIKO_EXTERNAL_MENU_ID,ADMIN_PASSWORD,MANAGER_PASSWORD,WAITER_PASSWORD
           command_timeout: 20m
           script: |
             set -e

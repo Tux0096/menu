@@ -138,6 +138,7 @@ Workflow `.github/workflows/deploy.yml` выкатывает прод на `menu
 | `OPENROUTER_API_KEY` | да | ключ AI |
 | `IIKO_API_LOGIN` | да | API-логин iiko «электронное меню» — один ключ на всё: меню, заказы в стол, стоп-лист, статусы кухни, вебхук (можно назвать и `IIKO_MENU_API_LOGIN`) |
 | `IIKO_CLIENT_SECRET` | для новых ключей | секрет клиента этого ключа (можно назвать и `IIKO_MENU_CLIENT_SECRET`) |
+| `IIKO_APP_ID` | для новых ключей | ID приложения (appId): новые ключи iiko выдают токен только по «ключ + ID приложения + секрет клиента» |
 | `IIKO_EXTERNAL_MENU_ID` | нет | ID внешнего меню iiko — брать его напрямую |
 | `ADMIN_PASSWORD`, `MANAGER_PASSWORD`, `WAITER_PASSWORD` | нет | пароли персонала при первом деплое. Без них генерируются случайные и хранятся только в `.env` на сервере |
 
