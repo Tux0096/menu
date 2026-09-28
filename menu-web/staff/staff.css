@@ -181,3 +181,10 @@ input.inp:focus, textarea.inp:focus, select.sel:focus { box-shadow: 0 0 0 2px va
 .grid-waiter > *, .grid-2 > *, .editor, .picker, .row > * { min-width: 0; }
 html, body { overflow-x: hidden; }
 .row__name { overflow-wrap: anywhere; }
+
+/* Готово на кухне — пора выносить */
+.ready-box { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  background: #FFF1D6; color: #7A4A00; border-radius: 12px; padding: 12px 14px; margin: 10px 0; }
+.ready-box > span { min-width: 0; overflow-wrap: anywhere; }
+.row__meta .ready { color: #B26A00; }
+.note[data-type="dish_ready"].is-unread { border-left: 4px solid #F0A020; }

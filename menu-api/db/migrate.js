@@ -175,7 +175,12 @@ const SCHEMA = `
     ADD COLUMN IF NOT EXISTS is_locked BOOLEAN NOT NULL DEFAULT FALSE,
     ADD COLUMN IF NOT EXISTS course INT,
     ADD COLUMN IF NOT EXISTS batch_no INT NOT NULL DEFAULT 1,
-    ADD COLUMN IF NOT EXISTS kitchen_status VARCHAR(40);
+    ADD COLUMN IF NOT EXISTS kitchen_status VARCHAR(40),
+    ADD COLUMN IF NOT EXISTS guest_id UUID,
+    ADD COLUMN IF NOT EXISTS guest_name VARCHAR(100),
+    ADD COLUMN IF NOT EXISTS ready_notified_at TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS served_at TIMESTAMP,
+    ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP;
   -- product_id в каталоге prod-API не совпадает с products.id → убираем FK, если он был
   ALTER TABLE table_order_items DROP CONSTRAINT IF EXISTS table_order_items_product_id_fkey;
   ALTER TABLE table_order_items ALTER COLUMN product_id TYPE VARCHAR(100) USING product_id::text;

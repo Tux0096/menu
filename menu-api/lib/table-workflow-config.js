@@ -39,4 +39,5 @@ export const NOTIFY_TYPES = {
   PAYMENT_DONE: 'payment_done',
   NEGATIVE_FEEDBACK: 'negative_feedback',
   IIKO_ERROR: 'iiko_error',
+  DISH_READY: 'dish_ready',
 };
