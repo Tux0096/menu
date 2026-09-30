@@ -64,9 +64,12 @@ async function linkBarTerminal(headers, r) {
       [r.id],
     );
     if (!srcs.length) return;
-    const tg = (await axios.post(`${IIKO_URL}/api/1/terminal_groups`, { organizationIds: [r.organization_id], includeDisabled: false }, { headers, timeout: 15000 })).data;
-    const bar = (tg.terminalGroups || []).flatMap((g) => (g.items || []).map((t) => ({ ...t, org: g.organizationId || r.organization_id })))
-      .find((t) => /бар|bar/i.test(t.name || '') && t.id !== r.terminal_group_id);
+    // Касса бара может быть отключена для облака — ищем и среди отключённых, чтобы привязка сработала, как только её включат
+    const post = (includeDisabled) => axios.post(`${IIKO_URL}/api/1/terminal_groups`, { organizationIds: [r.organization_id], includeDisabled }, { headers, timeout: 15000 }).then((x) => x.data);
+    const flat = (tg) => (tg.terminalGroups || []).flatMap((g) => (g.items || []).map((t) => ({ ...t, org: g.organizationId || r.organization_id })));
+    const enabled = new Set(flat(await post(false)).map((t) => t.id));
+    const bar = flat(await post(true)).find((t) => /бар|bar/i.test(t.name || '') && t.id !== r.terminal_group_id);
+    if (bar) console.log(`${r.name}: касса бара у основного ключа — «${bar.name}» [${bar.id}]${enabled.has(bar.id) ? '' : ' — ОТКЛЮЧЕНА для облака iiko: заказы на неё не пройдут, пока её не включат'}`);
     for (const src of srcs) {
       if (!bar) { console.log(`${r.name}: касса бара у основного ключа не найдена — заказы «${src.name}» идут его ключом`); continue; }
       if (src.order_terminal_group_id === bar.id) { console.log(`${r.name}: заказы «${src.name}» → касса «${bar.name}» [${bar.id}]`); continue; }
