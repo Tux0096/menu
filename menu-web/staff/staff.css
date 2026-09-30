@@ -312,3 +312,15 @@ html, body { overflow-x: clip; }
   body.table-open .main { padding-top: 8px; }
   .top .me .muted { display: none; }
 }
+
+/* Баннеры и акции */
+.banner-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+.banner-card { background: var(--bg); border-radius: 16px; overflow: hidden; display: flex; flex-direction: column; }
+.banner-card__img { aspect-ratio: 2 / 1; background: #F5ECF6; display: grid; place-items: center; overflow: hidden; }
+.banner-card__img img { width: 100%; height: 100%; object-fit: cover; }
+.banner-card__img span { color: #993CA6; font-weight: 700; padding: 12px; text-align: center; }
+.banner-card__body { padding: 12px; }
+.banner-preview { aspect-ratio: 2 / 1; border-radius: 14px; background: #F5ECF6; display: grid; place-items: center; overflow: hidden; color: #993CA6; }
+.banner-preview img { width: 100%; height: 100%; object-fit: cover; }
+[data-link][hidden] { display: none; }
+.bill-box { background: #ECEBFB; color: #091027; border-radius: 14px; padding: 12px 14px; margin: 10px 0; font-size: 14px; display: grid; gap: 4px; }

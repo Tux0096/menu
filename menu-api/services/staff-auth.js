@@ -1,7 +1,9 @@
 import pool from '../db/pool.js';
 import { hashPassword, signToken, verifyPassword, verifyToken } from '../lib/passwords.js';
 
-const ROLE_LEVEL = { waiter: 1, manager: 2, admin: 3 };
+// Маркетинг — не ступень иерархии: доступ только к контенту меню (баннеры, подсказки, карточки блюд)
+const ROLE_LEVEL = { marketing: 0, waiter: 1, manager: 2, admin: 3 };
+const ROLES = new Set(Object.keys(ROLE_LEVEL));
 
 function httpError(status, message) {
   const err = new Error(message);
@@ -77,13 +79,13 @@ export async function staffLogin(login, password) {
 }
 
 /** Express middleware: проверка токена персонала и минимальной роли. */
-export function staffAuth(minRole = 'waiter') {
+export function staffAuth(minRole = 'waiter', alsoRoles = []) {
   return (req, res, next) => {
     const auth = req.headers.authorization || '';
     const token = auth.startsWith('Bearer ') ? auth.slice(7) : req.query.token;
     const payload = verifyToken(token);
     if (!payload) return res.status(401).json({ error: 'Требуется вход персонала', code: 'STAFF_AUTH_REQUIRED' });
-    if ((ROLE_LEVEL[payload.role] || 0) < ROLE_LEVEL[minRole]) {
+    if (!ROLES.has(payload.role) || ((ROLE_LEVEL[payload.role] ?? -1) < ROLE_LEVEL[minRole] && !alsoRoles.includes(payload.role))) {
       return res.status(403).json({ error: 'Недостаточно прав' });
     }
     req.staff = { id: payload.sid, role: payload.role, name: payload.name, restaurantId: payload.rid };
@@ -110,7 +112,7 @@ export async function listStaff() {
 
 export async function saveStaff(data) {
   const login = String(data.login || '').trim().toLowerCase();
-  if (!login || !data.name || !ROLE_LEVEL[data.role]) throw httpError(400, 'Логин, имя и роль обязательны');
+  if (!login || !data.name || !ROLES.has(data.role)) throw httpError(400, 'Логин, имя и роль обязательны');
   const pin = String(data.pin || '').trim();
   if (pin && !/^\d{4,6}$/.test(pin)) throw httpError(400, 'PIN — 4–6 цифр');
   if (pin) await assertPinFree(pin, data.restaurantId, data.id);

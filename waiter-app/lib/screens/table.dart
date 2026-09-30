@@ -241,6 +241,12 @@ class _TableScreenState extends State<TableScreen> {
         children: [
           if (_readOnly) _banner(Icons.lock_outline, 'Стол редактирует другой официант — только просмотр', C.warn),
           if (s['iikoLastError'] != null) _banner(Icons.error_outline, s['iikoLastError'].toString(), C.danger),
+          for (final r in (s['billRequests'] as List? ?? const []))
+            _banner(
+              Icons.receipt_long_outlined,
+              'Счёт: ${r['by'] != null ? '${r['by']} — ' : ''}${r['scope'] == 'table' ? 'за весь стол' : (r['names'] as List? ?? const []).join(' и ')} · ${rub((r['amount'] as num?) ?? 0)}',
+              C.violet,
+            ),
           _summary(s),
           if (ready.isNotEmpty) ...[
             const SizedBox(height: 12),

@@ -147,7 +147,12 @@ class NotificationsViewState extends State<NotificationsView> {
                                 if ((n['body'] ?? '').toString().isNotEmpty)
                                   Padding(
                                     padding: const EdgeInsets.only(top: 2),
-                                    child: Text(n['body'].toString(), maxLines: 3, overflow: TextOverflow.ellipsis, style: const TextStyle(color: C.muted)),
+                                    child: Text(
+                                      n['body'].toString(),
+                                      maxLines: 3,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(color: C.muted),
+                                    ),
                                   ),
                               ],
                             ),

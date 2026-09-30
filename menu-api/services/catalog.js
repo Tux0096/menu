@@ -226,6 +226,7 @@ function applyOverride(product, o) {
   if (o.carbs != null) p.carbohydrateAmount = parseFloat(o.carbs);
   if (o.allergens?.length) p.allergensText = o.allergens;
   if (o.is_recommended) p.isRecommended = true;
+  if (o.badge) p.badge = o.badge;
   return p;
 }
 

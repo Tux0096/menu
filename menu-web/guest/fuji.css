@@ -1,0 +1,246 @@
+/* Фуджи — дизайн как в мобильном приложении и на сайте fuji.ru (fuji-qr-app: _colors.scss, CatalogItem.vue,
+   CatalogHeaderCategories.vue, QrBottomNav.vue, AppQty.vue, AddToCartButton.vue, Modal.vue).
+   Размеры в МП задаются extClamp(N) = clamp(Npx, N/320·100vw, N·1.8px) — здесь это calc(N * var(--u)). */
+@font-face { font-family: 'Wix Madefor Display'; src: url('/fonts/WixMadeforDisplay-Regular.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+@font-face { font-family: 'Wix Madefor Display'; src: url('/fonts/WixMadeforDisplay-Medium.woff2') format('woff2'); font-weight: 500; font-display: swap; }
+@font-face { font-family: 'Wix Madefor Display'; src: url('/fonts/WixMadeforDisplay-SemiBold.woff2') format('woff2'); font-weight: 600; font-display: swap; }
+@font-face { font-family: 'Wix Madefor Display'; src: url('/fonts/WixMadeforDisplay-Bold.woff2') format('woff2'); font-weight: 700; font-display: swap; }
+
+:root {
+  --u: clamp(1px, calc(100vw / 320), 1.8px);
+  --f-black: #292929;
+  --f-purple: #993ca6;
+  --f-light-purple: #f5ecf6;
+  --f-light-gray: #f5f5f5;
+  --f-gray: #969696;
+  --f-menu-bg: #171b1e;
+  --f-border: #f0f0f0;
+  --f-red: #ff003d;
+  --f-yellow: #feb941;
+  /* токены прежнего меню → палитра Фуджи */
+  --bg: #fff;
+  --card: #fff;
+  --ink: var(--f-black);
+  --muted: var(--f-gray);
+  --line: var(--f-border);
+  --ok: #21ac37;
+  --warn: #f48a06;
+  --shadow: none;
+  --r-card: calc(12 * var(--u));
+  --r-pill: calc(16 * var(--u));
+  --nav-h: calc(56 * var(--u));
+}
+html { background: #fff; }
+body {
+  background: #fff;
+  font-family: 'Wix Madefor Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  color: var(--f-black); line-height: 1.2;
+}
+.app { max-width: 576px; background: #fff; }
+.screen { padding: 0 calc(16 * var(--u)) calc(var(--nav-h) + 48px + var(--safe-b)); }
+
+/* ── Шапка (QrTableHeader) ─────────────────────────────── */
+.topbar {
+  background: #fff; box-shadow: 0 2px 12px rgba(41, 41, 41, .06);
+  padding: calc(12 * var(--u) + var(--safe-t)) calc(16 * var(--u)) calc(10 * var(--u));
+}
+.is-fullscreen .topbar { padding-top: calc(12 * var(--u) + var(--safe-t)); }
+.topbar__table { font-weight: 600; color: var(--f-purple); font-size: calc(13 * var(--u)); }
+.topbar__guest { font-size: calc(10 * var(--u)); opacity: .65; color: var(--f-black); }
+.status-chip {
+  background: var(--f-light-purple); color: var(--f-purple); box-shadow: none; border-radius: calc(16 * var(--u));
+  font-size: calc(10 * var(--u)); font-weight: 600; padding: calc(7 * var(--u)) calc(10 * var(--u));
+}
+.status-chip::before { background: var(--f-purple); }
+.back-btn { color: var(--f-purple); opacity: 1; }
+
+/* ── Поиск ─────────────────────────────────────────────── */
+.search {
+  background: var(--f-light-gray); box-shadow: none; border: 1px solid var(--f-border);
+  border-radius: calc(16 * var(--u)); min-height: calc(40 * var(--u)); padding: 4px 8px 4px calc(14 * var(--u)); margin: calc(12 * var(--u)) 0 calc(10 * var(--u));
+}
+.search input { font-size: calc(12 * var(--u)); font-weight: 500; }
+
+/* ── Категории (CatalogHeaderCategories) ───────────────── */
+.cats {
+  top: calc(52 * var(--u) + var(--safe-t)); margin: 0 calc(-16 * var(--u)); padding: calc(8 * var(--u)) calc(16 * var(--u));
+  gap: calc(8 * var(--u)); background: #fff; scroll-behavior: smooth;
+}
+.cats button {
+  padding: calc(8 * var(--u)) calc(10 * var(--u)); border: 1px solid var(--f-border); border-radius: calc(16 * var(--u));
+  background: var(--f-light-gray); box-shadow: none; font-size: calc(12 * var(--u)); font-weight: 500; line-height: .95; color: var(--f-black);
+}
+.cats button.is-active { background: #fff; border-color: var(--f-purple); color: var(--f-purple); }
+.cats .cats__all { display: grid; place-items: center; padding: 0; width: calc(34 * var(--u)); background: var(--f-light-purple); color: var(--f-purple); border-color: var(--f-light-purple); }
+.cats .cats__all svg { width: calc(16 * var(--u)); height: calc(16 * var(--u)); }
+.cat-list { display: flex; flex-direction: column; }
+.cat-list button {
+  display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 4px;
+  border-bottom: 1px solid var(--f-border); font-size: 15px; font-weight: 600; text-align: left;
+}
+.cat-list i { font-style: normal; font-weight: 500; color: var(--f-gray); font-size: 13px; }
+.section-title {
+  color: var(--f-purple); font-weight: 600; font-size: calc(20 * var(--u)); line-height: 1;
+  margin: calc(20 * var(--u)) 0 calc(12 * var(--u)); scroll-margin-top: calc(110 * var(--u) + var(--safe-t));
+}
+.list { gap: calc(14 * var(--u)); }
+
+/* ── Карточка блюда (CatalogItem) ──────────────────────── */
+.dish {
+  background: #fff; box-shadow: none; border-radius: 0; padding: calc(6 * var(--u)) 0;
+  gap: calc(16 * var(--u)); align-items: center;
+}
+.dish__photo { position: relative; flex-shrink: 0; width: calc(124 * var(--u)); height: calc(124 * var(--u)); }
+.dish__photo .dish__img {
+  width: 100%; height: 100%; border-radius: calc(12 * var(--u)); background: var(--f-light-gray); font-size: calc(44 * var(--u));
+}
+.dish__photo .dish__img img { object-fit: cover; }
+/* Количество в заказе — на фото блюда */
+.dish__count {
+  position: absolute; top: calc(6 * var(--u)); right: calc(6 * var(--u));
+  min-width: calc(26 * var(--u)); height: calc(26 * var(--u)); padding: 0 calc(7 * var(--u));
+  display: grid; place-items: center; border-radius: 200px; background: var(--f-purple); color: #fff;
+  font-size: calc(12 * var(--u)); font-weight: 700; box-shadow: 0 2px 8px rgba(153, 60, 166, .35);
+  animation: count-pop .25s cubic-bezier(.2, .9, .3, 1.4);
+}
+@keyframes count-pop { from { transform: scale(.4); opacity: 0; } }
+.dish.has-qty .dish__photo .dish__img { box-shadow: inset 0 0 0 2px var(--f-purple); }
+.dish__label {
+  position: absolute; left: calc(6 * var(--u)); top: calc(6 * var(--u)); padding: calc(3 * var(--u)) calc(7 * var(--u));
+  border-radius: 200px; background: var(--f-yellow); color: var(--f-black); font-size: calc(9 * var(--u)); font-weight: 700;
+}
+.dish__label[data-badge="spicy"], .dish__label[data-badge="sale"] { background: var(--f-red); color: #fff; }
+.dish__label[data-badge="new"], .dish__label[data-badge="chef"] { background: var(--f-purple); color: #fff; }
+.dish__label[data-badge="veg"] { background: var(--ok); color: #fff; }
+.dish__body { gap: calc(12 * var(--u)); padding-right: 0; align-self: stretch; justify-content: space-between; }
+.dish__head { display: flex; flex-direction: column; gap: calc(8 * var(--u)); }
+.dish__name { font-size: calc(14 * var(--u)); font-weight: 600; line-height: 1; color: var(--f-black); }
+.dish__desc { font-size: calc(9 * var(--u)); line-height: 1.2; color: var(--f-black); opacity: .6; -webkit-line-clamp: 3; margin: 0; }
+.dish__foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: calc(32 * var(--u)); }
+.dish__price { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; font-size: calc(12 * var(--u)); font-weight: 600; white-space: nowrap; color: var(--f-black); padding: 0; min-height: 0; }
+.dish__price i { font-style: normal; color: var(--f-purple); margin-right: 3px; }
+.dish__price > div { white-space: nowrap; }
+.dish__price span { font-size: calc(9 * var(--u)); font-weight: 500; color: var(--f-black); opacity: .6; }
+.dish.has-qty .dish__price { padding-right: 0; min-height: 0; }
+.dish.has-qty .dish__price span { font-size: calc(9 * var(--u)); }
+.dish.is-stopped { opacity: .5; }
+/* AddToCartButton */
+.add-btn {
+  display: flex; align-items: center; justify-content: center; padding: calc(7 * var(--u)) calc(16 * var(--u));
+  border-radius: calc(16 * var(--u)); background: var(--f-light-purple); color: var(--f-purple); transition: transform .15s, background .2s;
+}
+.add-btn svg { width: calc(14 * var(--u)); height: calc(14 * var(--u)); }
+.add-btn:active { transform: scale(.94); background: var(--f-purple); color: #fff; }
+/* AppQty */
+.fqty {
+  display: flex; align-items: center; gap: calc(6 * var(--u)); padding: calc(4 * var(--u));
+  border-radius: calc(16 * var(--u)); background: var(--f-light-purple); color: var(--f-purple);
+  font-size: calc(12 * var(--u)); font-weight: 600;
+}
+.fqty button { display: grid; place-items: center; width: calc(24 * var(--u)); height: calc(24 * var(--u)); color: var(--f-purple); border-radius: 50%; }
+.fqty button:active { background: rgba(153, 60, 166, .12); }
+.fqty svg { width: calc(13 * var(--u)); height: calc(13 * var(--u)); }
+.fqty b { min-width: calc(16 * var(--u)); text-align: center; }
+
+/* ── Нижняя панель (QrBottomNav) ───────────────────────── */
+.fnav {
+  position: fixed; z-index: 30; left: calc(16 * var(--u)); right: calc(16 * var(--u)); bottom: max(var(--safe-b), 8px);
+  max-width: 544px; margin: 0 auto; display: flex; padding: calc(6 * var(--u)) calc(12 * var(--u));
+  border-radius: calc(10 * var(--u)); background: var(--f-menu-bg); box-shadow: 0 calc(10 * var(--u)) calc(60 * var(--u)) 0 #fff;
+}
+.fnav__item { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px; color: #fff; position: relative; }
+.fnav__icon { position: relative; width: calc(30 * var(--u)); height: calc(30 * var(--u)); display: grid; place-items: center; border-radius: 8px; transition: background .2s, color .2s; }
+.fnav__icon svg { width: calc(22 * var(--u)); height: calc(22 * var(--u)); }
+.fnav__item.is-active .fnav__icon { background: #fff; color: var(--f-purple); }
+.fnav__label { font-size: calc(8 * var(--u)); text-transform: uppercase; letter-spacing: .04em; opacity: .5; }
+.fnav__item.is-active .fnav__label { opacity: 1; }
+.fnav__badge {
+  position: absolute; top: -4px; right: -10px; min-width: 16px; padding: 1px 4px; border-radius: 8px;
+  background: var(--f-purple); color: #fff; font-size: 10px; font-weight: 700; line-height: 14px; text-align: center;
+}
+.fnav__item:active .fnav__icon { transform: scale(.92); }
+
+/* ── Кнопки ────────────────────────────────────────────── */
+.btn {
+  min-height: calc(46 * var(--u)); padding: calc(10 * var(--u)) calc(10 * var(--u)) calc(10 * var(--u)) calc(16 * var(--u));
+  border-radius: calc(12 * var(--u)); background: var(--f-light-purple); color: var(--f-purple); box-shadow: none;
+  font-size: calc(13 * var(--u)); font-weight: 600;
+}
+.btn--dark { background: var(--f-purple); color: #fff; }
+.btn--dark .round-btn { background: #fff; color: var(--f-purple); }
+.btn .round-btn { width: calc(32 * var(--u)); height: calc(32 * var(--u)); background: var(--f-purple); color: #fff; }
+.actions-grid .btn { min-height: calc(44 * var(--u)); font-size: calc(12 * var(--u)); }
+.round-btn { background: var(--f-purple); }
+.round-btn--light { background: var(--f-light-purple); color: var(--f-purple); }
+.qty { background: var(--f-light-purple); border-radius: calc(16 * var(--u)); }
+.qty .round-btn { background: transparent; color: var(--f-purple); }
+.qty b { color: var(--f-purple); }
+.pill-input { background: var(--f-light-gray); box-shadow: none; border: 1px solid var(--f-border); border-radius: calc(16 * var(--u)); }
+.chip { background: var(--f-light-gray); box-shadow: none; border: 1px solid var(--f-border); color: var(--f-black); border-radius: calc(16 * var(--u)); }
+.chip:active, .chip.is-active { background: #fff; border-color: var(--f-purple); color: var(--f-purple); }
+.opt { background: var(--f-light-gray); box-shadow: none; border-radius: calc(12 * var(--u)); }
+.opt.is-active { border-color: var(--f-purple); background: #fff; color: var(--f-purple); }
+.link-btn { color: var(--f-purple); }
+
+/* ── Свайп «Передать официанту» ────────────────────────── */
+.swipe { background: var(--f-purple); border-radius: calc(12 * var(--u)); height: calc(56 * var(--u)); }
+.swipe__fill { background: linear-gradient(90deg, #7d2f88, #b24dc0); }
+.swipe__knob { width: calc(44 * var(--u)); height: calc(44 * var(--u)); top: calc(6 * var(--u)); left: calc(6 * var(--u)); border-radius: calc(10 * var(--u)); color: var(--f-purple); }
+.swipe__text { padding-left: calc(64 * var(--u)); font-size: calc(13 * var(--u)); font-weight: 600; }
+
+/* ── Заказ ─────────────────────────────────────────────── */
+.page-title { color: var(--f-purple); font-weight: 700; font-size: calc(20 * var(--u)); margin: calc(16 * var(--u)) 0 calc(12 * var(--u)); }
+.card { background: var(--f-light-gray); box-shadow: none; border-radius: calc(12 * var(--u)); padding: calc(14 * var(--u)); }
+.line-item { border-top-color: var(--f-border); }
+.line-item__name { font-size: calc(13 * var(--u)); font-weight: 500; }
+.total-row b { font-size: calc(16 * var(--u)); font-weight: 700; color: var(--f-black); }
+.step.is-done i { background: var(--f-purple); border-color: var(--f-purple); }
+.step.is-current { color: var(--f-purple); }
+.step.is-current i { border-color: var(--f-purple); box-shadow: 0 0 0 4px rgba(153, 60, 166, .12); }
+.course button.is-on { background: var(--f-purple); }
+.course button { background: #fff; }
+.tag--kitchen { background: var(--f-light-purple); color: var(--f-purple); }
+
+/* ── Шторки (Modal) ────────────────────────────────────── */
+.sheet-backdrop { background: rgba(64, 67, 83, .7); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.sheet { background: #fff; border-radius: calc(12 * var(--u)) calc(12 * var(--u)) 0 0; max-width: 576px; }
+.sheet h2 { font-weight: 600; font-size: calc(16 * var(--u)); }
+.product-hero { border-radius: calc(12 * var(--u)); background: var(--f-light-gray); }
+.nutri div { background: var(--f-light-gray); }
+
+/* ── AI-экран ─────────────────────────────────────────── */
+.ai-answer { background: var(--f-light-purple); box-shadow: none; }
+.ai-error { background: var(--f-light-gray); box-shadow: none; }
+.toast { background: var(--f-menu-bg); border-radius: calc(12 * var(--u)); }
+
+/* ── Баннеры маркетинга ────────────────────────────────── */
+.banners {
+  display: flex; gap: calc(10 * var(--u)); overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none;
+  margin: calc(12 * var(--u)) calc(-16 * var(--u)) 0; padding: 0 calc(16 * var(--u));
+}
+.banners::-webkit-scrollbar { display: none; }
+.banner {
+  position: relative; flex: 0 0 88%; scroll-snap-align: center; aspect-ratio: 2 / 1; border-radius: calc(12 * var(--u));
+  overflow: hidden; background: var(--f-light-purple); color: var(--f-black); text-align: left;
+}
+.banners .banner:only-child { flex-basis: 100%; }
+.banner img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.banner__text {
+  position: absolute; left: 0; right: 0; bottom: 0; padding: calc(28 * var(--u)) calc(12 * var(--u)) calc(10 * var(--u));
+  background: linear-gradient(transparent, rgba(0, 0, 0, .55)); color: #fff;
+}
+.banner:not(.has-img) .banner__text { position: static; background: none; color: var(--f-purple); padding: calc(16 * var(--u)); }
+.banner__title { font-weight: 700; font-size: calc(14 * var(--u)); }
+.banner__sub { font-size: calc(10 * var(--u)); opacity: .85; margin-top: 3px; }
+
+/* ── Счёт: за кого платите ─────────────────────────────── */
+.bill-guests { display: flex; flex-direction: column; margin-top: 4px; }
+.bill-guest { display: flex; align-items: center; gap: 12px; padding: 12px 4px; border-bottom: 1px solid var(--f-border); cursor: pointer; font-size: 15px; }
+.bill-guest input { position: absolute; opacity: 0; pointer-events: none; }
+.bill-guest__box { width: 22px; height: 22px; border-radius: 6px; border: 1.5px solid var(--f-purple); display: grid; place-items: center; flex-shrink: 0; color: #fff; }
+.bill-guest__box svg { width: 12px; height: 12px; opacity: 0; }
+.bill-guest input:checked + .bill-guest__box { background: var(--f-purple); }
+.bill-guest input:checked + .bill-guest__box svg { opacity: 1; }
+.bill-guest__name { flex: 1; min-width: 0; font-weight: 500; }
+.bill-guest__name i { font-style: normal; color: var(--f-gray); font-weight: 400; }
+.bill-guest--note { cursor: default; color: var(--f-gray); }

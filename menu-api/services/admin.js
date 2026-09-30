@@ -38,6 +38,7 @@ export async function getAdminMenu(restaurant, { force = false } = {}) {
       allergens: p.allergensText || [],
       isInStopList: p.isInStopList,
       isRecommended: Boolean(p.isRecommended),
+      badge: p.badge || null,
       isHidden: false,
     })).concat(hidden.map((o) => ({
       id: o.product_id, name: o.product_name || o.name || o.product_id, group: '', isHidden: true,
@@ -48,7 +49,7 @@ export async function getAdminMenu(restaurant, { force = false } = {}) {
 
 const OVERRIDE_FIELDS = [
   'is_stopped', 'is_hidden', 'is_recommended', 'name', 'description', 'image_url', 'weight',
-  'energy', 'proteins', 'fats', 'carbs', 'allergens', 'product_name',
+  'energy', 'proteins', 'fats', 'carbs', 'allergens', 'product_name', 'badge',
 ];
 
 export async function saveOverride(restaurantId, productId, patch) {
@@ -58,7 +59,7 @@ export async function saveOverride(restaurantId, productId, patch) {
     if (patch[f] === undefined) continue;
     let v = patch[f];
     if (['energy', 'proteins', 'fats', 'carbs'].includes(f)) v = v === '' || v == null ? null : Number(v);
-    if (['name', 'description', 'image_url', 'weight', 'product_name'].includes(f)) v = v ? String(v) : null;
+    if (['name', 'description', 'image_url', 'weight', 'product_name', 'badge'].includes(f)) v = v ? String(v) : null;
     if (f === 'allergens') v = Array.isArray(v) ? v.map((a) => String(a).trim()).filter(Boolean) : null;
     if (f.startsWith('is_')) v = Boolean(v);
     values[f] = v;
@@ -101,7 +102,8 @@ export async function deleteOverride(id) {
 
 const TABLES = {
   ai_chips: ['label', 'query', 'emoji', 'sort_order', 'is_active'],
-  promo_blocks: ['title', 'text', 'image_url', 'product_id', 'sort_order', 'is_active'],
+  promo_blocks: ['title', 'text', 'image_url', 'product_id', 'category_id', 'link_url', 'placement', 'restaurant_id',
+    'starts_at', 'ends_at', 'sort_order', 'is_active'],
 };
 
 export async function listRows(table, { activeOnly = false } = {}) {
@@ -116,7 +118,8 @@ export async function saveRow(table, data) {
   const fields = TABLES[table];
   if (!fields) throw httpError(400, 'Неизвестный справочник');
   const keys = fields.filter((f) => data[f] !== undefined);
-  const vals = keys.map((k) => (k === 'sort_order' ? Number(data[k]) || 0 : data[k]));
+  // Пустое поле формы (ресторан, даты, ссылка) — «не задано»
+  const vals = keys.map((k) => (k === 'sort_order' ? Number(data[k]) || 0 : data[k] === '' ? null : data[k]));
   if (data.id) {
     const sets = keys.map((k, i) => `${k} = $${i + 2}`).join(', ');
     const { rows } = await pool.query(
