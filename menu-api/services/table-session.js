@@ -41,7 +41,7 @@ const PAYABLE = [
 export const PAYMENTS_ENABLED = process.env.PAYMENTS_ENABLED === 'true';
 
 const KITCHEN_LABELS = {
-  Added: 'Принят',
+  Added: 'Принят кассой',
   PrintedNotCooking: 'Принят кухней',
   CookingStarted: 'Готовится',
   CookingCompleted: 'Готово',
@@ -161,7 +161,13 @@ function mapItem(row) {
     isLocked: row.is_locked,
     isNew: !row.is_locked,
     kitchenStatus: row.kitchen_status || null,
-    kitchenLabel: KITCHEN_LABELS[row.kitchen_status] || (row.is_locked ? 'Отправлено на кухню' : null),
+    kitchenLabel: row.served_at ? 'Вынесено' : KITCHEN_LABELS[row.kitchen_status] || (row.is_locked ? 'Ждём подтверждения кассы' : 'Не отправлено'),
+    // Этап для официанта: new → sent (ждём кассу) → accepted → cooking → ready → served
+    stage: row.served_at || row.kitchen_status === 'Served' ? 'served'
+      : !row.is_locked ? 'new'
+        : row.kitchen_status === 'CookingCompleted' ? 'ready'
+          : row.kitchen_status === 'CookingStarted' ? 'cooking'
+            : row.kitchen_status ? 'accepted' : 'sent',
     isReady: row.kitchen_status === 'CookingCompleted' && !row.served_at,
     servedAt: row.served_at || null,
   };
