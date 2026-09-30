@@ -470,3 +470,58 @@ html { scroll-behavior: smooth; -webkit-tap-highlight-color: transparent; }
 .back-btn svg { width: 22px; height: 22px; }
 .fs-btn { display: none; }
 .topbar { background: var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; box-shadow: 0 8px 12px -12px rgba(9, 16, 39, .18); }
+
+/* ── Добавленное блюдо: цифра поверх фото (как в приложении Фуджи) ── */
+.dish__photo { position: relative; flex-shrink: 0; width: 96px; height: 96px; border-radius: 16px; overflow: hidden; }
+.dish__photo .dish__img { width: 100%; height: 100%; }
+.dish__count {
+  position: absolute; inset: 0; display: grid; place-items: center;
+  background: rgba(120, 88, 160, .38); color: #fff;
+  font-size: 52px; font-weight: 300; line-height: 1; letter-spacing: -.02em;
+  text-shadow: 0 1px 8px rgba(9, 16, 39, .18);
+  animation: count-in .22s ease-out;
+}
+@keyframes count-in { from { opacity: 0; transform: scale(1.15); } }
+.dish.is-stopped .dish__photo { filter: grayscale(1); }
+/* Метки маркетинга: «Хит», «Новинка», «Острое»… */
+.dish__label {
+  position: absolute; left: 6px; top: 6px; z-index: 1; padding: 3px 8px; border-radius: 10px;
+  background: #fff; color: var(--ink); font-size: 11px; font-weight: 600; box-shadow: var(--shadow);
+}
+.dish__label[data-badge="spicy"] { background: #DDF0C4; color: #2F5A12; }
+.dish__label[data-badge="new"] { background: #F6CDB4; color: #B24A12; }
+.dish__label[data-badge="hit"], .dish__label[data-badge="chef"] { background: var(--ink); color: #fff; }
+.dish__label[data-badge="sale"] { background: #FDECEE; color: var(--danger); }
+.dish__label[data-badge="veg"] { background: #EAF8F2; color: var(--ok); }
+
+/* ── Все разделы меню ─────────────────────────────────────── */
+.cats .cats__all { display: grid; place-items: center; padding: 0; width: 40px; }
+.cats .cats__all svg { width: 18px; height: 18px; }
+.cat-list { display: flex; flex-direction: column; background: var(--card); border-radius: var(--r-card); padding: 4px 16px; }
+.cat-list button { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); font-size: 16px; font-weight: 500; text-align: left; }
+.cat-list button:last-child { border-bottom: 0; }
+.cat-list i { font-style: normal; color: var(--muted); font-size: 14px; }
+
+/* ── Баннеры (админка → «Баннеры и акции») ─────────────────── */
+.banners { display: flex; gap: 10px; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; margin: 0 -16px 12px; padding: 0 16px; }
+.banners::-webkit-scrollbar { display: none; }
+.banner { position: relative; flex: 0 0 88%; scroll-snap-align: center; aspect-ratio: 2 / 1; border-radius: var(--r-card); overflow: hidden; background: var(--card); box-shadow: var(--shadow); text-align: left; }
+.banners .banner:only-child { flex-basis: 100%; }
+.banner img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.banner__text { position: absolute; left: 0; right: 0; bottom: 0; padding: 28px 16px 12px; background: linear-gradient(transparent, rgba(9, 16, 39, .55)); color: #fff; }
+.banner:not(.has-img) .banner__text { position: static; background: none; color: var(--ink); padding: 20px; }
+.banner__title { font-weight: 600; font-size: 17px; }
+.banner__sub { font-size: 13px; opacity: .85; margin-top: 3px; }
+
+/* ── Счёт: за кого платите ─────────────────────────────────── */
+.bill-guests { display: flex; flex-direction: column; background: var(--card); border-radius: var(--r-card); padding: 0 16px; }
+.bill-guest { display: flex; align-items: center; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--line); cursor: pointer; font-size: 15px; }
+.bill-guest:last-child { border-bottom: 0; }
+.bill-guest input { position: absolute; opacity: 0; pointer-events: none; }
+.bill-guest__box { width: 22px; height: 22px; border-radius: 6px; border: 1.5px solid var(--ink); display: grid; place-items: center; flex-shrink: 0; color: #fff; }
+.bill-guest__box svg { width: 12px; height: 12px; opacity: 0; }
+.bill-guest input:checked + .bill-guest__box { background: var(--ink); }
+.bill-guest input:checked + .bill-guest__box svg { opacity: 1; }
+.bill-guest__name { flex: 1; min-width: 0; font-weight: 500; }
+.bill-guest__name i { font-style: normal; color: var(--muted); font-weight: 400; }
+.bill-guest--note { cursor: default; color: var(--muted); }

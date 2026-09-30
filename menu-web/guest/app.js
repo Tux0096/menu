@@ -31,7 +31,6 @@
     bell: '<svg viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 19.5V12a7 7 0 0114 0v7.5l2 2.5H5l2-2.5zM11.5 24.5a2.5 2.5 0 005 0"/></svg>',
     cart: '<svg viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h3.2l2.6 13h12.6l2.6-9.5H7.7"/><circle cx="10.5" cy="22.5" r="1.8"/><circle cx="19.5" cy="22.5" r="1.8"/></svg>',
     search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>',
-    spark: '<svg viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M14 3.5l2.4 6.6 6.6 2.4-6.6 2.4L14 21.5l-2.4-6.6-6.6-2.4 6.6-2.4L14 3.5z"/><path d="M22 19.5l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9.9-2.1z"/></svg>',
     grid: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>',
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   };
@@ -372,15 +371,16 @@
 
   function nav() {
     const count = cartCount();
-    const item = (attrs, icon, label, active, badge = '') => `<button class="fnav__item ${active ? 'is-active' : ''}" ${attrs}>
-        <span class="fnav__icon">${icon}${badge}</span><span class="fnav__label">${label}</span></button>`;
-    return `<nav class="fnav" aria-label="Навигация">
-      ${item('data-go="menu"', ICONS.home, 'Меню', S.tab === 'menu')}
-      ${item('data-go="ai"', ICONS.spark, 'AI', S.tab === 'ai')}
-      ${item('data-action="call"', ICONS.bell, 'Официант', false)}
-      ${item('data-go="order"', ICONS.cart, 'Заказ', S.tab === 'order', count ? `<span class="fnav__badge">${count}</span>` : '')}
+    return `<nav class="nav" aria-label="Навигация">
+      <button class="nav__ai ${S.tab === 'ai' ? 'is-active' : ''}" data-go="ai" aria-label="AI-помощник"><div class="orb"></div><span>AI</span></button>
+      <div class="nav__bar">
+        <button class="nav__btn ${S.tab === 'menu' ? 'is-active' : ''}" data-go="menu" aria-label="Меню">${ICONS.home}</button>
+        <button class="nav__btn" data-action="call" aria-label="Позвать официанта">${ICONS.bell}</button>
+        <button class="nav__btn ${S.tab === 'order' ? 'is-active' : ''}" data-go="order" aria-label="Заказ">${ICONS.cart}${count ? `<span class="badge">${count}</span>` : ''}</button>
+      </div>
     </nav>`;
   }
+
 
 
   function dishCard(p, { reason = null } = {}) {
@@ -391,18 +391,19 @@
     return `<article class="dish ${stopped ? 'is-stopped' : ''} ${qty && !stopped ? 'has-qty' : ''}" data-product="${esc(p.id)}">
       <div class="dish__photo">${imgHtml(p)}${label}${qty && !stopped ? `<span class="dish__count" aria-label="В заказе ${qty}">${qty}</span>` : ''}</div>
       <div class="dish__body">
-        <div class="dish__head">
+        <div>
           <div class="dish__name">${esc(p.name)}</div>
-          ${sub ? `<div class="dish__desc">${esc(sub)}</div>` : ''}
+          ${sub ? `<div class="dish__desc" style="margin-top:6px">${esc(sub)}</div>` : ''}
         </div>
-        <div class="dish__foot">
-          <div class="dish__price"><div>${qty && !stopped ? `<i>${qty} шт |</i>` : ''}${rub(p.price)}</div>${p.weight ? `<span>${esc(p.weight)}</span>` : ''}</div>
-          ${stopped ? '<span class="tag tag--stop">Нет в наличии</span>' : qty ? `<div class="fqty">
-            <button data-dec="${esc(p.id)}" aria-label="Убрать">${ICONS.minus}</button>
+        <div class="dish__price"><b>${rub(p.price)}</b>${p.weight ? `<span>${esc(p.weight)}</span>` : ''}
+          ${stopped ? '<span class="tag tag--stop">Нет в наличии</span>' : ''}</div>
+      </div>
+      <div class="dish__action">
+        ${stopped ? '' : qty ? `<div class="qty">
+            <button class="round-btn round-btn--sm round-btn--light" data-dec="${esc(p.id)}" aria-label="Убрать">${ICONS.minus}</button>
             <b>${qty}</b>
-            <button data-inc="${esc(p.id)}" aria-label="Добавить">${ICONS.plus}</button>
-          </div>` : `<button class="add-btn" data-inc="${esc(p.id)}" aria-label="Добавить ${esc(p.name)}">${ICONS.plus}</button>`}
-        </div>
+            <button class="round-btn round-btn--sm" data-inc="${esc(p.id)}" aria-label="Добавить">${ICONS.plus}</button>
+          </div>` : `<button class="round-btn round-btn--sm" data-inc="${esc(p.id)}" aria-label="Добавить ${esc(p.name)}">${ICONS.plus}</button>`}
       </div>
     </article>`;
   }
