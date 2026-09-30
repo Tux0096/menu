@@ -105,7 +105,7 @@ if [ -n "${ADMIN_PASSWORD:-}" ]; then
   ADMIN_PASSWORD_RESET="$ADMIN_PASSWORD" node db/set-admin-password.js || echo "  ! пароль администратора не обновлён"
 fi
 timeout 60 node db/check-iiko.js || true
-timeout 40 node db/iiko-spec-probe.js || true
+timeout 60 node db/iiko-sections-probe.js || true
 # Меню из iiko сервер выгружает сам: после деплоя — полностью (сбрасываем отметку), дальше раз в сутки
 node --input-type=module -e "import pool from './db/pool.js'; await pool.query(\"DELETE FROM settings WHERE name = 'iiko_menu_synced_at'\"); await pool.end();" || true
 
