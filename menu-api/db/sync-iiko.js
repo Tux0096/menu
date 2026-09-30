@@ -249,6 +249,7 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
         category: { id: cat.id, name: cat.name, order: ci },
         id: item.itemId || item.id,
         name: item.name,
+        sku: item.sku || null,
         description: item.description || null,
         price,
         weight: size.portionWeightGrams ? `${Math.round(size.portionWeightGrams)} г` : null,
@@ -284,11 +285,12 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
       await client.query(
         `INSERT INTO products
            (iiko_id, restaurant_id, name, slug, description, price, weight, image_url,
-            category_id, sort_order, is_published, energy, proteins, fats, carbs, source)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,$11,$12,$13,$14,$15)
+            category_id, sort_order, is_published, energy, proteins, fats, carbs, source, sku)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,$11,$12,$13,$14,$15,$16)
          ON CONFLICT (restaurant_id, iiko_id) DO NOTHING`,
         [r.id, restaurant.id, r.name, r.name, r.description, r.price, r.weight, r.image,
-          r.category.id, (source === 'main' ? 0 : 100000) + r.order, r.energy, r.proteins, r.fats, r.carbs, source],
+          r.category.id, (source === 'main' ? 0 : 100000) + r.order, r.energy, r.proteins, r.fats, r.carbs, source,
+          r.sku ? String(r.sku).slice(0, 50) : null],
       );
     }
     await client.query('COMMIT');
@@ -399,10 +401,11 @@ async function syncRestaurant(restaurant, token, orgs = [], externalMenu = null,
       await client.query(
         `INSERT INTO products
            (iiko_id, restaurant_id, name, slug, description, price, weight, image_url,
-            category_id, sort_order, is_published, energy, proteins, fats, carbs)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+            category_id, sort_order, is_published, energy, proteins, fats, carbs, sku)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
          ON CONFLICT (restaurant_id, iiko_id) DO UPDATE SET
            name = EXCLUDED.name,
+           sku = EXCLUDED.sku,
            description = EXCLUDED.description,
            price = EXCLUDED.price,
            weight = EXCLUDED.weight,
@@ -429,6 +432,7 @@ async function syncRestaurant(restaurant, token, orgs = [], externalMenu = null,
           p.fiberAmount ?? p.proteinsAmount ?? null,
           p.fatAmount ?? null,
           p.carbohydrateAmount ?? p.carbohydratesAmount ?? null,
+          p.code ? String(p.code).slice(0, 50) : null,
         ]
       );
       inserted++;

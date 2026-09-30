@@ -18,7 +18,7 @@ async function getCatalogFromDb(restaurantId) {
   const { rows: products } = await pool.query(
     `SELECT p.id, p.iiko_id, p.name, p.slug, p.description, p.price, p.old_price,
             p.weight, p.image_url, p.category_id, p.sort_order, p.is_published,
-            p.energy, p.proteins, p.fats, p.carbs, p.source
+            p.energy, p.proteins, p.fats, p.carbs, p.source, p.sku
      FROM products p
      WHERE p.restaurant_id = $1 AND p.is_published = TRUE AND p.price > 0
      ORDER BY p.sort_order`,
@@ -68,6 +68,7 @@ async function getCatalogFromDb(restaurantId) {
       nameTo: p.name,
       slug: p.slug,
       code: p.slug,
+      sku: p.sku || null,
       parentGroup: p.category_id,
       parentGroupName: null,
       source: p.source || 'main',
@@ -228,6 +229,7 @@ function applyOverride(product, o) {
   if (o.allergens?.length) p.allergensText = o.allergens;
   if (o.is_recommended) p.isRecommended = true;
   if (o.badge) p.badge = o.badge;
+  if (o.priority) p.priority = Number(o.priority);
   return p;
 }
 
@@ -257,10 +259,14 @@ export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
     products.push(p);
   }
 
+  // Приоритет из админки: больше — выше в своём разделе; остальные — как в iiko.
+  // Порядок считает сервер — одинаково у гостя, официанта и в приложении.
+  const ranked = products.map((p, i) => ({ ...p, order: (Number(p.order) || i) - (p.priority || 0) * 1e7 }))
+    .sort((a, b) => a.order - b.order);
   return {
     ...raw.data,
     groups: orderGroups(raw.data.groups),
-    products,
+    products: ranked,
     stopList: [...stop],
     source: raw.source,
     fetchedAt: raw.fetchedAt || new Date(raw.at).toISOString(),

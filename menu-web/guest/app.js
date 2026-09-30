@@ -657,7 +657,6 @@
     : S.catalog.products?.length
       ? `<div class="empty"><div class="orb orb--md"></div>Ничего не нашлось. Спросите AI — он подберёт похожее.</div>`
       : `<div class="empty"><div class="orb orb--md"></div>Меню ресторана ещё загружается из iiko.<br>Загляните чуть позже или позовите официанта.</div>`}
-      ${cartCount() && !S.session?.isPaid ? `<div style="position:sticky;bottom:calc(100px + var(--safe-b));margin-top:20px">${submitBlock()}</div>` : ''}
     </main>`;
   }
 
