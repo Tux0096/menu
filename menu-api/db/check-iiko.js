@@ -209,6 +209,46 @@ async function checkExtraKey(creds) {
     const { rows: existing } = await pool.query(
       'SELECT code, organization_id FROM restaurant_sources WHERE restaurant_id = $1 AND creds = $2', [rest[0].id, creds],
     );
+    // Диагностика бара: кассы организации, выбранная касса источника, заказы на известных столах (только чтение)
+    try {
+      const { rows: srcRows } = await pool.query(
+        'SELECT organization_id, terminal_group_id FROM restaurant_sources WHERE restaurant_id = $1 AND creds = $2', [rest[0].id, creds],
+      );
+      const srcOrg = srcRows[0]?.organization_id || orgs[0]?.id;
+      const tg = (await axios.post(`${IIKO_URL}/api/1/terminal_groups`, { organizationIds: [srcOrg], includeDisabled: true }, { headers, timeout: 15000 })).data;
+      const groups = (tg.terminalGroups || []).flatMap((g) => (g.items || []).map((t) => ({ ...t, org: g.organizationId })));
+      let alive = new Map();
+      try {
+        const st = (await axios.post(`${IIKO_URL}/api/1/terminal_groups/is_alive`, { organizationIds: [srcOrg], terminalGroupIds: groups.map((t) => t.id) }, { headers, timeout: 15000 })).data;
+        alive = new Map((st.isAliveStatus || []).map((x) => [x.terminalGroupId, Boolean(x.isAlive)]));
+      } catch (e) { console.log(`iiko ${creds}: статус касс не получен —`, e.response?.data?.errorDescription || e.message); }
+      console.log(`iiko ${creds}: кассы — ${groups.map((t) => `${t.name} [${t.id}] ${alive.get(t.id) === true ? 'на связи' : alive.get(t.id) === false ? 'НЕ на связи' : 'статус неизвестен'}${t.id === srcRows[0]?.terminal_group_id ? ' ← выбрана' : ''}`).join('; ') || 'нет'}`);
+      const { rows: tables } = await pool.query(
+        'SELECT table_number, iiko_table_id FROM restaurant_table_cache WHERE restaurant_id = $1 AND table_number LIKE $2 AND iiko_table_id IS NOT NULL LIMIT 5',
+        [rest[0].id, `${code}:%`],
+      );
+      console.log(`iiko ${creds}: известные столы — ${tables.map((t) => t.table_number).join(', ') || 'нет'}`);
+      if (tables.length) {
+        const ord = (await axios.post(`${IIKO_URL}/api/1/order/by_table`, { organizationIds: [srcOrg], tableIds: tables.map((t) => t.iiko_table_id), statuses: ['New', 'Bill'] }, { headers, timeout: 15000 })).data;
+        console.log(`iiko ${creds}: открытых заказов на этих столах — ${(ord.orders || []).length}`);
+      }
+      const { rows: sess } = await pool.query(
+        `SELECT table_number, iiko_orders, iiko_last_error FROM table_sessions
+         WHERE restaurant_id = $1 AND status = 'open' AND (iiko_orders ? $2 OR iiko_last_error IS NOT NULL) ORDER BY updated_at DESC LIMIT 5`,
+        [rest[0].id, code],
+      );
+      for (const x of sess) {
+        console.log(`iiko ${creds}: стол №${x.table_number} — заказ бара ${x.iiko_orders?.[code]?.orderId || 'нет'}${x.iiko_last_error ? `; ошибка: ${x.iiko_last_error}` : ''}`);
+        const oid = x.iiko_orders?.[code]?.orderId;
+        if (oid) {
+          const o = (await axios.post(`${IIKO_URL}/api/1/order/by_id`, { organizationIds: [srcOrg], orderIds: [oid] }, { headers, timeout: 15000 })).data;
+          const info = (o.orders || [])[0];
+          console.log(`  заказ бара в iiko: статус ${info?.creationStatus || '—'} / ${info?.order?.status || '—'}${info?.errorInfo ? `, ошибка ${JSON.stringify(info.errorInfo).slice(0, 300)}` : ''}, касса ${info?.terminalGroupId || '—'}`);
+        }
+      }
+    } catch (e) {
+      console.log(`iiko ${creds}: диагностика бара не удалась —`, e.response?.status || '', e.response?.data?.errorDescription || e.message);
+    }
     if (existing.length && (!org || existing[0].organization_id === org.id || orgs.length === 1)) {
       console.log(`iiko ${creds}: источник уже подключён к «${rest[0].name}» (организация ${orgs.find((o) => o.id === existing[0].organization_id)?.name || existing[0].organization_id})`);
       return;
