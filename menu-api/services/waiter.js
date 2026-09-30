@@ -3,7 +3,9 @@
  */
 import pool from '../db/pool.js';
 import { NOTIFY_TYPES, WAITER_RESPONSE_SLA_MS, WORKFLOW } from '../lib/table-workflow-config.js';
-import { addItemsToOrder, createTableOrder, isIikoDemo, withIikoCreds } from '../iiko-client.js';
+import {
+  addItemsToOrder, createTableOrder, isIikoDemo, isTerminalGroupError, pickAliveTerminalGroup, withIikoCreds,
+} from '../iiko-client.js';
 import { createWaiterNotification } from './waiter-notifications.js';
 import { getSource, MAIN, productSourceMap } from './sources.js';
 import {
@@ -137,6 +139,17 @@ export async function updateOrder(sessionId, staff, { items = [], guestCount, se
   return getSessionView(sessionId);
 }
 
+/** Запомнить рабочую терминальную группу источника и сбросить кэш столов (у другой группы свои ID столов). */
+async function saveTerminalGroup(restaurantId, code, terminalGroupId) {
+  if (code === MAIN) await pool.query('UPDATE restaurants SET terminal_group_id = $2 WHERE id = $1', [restaurantId, terminalGroupId]);
+  else await pool.query('UPDATE restaurant_sources SET terminal_group_id = $3 WHERE restaurant_id = $1 AND code = $2', [restaurantId, code, terminalGroupId]);
+  await pool.query(
+    `DELETE FROM restaurant_table_cache WHERE restaurant_id = $1 AND ${code === MAIN ? "table_number NOT LIKE '%:%'" : 'table_number LIKE $2'}`,
+    code === MAIN ? [restaurantId] : [restaurantId, `${code}:%`],
+  );
+  console.log(`iiko: терминальная группа ${code === MAIN ? 'кухни' : code} → ${terminalGroupId}`);
+}
+
 /**
  * «В работу» (кейс 8): отправить новые позиции в iiko на стол.
  * Позиции делятся по источникам iiko: кухня — в iiko ресторана, алкоголь — в iiko бара
@@ -179,20 +192,41 @@ export async function sendToKitchen(sessionId, staff) {
         let orderId = orders[code]?.orderId;
         if (!orderId) {
           let tableId = orders[code]?.tableId || (code === MAIN ? session.iiko_table_id : null);
-          if (!tableId && !demo) {
+          let terminalGroupId = src.terminal_group_id;
+          const resolveTable = async () => {
+            if (tableId || demo) return;
             tableId = await resolveIikoTableId(
-              { id: restaurant.id, organization_id: src.organization_id, terminal_group_id: src.terminal_group_id },
+              { id: restaurant.id, organization_id: src.organization_id, terminal_group_id: terminalGroupId },
               session.table_number, code,
             );
             if (!tableId) throw new Error(`Стол №${session.table_number} не найден в схеме зала iiko`);
-          }
-          const created = await createTableOrder({
+          };
+          const create = () => createTableOrder({
             organizationId: src.organization_id,
-            terminalGroupId: src.terminal_group_id,
+            terminalGroupId,
             tableIds: tableId ? [tableId] : [],
             items: delta,
             guestCount: session.guest_count || 1,
           });
+          await resolveTable();
+          let created;
+          try {
+            created = await create();
+          } catch (e) {
+            if (demo || !isTerminalGroupError(e)) throw e;
+            // Касса ресторана не та или не на связи — берём живую терминальную группу и повторяем
+            const picked = await pickAliveTerminalGroup(src.organization_id, terminalGroupId);
+            if (!picked.id || picked.id === terminalGroupId) {
+              const names = picked.list.map((t) => `${t.name || t.id}${t.isAlive ? ' — на связи' : t.isAlive === false ? ' — не на связи' : ''}`).join('; ');
+              throw new Error('Касса iiko ресторана не на связи с облаком iiko (или iikoFront старше 7.1.5): '
+                + `включите главную кассу и проверьте подключение к iiko Cloud${names ? `. Кассы: ${names}` : ''}`);
+            }
+            terminalGroupId = picked.id;
+            await saveTerminalGroup(restaurant.id, code, terminalGroupId);
+            tableId = null;
+            await resolveTable();
+            created = await create();
+          }
           if (created?.orderInfo?.creationStatus === 'Error') {
             throw new Error(created.orderInfo.errorInfo?.message || 'iiko отклонил заказ');
           }

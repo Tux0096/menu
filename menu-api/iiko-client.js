@@ -79,6 +79,38 @@ export async function getStopListProductIds(organizationId, terminalGroupId) {
   return ids;
 }
 
+/**
+ * Терминальные группы организации и живы ли они (кассы iikoFront на связи с облаком).
+ * Заказ на стол принимает только живая группа с iikoFront ≥ 7.1.5; «версия 0.0.0» — касса не подключалась.
+ */
+export async function listTerminalGroups(organizationId) {
+  const tg = await iikoPost('/api/1/terminal_groups', { organizationIds: [organizationId], includeDisabled: true });
+  const list = (tg?.terminalGroups || []).flatMap((g) => g.items || []).map((t) => ({ id: t.id, name: t.name, isAlive: null }));
+  if (!list.length) return list;
+  try {
+    const alive = await iikoPost('/api/1/terminal_groups/is_alive', { organizationIds: [organizationId], terminalGroupIds: list.map((t) => t.id) });
+    for (const st of alive?.isAliveStatus || []) {
+      const t = list.find((x) => x.id === st.terminalGroupId);
+      if (t) t.isAlive = Boolean(st.isAlive);
+    }
+  } catch { /* статус неизвестен */ }
+  return list;
+}
+
+/** Живая терминальная группа: текущая, если жива, иначе первая живая. */
+export async function pickAliveTerminalGroup(organizationId, currentId) {
+  const list = await listTerminalGroups(organizationId);
+  const cur = list.find((t) => t.id === currentId);
+  if (cur?.isAlive) return { id: cur.id, list };
+  return { id: list.find((t) => t.isAlive)?.id || null, list };
+}
+
+/** Ошибка iiko «касса не та / не на связи» — стоит попробовать другую терминальную группу. */
+export function isTerminalGroupError(e) {
+  const text = `${e?.response?.data?.errorDescription || ''} ${e?.response?.data?.error || ''} ${e?.message || ''}`;
+  return /server version|incompatible|not alive|terminal ?group|TerminalGroup/i.test(text);
+}
+
 export async function getRestaurantSections(organizationId, terminalGroupId) {
   return iikoPost('/api/1/reserve/available_restaurant_sections', {
     organizationId,
