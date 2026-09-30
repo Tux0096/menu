@@ -266,6 +266,10 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
     }
   }
   console.log(`  внешнее меню «${menu.name}»: ${rows.length} блюд с ценой для ресторана`);
+  const probe = categories.flatMap((c) => c.items || []).find((i) => /сливочн\S* лосос/i.test(i.name || ''));
+  if (probe) {
+    console.log(`  пример «${probe.name}» [${probe.itemId || probe.id}] артикул ${probe.sku || '—'}: цены ${JSON.stringify((probe.itemSizes || []).map((z) => z.prices)).slice(0, 500)}`);
+  }
   if (!rows.length) {
     // Разбор, почему пусто: сколько разделов и позиций, как в меню записаны цены (без ключей и токенов)
     const all = categories.flatMap((c) => c.items || []);
@@ -278,6 +282,22 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
         + ` организация источника ${organizationId}`);
     }
     return 0;
+  }
+
+  // Цены — как считает касса: из прайса номенклатуры iiko (во внешнем меню бывают цены сайта/доставки)
+  try {
+    const nom = await iikoPostRaw(token, '/api/1/nomenclature', { organizationId });
+    const priced = (nom.products || []).map((p) => [p, Number(p.sizePrices?.[0]?.price?.currentPrice ?? 0)]).filter(([, v]) => v > 0);
+    const prices = new Map(priced.map(([p, v]) => [String(p.id), v]));
+    const byCode = new Map(priced.filter(([p]) => p.code).map(([p, v]) => [String(p.code), v]));
+    let changed = 0;
+    for (const r of rows) {
+      const v = prices.get(String(r.id)) ?? (r.sku ? byCode.get(String(r.sku)) : undefined);
+      if (v && Math.abs(v - r.price) >= 0.01) { r.price = v; changed += 1; }
+    }
+    console.log(`  цены по прайсу iiko: исправлено ${changed} из ${rows.length}${prices.size ? '' : ' (номенклатура без цен)'}`);
+  } catch (e) {
+    console.log('  цены по прайсу iiko: номенклатура не получена, остаются цены внешнего меню —', e.response?.status || '', e.message);
   }
 
   const client = await pool.connect();
