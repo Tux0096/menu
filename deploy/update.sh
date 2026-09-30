@@ -53,7 +53,7 @@ rand() { openssl rand -hex "${1:-16}"; }
 
 # Секреты из GitHub Secrets перезаписывают значения в .env
 # Какие секреты пришли из GitHub (только факт, без значений)
-for v in OPENROUTER_API_KEY IIKO_API_LOGIN IIKO_CLIENT_SECRET IIKO_MENU_API_LOGIN IIKO_MENU_CLIENT_SECRET IIKO_APP_ID IIKO_EXTERNAL_MENU_ID IIKO_BAR_API_LOGIN IIKO_BAR_APP_ID IIKO_BAR_CLIENT_SECRET FCM_SERVICE_ACCOUNT; do
+for v in OPENROUTER_API_KEY IIKO_API_LOGIN IIKO_CLIENT_SECRET IIKO_MENU_API_LOGIN IIKO_MENU_CLIENT_SECRET IIKO_APP_ID IIKO_EXTERNAL_MENU_ID IIKO_BAR_API_LOGIN IIKO_BAR_APP_ID IIKO_BAR_CLIENT_SECRET IIKO_BAR_ORGANIZATION_ID FCM_SERVICE_ACCOUNT; do
   if [ -n "${!v:-}" ]; then echo "  секрет $v: задан"; else echo "  секрет $v: —"; fi
 done
 [ -n "${OPENROUTER_API_KEY:-}" ] && set_env OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
@@ -66,6 +66,7 @@ done
 [ -n "${IIKO_BAR_API_LOGIN:-}" ] && set_env IIKO_BAR_API_LOGIN "$IIKO_BAR_API_LOGIN"
 [ -n "${IIKO_BAR_APP_ID:-}" ] && set_env IIKO_BAR_APP_ID "$IIKO_BAR_APP_ID"
 [ -n "${IIKO_BAR_CLIENT_SECRET:-}" ] && set_env IIKO_BAR_CLIENT_SECRET "$IIKO_BAR_CLIENT_SECRET"
+[ -n "${IIKO_BAR_ORGANIZATION_ID:-}" ] && set_env IIKO_BAR_ORGANIZATION_ID "$IIKO_BAR_ORGANIZATION_ID"
 [ -n "${IIKO_EXTERNAL_MENU_ID:-}" ] && set_env IIKO_EXTERNAL_MENU_ID "$IIKO_EXTERNAL_MENU_ID"
 # Push в приложение официанта: JSON ключа Firebase — в .env одной строкой (base64)
 if [ -n "${FCM_SERVICE_ACCOUNT:-}" ]; then
@@ -166,7 +167,7 @@ SLUG=$(get_env QR_RESTAURANT_SLUG); SLUG=${SLUG:-novo-sadovaya}
 curl -fsS -m 90 "http://127.0.0.1:3101/api/v1/restaurants/$SLUG/catalog" \
   | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);console.log(`меню ${process.argv[1]}: источник ${j.source}, блюд ${j.products.length}, категорий ${(j.groups||[]).length}, стоп-лист ${(j.stopList||[]).length}`)})' "$SLUG" \
   || echo "меню: не удалось получить"
-sudo journalctl -u menu-api --since "3 min ago" --no-pager -o cat | grep -E "^catalog|prod API|iiko|→|вернул|по группам|записано|! |Готово" | tail -40 || true
+sudo journalctl -u menu-api --since "3 min ago" --no-pager -o cat | grep -E "^catalog|prod API|iiko|→|вернул|по группам|записано|! |Готово|внешнее меню|разбор меню|пример «" | tail -60 || true
 
 echo ""
 echo "Готово:"
