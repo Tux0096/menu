@@ -385,6 +385,9 @@ const SCHEMA = `
     iiko_payment_type_id VARCHAR(64),
     updated_at TIMESTAMPTZ DEFAULT NOW()
   );
+  -- Типы оплат iiko кухни для оплаты официанту (пусто — ищутся автоматически: «Наличные», «Банковские карты»)
+  ALTER TABLE restaurant_payment_settings ADD COLUMN IF NOT EXISTS iiko_cash_type_id VARCHAR(64);
+  ALTER TABLE restaurant_payment_settings ADD COLUMN IF NOT EXISTS iiko_card_type_id VARCHAR(64);
   -- Телефоны официантов для push-уведомлений (Firebase Cloud Messaging)
   CREATE TABLE IF NOT EXISTS waiter_devices (
     token TEXT PRIMARY KEY,

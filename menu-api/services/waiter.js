@@ -257,9 +257,7 @@ export async function releaseSession(sessionId, staff) {
 
 /** Официант принял оплату на своём терминале / закрыл стол. */
 export async function closeSession(sessionId, staff) {
-  if (process.env.PAYMENTS_ENABLED !== 'true') {
-    throw httpError(403, 'Закрытие заказов из меню отключено — закройте счёт в iiko');
-  }
+  // Стол закрывается только в меню (заказы iiko не трогаем — счёт закрыт на кассе)
   await pool.query(
     `UPDATE table_sessions SET
        status = CASE WHEN payment_status = 'paid' THEN 'closed' ELSE 'closed' END,

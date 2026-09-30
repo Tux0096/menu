@@ -15,7 +15,7 @@ import legacyRoutes from './routes/legacy.js';
 import { syncAllRestaurants } from './db/sync-iiko.js';
 import { imageHandler, warmImages } from './services/images.js';
 import {
-  checkPendingPayments, confirmOnlinePayment, onlinePayConfig, paySettingsForAdmin, savePaySettings, startOnlinePayment,
+  acceptWaiterPayment, checkPendingPayments, confirmOnlinePayment, onlinePayConfig, paySettingsForAdmin, savePaySettings, startOnlinePayment,
 } from './services/payments.js';
 import { refreshStopLists, registerWebhooks, webhookToken } from './services/stoplist.js';
 import { getRestaurantCatalog, invalidateCatalogCache, warmCatalogs } from './services/catalog.js';
@@ -399,6 +399,12 @@ waiter.post('/session/:id/send-to-production', h(async (req) => {
   const result = await sendToKitchen(req.params.id, req.staff);
   audit(req.staff, 'order.send_to_kitchen', 'session', req.params.id, { iikoOrderId: result.iikoOrderId });
   return result;
+}));
+// Официант принял оплату наличными или картой: оплата и закрытие заказов в iiko (кухня и бар)
+waiter.post('/session/:id/pay', h(async (req) => {
+  const result = await acceptWaiterPayment(req.params.id, { method: req.body?.method, tipAmount: req.body?.tipAmount });
+  audit(req.staff, 'table.pay', 'session', req.params.id, { method: result.method, amount: result.amount, iiko: result.closedInIiko });
+  return { ...result, session: await getSessionView(req.params.id) };
 }));
 waiter.post('/session/:id/close', h(async (req) => {
   const result = await closeSession(req.params.id, req.staff);

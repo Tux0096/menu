@@ -241,6 +241,7 @@
       </div>
       <div class="tscreen__items">${blocks || '<div class="empty-note">Заказа пока нет. Нажмите «+ Блюдо», чтобы добавить из меню.</div>'}</div>
       <div class="tscreen__total"><span class="muted">Итого по столу</span><b>${rub(total)}</b></div>
+      ${payBox(s, pending)}
       <div class="tbar">
         <div class="tbar__status muted">${S.saving ? 'Сохраняем…' : e.dirty ? 'Есть несохранённые правки' : pendingQty ? `Новых: ${pendingQty} — ещё не на кухне` : 'Всё отправлено'}</div>
         <div class="tbar__btns">
@@ -250,6 +251,24 @@
       </div>
       ${S.picker ? pickerHtml(seats, nameOf) : ''}
     </section>`;
+  }
+
+  /** Оплата официанту: наличные или карта — оплата и закрытие заказов в iiko (кухня и бар). */
+  function payBox(s, pending) {
+    if (s.isPaid || !(s.sentTotal > 0)) return '';
+    const online = s.onlinePaid?.amount || 0;
+    const due = Math.max(0, s.sentTotal - online);
+    const ask = [...(s.billRequests || [])].reverse().find((r) => r.method);
+    return `<div class="pay-box">
+      <div><b>К оплате ${rub(due)}</b>${online ? ` <span class="muted">· онлайн оплачено ${rub(online)}</span>` : ''}
+        ${ask ? `<div class="muted" style="font-size:12px">Гость хочет ${ask.method === 'cash' ? 'наличными' : 'картой'}</div>` : ''}</div>
+      <div class="pay-box__btns">
+        <button class="btn btn--sm ${ask?.method === 'cash' ? 'btn--dark' : ''}" data-accept-pay="cash" ${pending.length ? 'disabled' : ''}>Наличными</button>
+        <button class="btn btn--sm ${ask?.method !== 'cash' ? 'btn--dark' : ''}" data-accept-pay="card" ${pending.length ? 'disabled' : ''}>Картой</button>
+        <button class="btn btn--sm" data-close-table title="Счёт закрыт на кассе — просто закрыть стол">Закрыть стол</button>
+      </div>
+      ${pending.length ? '<div class="muted" style="font-size:12px">Сначала отправьте новые блюда в работу</div>' : ''}
+    </div>`;
   }
 
   /** Выбор блюд — шторка поверх экрана стола: поиск, категории, «+» добавляет выбранному гостю. */
@@ -436,6 +455,11 @@
             <div class="field"><label>Пароль для API (API Secret)${p.hasSecret ? ' — задан, пусто — не менять' : ''}</label><input class="inp" name="apiSecret" type="password" autocomplete="new-password" placeholder="${p.hasSecret ? '••••••••' : 'из кабинета CloudPayments'}"></div>
             ${p.hasSecret ? '<label style="display:flex;gap:10px;align-items:center;margin:0 0 14px"><input type="checkbox" name="clearSecret"> Удалить сохранённый пароль API</label>' : ''}
             <div class="field"><label>Тип оплаты в iiko кухни (ID, необязательно)</label><input class="inp" name="iikoPaymentTypeId" value="${esc(p.iikoPaymentTypeId || '')}" autocomplete="off" placeholder="пусто — тип с названием «Онлайн»"></div>
+            <div class="h3" style="margin:18px 0 6px">Оплата официанту (кухня)</div>
+            <p class="muted" style="margin-top:0;font-size:13px">Официант нажимает «Наличными» или «Картой» на экране стола — оплата вносится в iiko и счёт закрывается (кухня и бар).
+              Типы оплат находятся в iiko автоматически («Наличные», «Банковские карты»); ID нужен, только если выбирается не тот.</p>
+            <div class="field"><label>Тип оплаты «Наличные» в iiko (ID, необязательно)</label><input class="inp" name="iikoCashTypeId" value="${esc(p.iikoCashTypeId || '')}" autocomplete="off" placeholder="авто"></div>
+            <div class="field"><label>Тип оплаты «Карта» в iiko (ID, необязательно)</label><input class="inp" name="iikoCardTypeId" value="${esc(p.iikoCardTypeId || '')}" autocomplete="off" placeholder="авто"></div>
             <p class="muted" style="font-size:12px">Пароль API хранится только на сервере и в браузер не возвращается. Уведомления (колбэк) CloudPayments не нужны — статус оплаты сервер проверяет сам.</p>
             <div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить</button></div>
           </form></div>`;
@@ -447,6 +471,7 @@
           const body = {
             onlineEnabled: f.onlineEnabled.checked, publicId: f.publicId.value.trim(), apiSecret: f.apiSecret.value.trim(),
             clearSecret: Boolean(f.clearSecret?.checked), iikoPaymentTypeId: f.iikoPaymentTypeId.value.trim(),
+            iikoCashTypeId: f.iikoCashTypeId.value.trim(), iikoCardTypeId: f.iikoCardTypeId.value.trim(),
           };
           if (body.onlineEnabled && (!body.publicId || (!body.apiSecret && !f.clearSecret && !$('#pay-form [name=apiSecret]').placeholder.startsWith('•')))) {
             toast('Для онлайн-оплаты нужны Public ID и пароль API', true); return;
@@ -966,6 +991,16 @@
           const s = await api('POST', `/api/v1/waiter/session/${S.openId}/send-to-production`);
           S.edit = { items: s.items.map((i) => ({ ...i })), guestCount: s.guestCount, seatNames: { ...(s.seatNames || {}) }, dirty: false };
           toast('Заказ отправлен на кухню');
+        } catch (err) { toast(err.message, true); }
+        render(); return;
+      }
+      if (q('[data-accept-pay]')) {
+        const method = q('[data-accept-pay]').dataset.acceptPay;
+        if (!confirm(`Принять оплату ${method === 'cash' ? 'наличными' : 'картой'} и закрыть счёт в iiko?`)) return;
+        const btn = q('[data-accept-pay]'); btn.disabled = true; btn.textContent = 'Закрываем в iiko…';
+        try {
+          await api('POST', `/api/v1/waiter/session/${S.openId}/pay`, { method });
+          S.openId = null; S.edit = null; toast('Оплачено, счёт закрыт в iiko');
         } catch (err) { toast(err.message, true); }
         render(); return;
       }

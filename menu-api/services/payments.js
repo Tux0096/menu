@@ -44,26 +44,35 @@ export async function paySettings(restaurantId) {
     apiSecret,
     hasSecret: Boolean(apiSecret),
     iikoPaymentTypeId: r.iiko_payment_type_id || process.env.IIKO_PAYMENT_TYPE_ID || '',
+    iikoCashTypeId: r.iiko_cash_type_id || process.env.IIKO_CASH_PAYMENT_TYPE_ID || '',
+    iikoCardTypeId: r.iiko_card_type_id || process.env.IIKO_CARD_PAYMENT_TYPE_ID || '',
   };
 }
 
 /** Для админки: секрет не отдаём, только «задан/не задан». */
 export async function paySettingsForAdmin(restaurantId) {
   const s = await paySettings(restaurantId);
-  return { onlineEnabled: s.onlineEnabled, publicId: s.publicId, hasSecret: s.hasSecret, iikoPaymentTypeId: s.iikoPaymentTypeId, ready: s.enabled };
+  return {
+    onlineEnabled: s.onlineEnabled, publicId: s.publicId, hasSecret: s.hasSecret, ready: s.enabled,
+    iikoPaymentTypeId: s.iikoPaymentTypeId, iikoCashTypeId: s.iikoCashTypeId, iikoCardTypeId: s.iikoCardTypeId,
+  };
 }
 
 export async function savePaySettings(restaurantId, body = {}) {
   const publicId = String(body.publicId ?? '').trim().slice(0, 100) || null;
   const secret = body.apiSecret != null && String(body.apiSecret).trim() ? String(body.apiSecret).trim() : null;
-  const iikoType = String(body.iikoPaymentTypeId ?? '').trim().slice(0, 64) || null;
+  const typeId = (v) => String(v ?? '').trim().slice(0, 64) || null;
+  const iikoType = typeId(body.iikoPaymentTypeId);
   await pool.query(
-    `INSERT INTO restaurant_payment_settings (restaurant_id, online_enabled, cp_public_id, cp_api_secret, iiko_payment_type_id, updated_at)
-     VALUES ($1, $2, $3, $4, $5, NOW())
+    `INSERT INTO restaurant_payment_settings (restaurant_id, online_enabled, cp_public_id, cp_api_secret, iiko_payment_type_id,
+       iiko_cash_type_id, iiko_card_type_id, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $7, $8, NOW())
      ON CONFLICT (restaurant_id) DO UPDATE SET online_enabled = EXCLUDED.online_enabled, cp_public_id = EXCLUDED.cp_public_id,
        cp_api_secret = CASE WHEN $6 THEN NULL ELSE COALESCE($4, restaurant_payment_settings.cp_api_secret) END,
-       iiko_payment_type_id = EXCLUDED.iiko_payment_type_id, updated_at = NOW()`,
-    [restaurantId, Boolean(body.onlineEnabled), publicId, secret, iikoType, Boolean(body.clearSecret)],
+       iiko_payment_type_id = EXCLUDED.iiko_payment_type_id, iiko_cash_type_id = EXCLUDED.iiko_cash_type_id,
+       iiko_card_type_id = EXCLUDED.iiko_card_type_id, updated_at = NOW()`,
+    [restaurantId, Boolean(body.onlineEnabled), publicId, secret, iikoType, Boolean(body.clearSecret),
+      typeId(body.iikoCashTypeId), typeId(body.iikoCardTypeId)],
   );
   return paySettingsForAdmin(restaurantId);
 }
@@ -235,6 +244,7 @@ async function settleKitchen(sessionId, lastPayment) {
           }]);
           await closeTableOrder(src.organization_id, orderId);
         });
+        await markOrderClosed(session.id, MAIN);
         iikoNote = ' · кухня закрыта в iiko';
       } catch (e) {
         const reason = e.response?.data?.errorDescription || e.response?.data?.message || e.message;
@@ -259,6 +269,113 @@ async function settleKitchen(sessionId, lastPayment) {
       + `${iikoNote}${barTotal > 0 ? ` · бар ${Math.round(barTotal)} ₽ — принять картой` : ''}`,
     payload: { sessionId: session.id },
   });
+}
+
+// ── Оплата официанту: наличными или картой ─────────────────────────────────
+
+const ONLINE_RE = /онлайн|online|qr|cloud|интернет/i;
+const KIND = { cash: 'Cash', card: 'Card' };
+
+async function markOrderClosed(sessionId, code) {
+  await pool.query(
+    `UPDATE table_sessions SET iiko_orders = jsonb_set(COALESCE(iiko_orders, '{}'::jsonb), $2::text[],
+       COALESCE(iiko_orders->$3, '{}'::jsonb) || '{"closed": true}'::jsonb) WHERE id = $1`,
+    [sessionId, [code], code],
+  );
+}
+
+/** Тип оплаты iiko для наличных / карты официанту: из админки, секрета или по названию в iiko. */
+async function waiterTypeFor(src, settings, method) {
+  if (!src.creds) {
+    const own = method === 'cash' ? settings.iikoCashTypeId : settings.iikoCardTypeId;
+    if (own) return own;
+  }
+  const env = process.env[`IIKO_${src.creds ? `${src.creds}_` : ''}${method === 'cash' ? 'CASH' : 'CARD'}_PAYMENT_TYPE_ID`];
+  if (env) return env;
+  const key = `${src.organization_id}:${method}`;
+  if (payTypeCache.has(key)) return payTypeCache.get(key);
+  const data = await iikoRequest('/api/1/payment_types', { organizationIds: [src.organization_id] });
+  const list = (data?.paymentTypes || []).filter((t) => !t.isDeleted && !ONLINE_RE.test(t.name));
+  const found = method === 'cash'
+    ? list.find((t) => t.paymentTypeKind === 'Cash') || list.find((t) => /налич|cash/i.test(t.name))
+    : list.find((t) => t.paymentTypeKind === 'Card' && /карт|банк|card|visa|эквайр/i.test(t.name))
+      || list.find((t) => t.paymentTypeKind === 'Card');
+  const id = found?.id || null;
+  payTypeCache.set(key, id);
+  return id;
+}
+
+/**
+ * Официант принял оплату наличными или картой (на своём терминале): вносим оплату в заказы iiko
+ * (кухня — остаток после онлайн-оплаты, бар — целиком) и закрываем их; стол — оплачен.
+ * Если iiko что-то не принял — стол не закрываем, официант видит причину и закрывает счёт на кассе.
+ */
+export async function acceptWaiterPayment(sessionId, { method, tipAmount = 0 } = {}) {
+  if (!KIND[method]) throw httpError(400, 'Выберите: наличными или картой');
+  const st = await sessionState(sessionId);
+  const { session } = st;
+  if (session.payment_status === 'paid') throw httpError(409, 'Счёт уже оплачен');
+  if (st.items.some((i) => !i.is_locked)) throw httpError(400, 'В заказе есть неотправленные блюда — отправьте их или удалите');
+  const settings = await paySettings(session.rid);
+  const restaurant = { id: session.rid, organization_id: session.rorg, terminal_group_id: session.rtg };
+  const orders = { ...(session.iiko_orders || {}) };
+  if (session.iiko_order_id && !orders[MAIN]) orders[MAIN] = { orderId: session.iiko_order_id };
+  const onlinePaid = st.wholeTablePaid || st.covered.size
+    ? (await pool.query(
+      "SELECT COALESCE(SUM(amount), 0)::float AS s FROM table_payments WHERE session_id = $1 AND status = 'completed' AND method = 'cloudpayments'",
+      [session.id],
+    )).rows[0].s : 0;
+
+  const total = Math.max(0, Math.round((st.sum(st.items.filter((i) => i.is_locked)) - onlinePaid) * 100) / 100);
+  const closed = [];
+  for (const [code, o] of Object.entries(orders)) {
+    if (!o?.orderId || o.closed) continue;
+    const lines = st.items.filter((i) => i.is_locked && (i.source || MAIN) === code);
+    const sum = st.sum(lines);
+    if (sum <= 0) continue;
+    const src = await getSource(restaurant, code);
+    const online = code === MAIN ? Math.min(onlinePaid, sum) : 0;
+    const rest = Math.round((sum - online) * 100) / 100;
+    if (isIikoDemo()) { closed.push(code); continue; }
+    try {
+      await withIikoCreds(src.creds, async () => {
+        const payments = [];
+        if (online > 0) {
+          const onlineType = await paymentTypeFor(src, settings);
+          if (!onlineType) throw new Error('нет типа оплаты «Онлайн» для уже оплаченной части');
+          payments.push({ paymentTypeKind: 'Card', paymentTypeId: onlineType, sum: online, isProcessedExternally: true,
+            isFiscalizedExternally: process.env.IIKO_PAYMENT_FISCALIZED_EXTERNALLY === 'true' });
+        }
+        if (rest > 0) {
+          const typeId = await waiterTypeFor(src, settings, method);
+          if (!typeId) throw new Error(`в iiko нет типа оплаты «${method === 'cash' ? 'Наличные' : 'Банковские карты'}»`);
+          payments.push({ paymentTypeKind: KIND[method], paymentTypeId: typeId, sum: rest, isProcessedExternally: method === 'card' });
+        }
+        await changeOrderPayments(src.organization_id, o.orderId, payments);
+        await closeTableOrder(src.organization_id, o.orderId);
+      });
+      await markOrderClosed(session.id, code);
+      closed.push(code);
+    } catch (e) {
+      const reason = e.response?.data?.errorDescription || e.response?.data?.message || e.message;
+      const where = code === MAIN ? 'кухни' : `«${src.name || code}»`;
+      await pool.query('UPDATE table_sessions SET iiko_last_error = $2 WHERE id = $1', [session.id, `Оплата ${where}: ${reason}`]);
+      throw httpError(502, `iiko не закрыл счёт ${where}: ${reason}. Закройте его на кассе, затем «Закрыть стол»`);
+    }
+  }
+  const tip = Math.max(0, Math.round(Number(tipAmount) || 0));
+  await pool.query(
+    `INSERT INTO table_payments (session_id, amount, tip_amount, method, status, paid_at)
+     VALUES ($1, $2, $3, $4, 'completed', NOW())`,
+    [session.id, total, tip, method],
+  );
+  await pool.query(
+    `UPDATE table_sessions SET payment_status = 'paid', status = 'closed', workflow_status = 'paid', paid_at = NOW(),
+       closed_at = NOW(), locked_by = NULL, locked_until = NULL, iiko_last_error = NULL, updated_at = NOW() WHERE id = $1`,
+    [session.id],
+  );
+  await pool.query('UPDATE waiter_notifications SET is_read = TRUE WHERE session_id = $1 AND is_read = FALSE', [session.id]);
+  return { ok: true, method, amount: total, closedInIiko: closed };
 }
 
 /** Фоновая проверка незавершённых платежей (гость мог закрыть страницу до подтверждения). */

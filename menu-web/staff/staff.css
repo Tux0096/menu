@@ -324,6 +324,9 @@ html, body { overflow-x: clip; }
 .banner-preview img { width: 100%; height: 100%; object-fit: cover; }
 [data-link][hidden] { display: none; }
 .bill-box { background: #ECEBFB; color: #091027; border-radius: 14px; padding: 12px 14px; margin: 10px 0; font-size: 14px; display: grid; gap: 4px; }
+.pay-box { background: #fff; border: 1px solid #E4E6EE; border-radius: 14px; padding: 12px 14px; margin: 10px 0; display: grid; gap: 10px; font-size: 14px; }
+.pay-box__btns { display: flex; gap: 8px; flex-wrap: wrap; }
+.pay-box__btns .btn { flex: 1 1 auto; }
 
 /* Вкладки — отдельной строкой под шапкой, все видны сразу (на телефоне — прокрутка) */
 .tabs { order: 3; flex-basis: 100%; flex-wrap: wrap; overflow: visible; }
