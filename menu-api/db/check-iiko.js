@@ -24,7 +24,7 @@ async function main() {
   console.log(`iiko: ключу доступно организаций — ${orgs.length}`);
   for (const o of orgs) console.log(`  ${o.id}  ${o.name}`);
 
-  const { rows } = await pool.query('SELECT slug, name, organization_id FROM restaurants WHERE is_disabled = FALSE ORDER BY sort_order');
+  const { rows } = await pool.query('SELECT id, slug, name, organization_id, terminal_group_id FROM restaurants WHERE is_disabled = FALSE ORDER BY sort_order');
   const visible = new Set(orgs.map((o) => o.id));
   console.log('Рестораны меню:');
   for (const r of rows) {
@@ -41,10 +41,44 @@ async function main() {
     console.log('Внешние меню iiko: не удалось получить —', e.response?.status || '', e.response?.data?.errorDescription || e.message);
   }
   await printPaymentTypes('iiko', headers, rows.filter((r) => visible.has(r.organization_id)).map((r) => r.organization_id));
+  for (const r of rows.filter((x) => visible.has(x.organization_id))) await checkTerminalGroups(headers, r);
   if (!rows.some((r) => visible.has(r.organization_id))) {
     console.log('ВНИМАНИЕ: ни один ресторан меню не подключён к ключу — добавьте точки в iiko (Cloud API → интеграция → Подключенные точки)');
   }
   for (const creds of iikoCredsList().filter(Boolean)) await checkExtraKey(creds);
+}
+
+/**
+ * Кассы (терминальные группы) ресторана: заказ на стол принимает только живая группа (iikoFront на связи, ≥ 7.1.5).
+ * Если выбранная группа не на связи, а другая — да, переключаем ресторан на живую.
+ */
+async function checkTerminalGroups(headers, r) {
+  try {
+    const post = (path, body) => axios.post(`${IIKO_URL}${path}`, body, { headers, timeout: 15000 }).then((x) => x.data);
+    const tg = await post('/api/1/terminal_groups', { organizationIds: [r.organization_id], includeDisabled: true });
+    const list = (tg.terminalGroups || []).flatMap((g) => g.items || []);
+    let alive = new Map();
+    if (list.length) {
+      try {
+        const st = await post('/api/1/terminal_groups/is_alive', { organizationIds: [r.organization_id], terminalGroupIds: list.map((t) => t.id) });
+        alive = new Map((st.isAliveStatus || []).map((x) => [x.terminalGroupId, Boolean(x.isAlive)]));
+      } catch (e) { console.log(`  ${r.slug}: статус касс не получен —`, e.response?.data?.errorDescription || e.message); }
+    }
+    const mark = (id) => (alive.get(id) === true ? 'на связи' : alive.get(id) === false ? 'НЕ на связи' : 'статус неизвестен');
+    console.log(`${r.name}: кассы iiko — ${list.map((t) => `${t.name} [${t.id}] ${mark(t.id)}${t.id === r.terminal_group_id ? ' ← выбрана' : ''}`).join('; ') || 'нет'}`);
+    if (!list.some((t) => t.id === r.terminal_group_id) || alive.get(r.terminal_group_id) === false) {
+      const live = list.find((t) => alive.get(t.id) === true);
+      if (live) {
+        await pool.query('UPDATE restaurants SET terminal_group_id = $2 WHERE id = $1', [r.id, live.id]);
+        await pool.query("DELETE FROM restaurant_table_cache WHERE restaurant_id = $1 AND table_number NOT LIKE '%:%'", [r.id]);
+        console.log(`${r.name}: касса переключена на «${live.name}» [${live.id}]`);
+      } else {
+        console.log(`${r.name}: ВНИМАНИЕ — ни одна касса не на связи с iiko Cloud: заказы на стол не пройдут. Включите главную кассу iikoFront (≥ 7.1.5)`);
+      }
+    }
+  } catch (e) {
+    console.log(`${r.name}: кассы iiko не получены —`, e.response?.status || '', e.response?.data?.errorDescription || e.message);
+  }
 }
 
 /** Типы оплат организаций — какой взять для онлайн-оплаты (IIKO_PAYMENT_TYPE_ID или название «Онлайн»). */
