@@ -388,6 +388,9 @@ const SCHEMA = `
   -- Типы оплат iiko кухни для оплаты официанту (пусто — ищутся автоматически: «Наличные», «Банковские карты»)
   -- Куда отправлять заказы источника, если это другая касса, чем у его меню (бар: меню — барным ключом,
   -- заказ — на кассу «Ново-Садовая Бар», которая видна основному ключу)
+  -- Источник «из основного меню»: позиции основного меню, чей раздел подходит под выражение, идут на кассу источника
+  -- (крепкий алкоголь — на кассу ООО в той же iiko)
+  ALTER TABLE restaurant_sources ADD COLUMN IF NOT EXISTS split_regex TEXT;
   ALTER TABLE restaurant_sources ADD COLUMN IF NOT EXISTS order_creds VARCHAR(30);
   ALTER TABLE restaurant_sources ADD COLUMN IF NOT EXISTS order_organization_id UUID;
   ALTER TABLE restaurant_sources ADD COLUMN IF NOT EXISTS order_terminal_group_id UUID;

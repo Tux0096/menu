@@ -280,6 +280,26 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
     return 0;
   }
 
+  // Раздел основного меню → касса: крепкий алкоголь (ООО) — на свою кассу в той же iiko, остальное — на кухонную
+  const splits = source === 'main' ? (await pool.query(
+    'SELECT code, name, split_regex FROM restaurant_sources WHERE restaurant_id = $1 AND is_enabled AND split_regex IS NOT NULL',
+    [restaurant.id],
+  )).rows : [];
+  for (const r of rows) {
+    r.source = source;
+    for (const sp of splits) {
+      let re;
+      try { re = new RegExp(sp.split_regex, 'i'); } catch { continue; }
+      if (re.test(r.category.name || '') && !/безалког/i.test(r.category.name || '')) { r.source = sp.code; break; }
+    }
+  }
+  if (splits.length) {
+    for (const sp of splits) {
+      const cats = [...new Set(rows.filter((x) => x.source === sp.code).map((x) => x.category.name))];
+      console.log(`  → на кассу «${sp.name}»: ${rows.filter((x) => x.source === sp.code).length} поз. (${cats.join(', ') || 'разделов нет'})`);
+    }
+  }
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -295,7 +315,7 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
       );
     }
     // Меню каждого источника (кухня, бар…) перезаписывается отдельно
-    await client.query('DELETE FROM products WHERE restaurant_id = $1 AND source = $2', [restaurant.id, source]);
+    await client.query('DELETE FROM products WHERE restaurant_id = $1 AND source = ANY($2::text[])', [restaurant.id, [source, ...splits.map((x) => x.code)]]);
     for (const r of rows) {
       await client.query(
         `INSERT INTO products
@@ -304,7 +324,7 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,$11,$12,$13,$14,$15,$16)
          ON CONFLICT (restaurant_id, iiko_id) DO NOTHING`,
         [r.id, restaurant.id, r.name, r.name, r.description, r.price, r.weight, r.image,
-          r.category.id, (source === 'main' ? 0 : 100000) + r.order, r.energy, r.proteins, r.fats, r.carbs, source,
+          r.category.id, (source === 'main' ? 0 : 100000) + r.order, r.energy, r.proteins, r.fats, r.carbs, r.source || source,
           r.sku ? String(r.sku).slice(0, 50) : null],
       );
     }
@@ -534,29 +554,13 @@ export async function syncAllRestaurants(slugArg = null) {
 async function syncExtraSources(restaurants) {
   const ids = restaurants.map((r) => r.id);
   const { rows: sources } = await pool.query(
-    `SELECT * FROM restaurant_sources WHERE is_enabled AND restaurant_id = ANY($1::uuid[]) ORDER BY sort_order`,
+    `SELECT * FROM restaurant_sources WHERE is_enabled AND split_regex IS NULL AND restaurant_id = ANY($1::uuid[]) ORDER BY sort_order`,
     [ids],
   );
   let products = 0;
   let failed = 0;
   for (const src of sources) {
     const r = restaurants.find((x) => x.id === src.restaurant_id);
-    // Кухня и алкоголь в одной iiko с двумя юрлицами (ИП + ООО с лицензией): iiko сам делит чек по юрлицам.
-    // Как только алкоголь есть в основном меню — отдельный источник бара больше не нужен.
-    if (process.env.IIKO_BAR_KEEP !== 'true') {
-      const { rows: [alc] } = await pool.query(
-        `SELECT COUNT(*)::int AS n FROM products p JOIN categories c ON c.id = p.category_id
-          WHERE p.restaurant_id = $1 AND COALESCE(p.source, 'main') = 'main' AND p.is_published
-            AND c.name ~* '(^|\\s)(вин|крепк|алкогол|коктейл|настойк|виски|водк|коньяк|текил)'`,
-        [r.id],
-      );
-      if (alc.n > 0) {
-        await pool.query('UPDATE restaurant_sources SET is_enabled = FALSE WHERE restaurant_id = $1 AND code = $2', [r.id, src.code]);
-        await pool.query('DELETE FROM products WHERE restaurant_id = $1 AND source = $2', [r.id, src.code]);
-        console.log(`→ ${r.name} · источник «${src.name}» отключён: алкоголь (${alc.n} поз.) уже в основном меню iiko — один заказ, чек делит iiko по юрлицам`);
-        continue;
-      }
-    }
     console.log(`→ ${r.name} · источник «${src.name}» (${src.code}, org ${src.organization_id}${src.creds ? `, ключ ${src.creds}` : ''})`);
     try {
       const token = await requestIikoTokenFor(src.creds);

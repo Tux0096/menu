@@ -47,9 +47,44 @@ async function main() {
   if (!rows.some((r) => visible.has(r.organization_id))) {
     console.log('ВНИМАНИЕ: ни один ресторан меню не подключён к ключу — добавьте точки в iiko (Cloud API → интеграция → Подключенные точки)');
   }
-  for (const creds of iikoCredsList().filter(Boolean)) await checkExtraKey(creds);
+  // Бар (крепкий алкоголь, ООО) — вторая касса в той же iiko: отдельный ключ бара не используем
+  const barFromMain = process.env.IIKO_BAR_FROM_MAIN !== 'false';
+  for (const creds of iikoCredsList().filter(Boolean)) {
+    if (barFromMain && creds === 'BAR') { console.log('iiko BAR: отдельный ключ бара не используется — бар в основной iiko'); continue; }
+    await checkExtraKey(creds);
+  }
+  if (barFromMain) for (const r of rows.filter((x) => visible.has(x.organization_id))) await configureBarFromMain(headers, r);
   await pool.query('UPDATE restaurant_sources SET order_creds = NULL, order_organization_id = NULL, order_terminal_group_id = NULL WHERE order_organization_id IS NOT NULL');
   await menuSplit();
+}
+
+const ALCO_REGEX = process.env.IIKO_ALCO_CATEGORIES
+  || '(^|\\s)(вин|крепк|алкогол|коктейл|настойк|виски|водк|коньяк|текил|ликер|ликёр|игрист|шампан)';
+
+/**
+ * Бар Ново-Садовой: крепкий алкоголь продаёт ООО на своей кассе в той же iiko («… Бар»).
+ * Позиции алкогольных разделов основного меню уходят отдельным заказом на эту кассу, остальное — на кухонную.
+ */
+async function configureBarFromMain(headers, r) {
+  try {
+    const post = (includeDisabled) => axios.post(`${IIKO_URL}/api/1/terminal_groups`, { organizationIds: [r.organization_id], includeDisabled }, { headers, timeout: 15000 }).then((x) => x.data);
+    const flat = (tg) => (tg.terminalGroups || []).flatMap((g) => (g.items || []).map((t) => ({ ...t, org: g.organizationId || r.organization_id })));
+    const enabled = new Set(flat(await post(false)).map((t) => t.id));
+    const bar = flat(await post(true)).find((t) => /бар|bar/i.test(t.name || '') && t.id !== r.terminal_group_id);
+    if (!bar) { console.log(`${r.name}: кассы бара в основной iiko нет — всё уходит на кухонную кассу`); return; }
+    await pool.query(
+      `INSERT INTO restaurant_sources (restaurant_id, code, name, organization_id, terminal_group_id, creds, external_menu_id, is_enabled, sort_order, split_regex)
+       VALUES ($1, 'bar', 'Бар', $2, $3, '', NULL, TRUE, 10, $4)
+       ON CONFLICT (restaurant_id, code) DO UPDATE SET organization_id = EXCLUDED.organization_id, terminal_group_id = EXCLUDED.terminal_group_id,
+         creds = '', external_menu_id = NULL, is_enabled = TRUE, split_regex = EXCLUDED.split_regex,
+         order_creds = NULL, order_organization_id = NULL, order_terminal_group_id = NULL`,
+      [r.id, bar.org, bar.id, ALCO_REGEX],
+    );
+    await pool.query("DELETE FROM restaurant_table_cache WHERE restaurant_id = $1 AND table_number LIKE 'bar:%'", [r.id]);
+    console.log(`${r.name}: крепкий алкоголь → касса «${bar.name}» [${bar.id}]${enabled.has(bar.id) ? '' : ' — ОТКЛЮЧЕНА для облака iiko: включите её, иначе заказы алкоголя не пройдут'}`);
+  } catch (e) {
+    console.log(`${r.name}: настройка кассы бара не удалась —`, e.response?.status || '', e.response?.data?.errorDescription || e.message);
+  }
 }
 
 /** Что приходит из какой iiko: разделы меню по источникам (кухня — iiko Фуджи, бар — iiko с ЕГАИС). */
