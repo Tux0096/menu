@@ -384,7 +384,7 @@
     }
     return `<header class="topbar">${fsBack()}
       <div class="topbar__main">
-        <div class="topbar__table">Стол №${esc(S.table)}</div>
+        <button class="topbar__table topbar__table--btn" data-action="place" aria-label="Сменить стол или ресторан">Стол №${esc(S.table)} ▾</button>
         <button class="topbar__rest" data-action="restaurant" aria-label="Сменить ресторан">
           <span class="topbar__guest">${esc(who ? `${who} · ` : '')}${esc(S.config?.restaurant?.name || '')} ▾</span></button>
       </div>
@@ -501,17 +501,79 @@
     });
   }
 
+  /** Где я: сменить стол (пересесть) или ресторан. */
+  function openPlaceSheet(error = '') {
+    const pending = pendingCount();
+    openSheet(`<form id="place-form">
+      <h2>Стол и ресторан</h2>
+      <p class="sheet__hint" style="margin-top:0">${esc(S.config?.restaurant?.name || '')}${S.config?.restaurant?.address ? `, ${esc(S.config.restaurant.address)}` : ''} · сейчас стол №${esc(S.table)}</p>
+      <div class="label">Пересесть за другой стол</div>
+      <div class="pill-input" style="min-height:60px;margin-bottom:8px"><input id="place-table" type="text" inputmode="numeric" maxlength="10" placeholder="Номер нового стола"></div>
+      <p class="sheet__hint">Уже отправленные блюда остаются за столом №${esc(S.table)} — официант перенесёт их сам.${pending ? ' Неотправленные блюда из корзины перейдут на новый стол.' : ''}</p>
+      <div class="auth__error" id="place-error">${esc(error)}</div>
+      <button class="btn btn--dark" type="submit"><span>Сменить стол</span><span class="round-btn">${ICONS.arrowRight}</span></button>
+      <button class="btn" type="button" data-place-rest style="margin-top:10px"><span>Сменить ресторан</span></button>
+    </form>`, (sheet) => {
+      $('[data-place-rest]', sheet).addEventListener('click', () => openRestaurantSheet());
+      $('#place-form', sheet).addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const table = ($('#place-table', sheet).value || '').trim();
+        const err = $('#place-error', sheet);
+        if (!table) { err.textContent = 'Введите номер стола'; return; }
+        if (table === String(S.table)) { closeSheet(); return; }
+        const btn = e.submitter || $('#place-form button[type=submit]', sheet);
+        btn.disabled = true;
+        try { await switchTable(table); closeSheet(); toast(`Стол №${S.table}: можно заказывать`); render(); } catch (e2) {
+          btn.disabled = false; err.textContent = e2.message;
+        }
+      });
+    });
+  }
+
+  /** Пересесть: неотправленные блюда уходят со старого стола и переезжают в корзину нового. */
+  async function switchTable(table) {
+    const carry = {};
+    for (const l of cartLines()) {
+      const q = Math.max(0, l.qty - lockedQty(l.product.id));
+      if (q) carry[String(l.product.id)] = { ...l, qty: q };
+    }
+    clearTimeout(saveTimer);
+    const oldSession = S.sessionId;
+    const oldTable = S.table;
+    if (oldSession && Object.keys(carry).length) {
+      await api('POST', '/api/v1/table-order/cart', { sessionId: oldSession, items: [] }).catch(() => {});
+    }
+    S.table = table; S.sessionId = null; S.session = null; S.cart = {};
+    store.del('sessionId'); store.set('table', table);
+    try {
+      const ok = await enterTable({
+        then: () => { if (Object.keys(carry).length) { S.cart = carry; persistCart(); scheduleCartSave(); render(); } },
+      });
+      if (!ok) return; // стол занят — гость присоединится через шторку
+    } catch (e) {
+      // Стол не найден — возвращаемся за прежний
+      S.table = oldTable; store.set('table', oldTable);
+      if (oldSession) { S.sessionId = oldSession; store.set('sessionId', oldSession); await enterTable().catch(() => {}); }
+      if (Object.keys(carry).length) { S.cart = { ...S.cart, ...carry }; persistCart(); scheduleCartSave(); }
+      throw e;
+    }
+    if (Object.keys(carry).length) { S.cart = carry; persistCart(); scheduleCartSave(); }
+    startPolling();
+  }
+
   /** Смена ресторана: QR выбирает его автоматически, но гость может переключиться вручную. */
   async function openRestaurantSheet() {
     let list = [];
     try { list = await api('GET', '/api/v1/restaurants'); } catch (e) { toast(e.message, true); return; }
-    // Только рестораны, где QR-меню уже работает (меню из iiko есть), и текущий
-    list = list.filter((r) => r.hasMenu !== false || r.slug === S.restaurant);
+    // Все рестораны сети; где QR-заказ ещё не подключён к iiko — видно, но выбрать нельзя
     const pending = pendingCount();
     openSheet(`<h2>Ресторан</h2>
       <p class="sheet__hint" style="margin-top:0">${S.session ? `Сейчас вы за столом №${esc(S.table)}. При смене ресторана стол нужно будет выбрать заново${pending ? ', неотправленные блюда из корзины удалятся' : ''}.` : 'Выберите, в каком ресторане вы находитесь'}</p>
-      <div class="rest-list">${list.map((r) => `<button class="rest-item ${r.slug === S.restaurant ? 'is-current' : ''}" data-rest="${esc(r.slug)}">
-        <b>${esc(r.name)}</b><span>${esc(r.address || '')}</span>${r.slug === S.restaurant ? '<i>вы здесь</i>' : ''}</button>`).join('')}</div>`, (sheet) => {
+      <div class="rest-list">${list.map((r) => {
+    const off = r.hasMenu === false && r.slug !== S.restaurant;
+    return `<button class="rest-item ${r.slug === S.restaurant ? 'is-current' : ''}" ${off ? 'disabled' : `data-rest="${esc(r.slug)}"`}>
+        <b>${esc(r.name)}</b><span>${esc(r.address || '')}</span>${r.slug === S.restaurant ? '<i>вы здесь</i>' : off ? '<em>скоро — заказ через меню пока не подключён</em>' : ''}</button>`;
+  }).join('')}</div>`, (sheet) => {
       sheet.addEventListener('click', (e) => {
         const b = e.target.closest('[data-rest]');
         if (!b) return;
@@ -1410,6 +1472,7 @@
     if (!action) return;
     if (action === 'seat') openSeatSheet();
     else if (action === 'restaurant') openRestaurantSheet();
+    else if (action === 'place') openPlaceSheet();
     else if (action === 'exit-fullscreen') exitFullscreen();
     else if (action === 'call') { if (S.session) openCallSheet(); else openSeatSheet(openCallSheet); }
     else if (action === 'submit') submitToWaiter(t.closest('button'));
