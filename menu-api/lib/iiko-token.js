@@ -55,11 +55,13 @@ export async function requestIikoToken(apiLogin = iikoApiLogin(), clientSecret =
   if (clientSecret) v2.clientSecret = clientSecret;
   const attempts = [
     ['/api/v2/access_token', v2],
+    // ID приложения и секрет могли остаться от прежнего ключа — пробуем и без них
+    ...(appId || clientSecret ? [['/api/v2/access_token (без ID приложения)', { apiLogin }]] : []),
     ['/api/1/access_token', { apiLogin }],
   ];
   for (const [path, body] of attempts) {
     try {
-      const { data } = await axios.post(`${IIKO_URL}${path}`, body, { timeout: 15000 });
+      const { data } = await axios.post(`${IIKO_URL}${path.split(' ')[0]}`, body, { timeout: 15000 });
       const token = data?.token || data?.accessToken || data?.access_token;
       if (token) return token;
       errors.push(`${path}: в ответе нет токена (поля: ${Object.keys(data || {}).join(', ')})`);
