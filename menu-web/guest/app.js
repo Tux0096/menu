@@ -788,11 +788,10 @@
         ${paid ? `<button class="btn btn--dark" data-action="new-visit"><span>Начать новый заказ</span><span class="round-btn">${ICONS.arrowRight}</span></button>
           ${s.feedbackLeft ? '' : '<button class="btn" data-action="feedback"><span>Оценить визит</span></button>'}`
     : `${submitBlock()}
-        ${s?.canGuestPay ? `<button class="btn ${pendingCount() ? '' : 'btn--dark'}" data-action="pay"><span>Оплатить счёт<span class="btn__sub">${rub(s.total)}</span></span><span class="round-btn">${ICONS.arrowRight}</span></button>` : ''}
+        ${s?.items?.length && s.total > 0 && (s.canRequestBill || S.config?.onlinePay) ? `<button class="btn ${pendingCount() ? '' : 'btn--dark'}" data-action="bill"><span>Оплатить счёт<span class="btn__sub">${rub(s.total)}</span></span><span class="round-btn">${ICONS.arrowRight}</span></button>` : ''}
         <div class="actions-grid">
           <button class="btn" data-go="menu">Дополнить из меню</button>
           <button class="btn" data-action="call">Позвать официанта</button>
-          ${s?.canRequestBill ? '<button class="btn" data-action="bill">Попросить счёт</button>' : ''}
           ${canClear ? '<button class="btn" data-action="clear">Очистить</button>' : ''}
         </div>`}
       </div>
@@ -925,8 +924,8 @@
     });
   }
   /** Виджет CloudPayments → проверка оплаты на сервере по номеру счёта (колбэка нет). */
-  async function runOnlinePay(tip) {
-    const p = await api('POST', '/api/v1/table/pay/start', { sessionId: S.sessionId, tipAmount: tip });
+  async function runOnlinePay(tip, guestIds = null) {
+    const p = await api('POST', '/api/v1/table/pay/start', { sessionId: S.sessionId, tipAmount: tip, guestIds });
     await loadCpWidget();
     await new Promise((resolve) => {
       const widget = new window.cp.CloudPayments({ language: 'ru-RU' });
@@ -1048,27 +1047,58 @@
     }
   }
 
-  async function sendBillRequest(guestIds = null) {
+  async function sendBillRequest(guestIds = null, method = null, part = null, quiet = false) {
     try {
-      applySession(await api('POST', '/api/v1/table/request-bill', { sessionId: S.sessionId, guestIds }));
-      toast('Официант получил запрос счёта'); render();
+      applySession(await api('POST', '/api/v1/table/request-bill', { sessionId: S.sessionId, guestIds, method, part }));
+      if (!quiet) toast(method === 'cash' ? 'Официант принесёт счёт — оплата наличными' : 'Официант принесёт счёт и терминал');
+      render();
     } catch (e) { toast(e.message, true); }
   }
 
-  /** Счёт: за весь стол, только за себя или за выбранных гостей (например, за себя и спутницу). */
+  /**
+   * Счёт: как платить (онлайн — только кухня; картой официанту; наличными) и за кого
+   * (весь стол, только мой заказ или отмеченные гости — например, за себя и спутницу).
+   * Бар онлайн не оплачивается: после онлайн-оплаты кухни официанту уходит запрос на бар картой.
+   */
   function requestBill() {
     const s = S.session;
-    const guests = s?.guests || [];
-    if (guests.length < 2) { sendBillRequest(); return; }
+    if (!s) return;
+    const guests = s.guests || [];
+    const multi = guests.length > 1;
     const me = String(S.guest?.id || '');
-    const sumOf = (id) => (s.items || []).filter((i) => String(i.guestId) === String(id)).reduce((n, i) => n + i.lineTotal, 0);
-    const noGuest = (s.items || []).filter((i) => !i.guestId).reduce((n, i) => n + i.lineTotal, 0);
+    const online = Boolean(S.config?.onlinePay);
+    const paidOnline = s.onlinePaid || { wholeTable: false, guestIds: [] };
+    const isBar = (i) => (i.source || 'main') !== 'main';
+    const covered = (i) => paidOnline.wholeTable || paidOnline.guestIds.includes(String(i.guestId));
     const picked = new Set(guests.map((g) => String(g.id)));
+    const tips = S.config?.tipPresets || [0, 10, 15, 20];
+    const st = { method: online ? 'online' : 'card', tipPct: 0, busy: false };
+    const inScope = (i) => !multi || picked.size === guests.length || picked.has(String(i.guestId));
+    const sum = (list) => list.reduce((n, i) => n + i.lineTotal, 0);
+    const amounts = () => {
+      const items = (s.items || []).filter(inScope);
+      const kitchen = sum(items.filter((i) => !isBar(i) && !covered(i)));
+      const bar = sum(items.filter(isBar));
+      return { kitchen, bar, all: sum(items.filter((i) => isBar(i) || !covered(i))) };
+    };
+    const sumOf = (id) => sum((s.items || []).filter((i) => String(i.guestId) === String(id)));
+    const noGuest = sum((s.items || []).filter((i) => !i.guestId));
+    const tipAmount = (base) => Math.round((base * st.tipPct) / 100);
+    const methodsHtml = () => {
+      const list = [...(online ? [['online', 'Онлайн']] : []), ['card', 'Картой официанту'], ['cash', 'Наличными']];
+      return `<div class="label">Как оплатить</div>
+        <div class="opt-grid" style="grid-template-columns:repeat(${list.length},1fr)">${list.map(([id, label]) => `<button class="opt ${st.method === id ? 'is-active' : ''}" data-bill-method="${id}">${label}</button>`).join('')}</div>`;
+    };
     const draw = () => {
       const all = picked.size === guests.length;
-      const amount = all ? s.total : [...picked].reduce((n, id) => n + sumOf(id), 0);
+      const a = amounts();
+      const isOnline = st.method === 'online';
+      const tip = isOnline ? tipAmount(a.kitchen) : 0;
+      const canSend = (!multi || picked.size) && (isOnline ? a.kitchen > 0 : a.all > 0);
+      const label = isOnline ? `Оплатить онлайн ${rub(a.kitchen + tip)}` : `Попросить счёт ${rub(a.all)}`;
       return `<h2>Счёт</h2>
-        <p class="sheet__hint">Отметьте, за кого платите. Официант принесёт счёт на эту сумму.</p>
+        ${methodsHtml()}
+        ${multi ? `<div class="label">За кого платите</div>
         <div class="opt-grid" style="grid-template-columns:1fr 1fr">
           <button class="opt ${all ? 'is-active' : ''}" data-bill-all>Весь стол</button>
           <button class="opt ${picked.size === 1 && picked.has(me) ? 'is-active' : ''}" data-bill-me>Только мой заказ</button>
@@ -1080,19 +1110,55 @@
             <b>${rub(sumOf(g.id))}</b></label>`).join('')}
           ${noGuest ? `<div class="bill-guest bill-guest--note"><span class="bill-guest__name">Добавил официант, без гостя</span><b>${rub(noGuest)}</b></div>` : ''}
         </div>
-        ${noGuest && !all ? '<p class="sheet__hint" style="margin-top:8px">Блюда без гостя входят только в счёт за весь стол.</p>' : ''}
-        <button class="btn btn--dark" data-bill-send ${picked.size ? '' : 'disabled'} style="margin-top:14px"><span>Попросить счёт<span class="btn__sub">${rub(amount)}</span></span><span class="round-btn">${ICONS.arrowRight}</span></button>`;
+        ${noGuest && !all ? '<p class="sheet__hint" style="margin-top:8px">Блюда без гостя входят только в счёт за весь стол.</p>' : ''}` : ''}
+        ${isOnline ? `<div class="card" style="margin-top:14px">
+            <div class="sum-rows"><span>Кухня — онлайн</span><span>${rub(a.kitchen)}</span></div>
+            ${a.bar ? `<div class="sum-rows"><span>Бар — картой официанту</span><span>${rub(a.bar)}</span></div>` : ''}
+            ${tip ? `<div class="sum-rows"><span>Чаевые</span><span>${rub(tip)}</span></div>` : ''}
+          </div>
+          <div class="label">Чаевые</div>
+          <div class="opt-grid">${tips.map((t) => `<button class="opt ${st.tipPct === t ? 'is-active' : ''}" data-tip="${t}">${t ? `${t}%` : 'Без чаевых'}</button>`).join('')}</div>
+          ${a.kitchen <= 0 ? '<p class="sheet__hint">Кухня уже оплачена — остаток официанту картой.</p>' : ''}
+          ${a.bar ? '<p class="sheet__hint">Напитки бара онлайн не оплачиваются — официант подойдёт с терминалом.</p>' : ''}`
+    : `<p class="sheet__hint" style="margin-top:12px">${st.method === 'cash' ? 'Официант принесёт счёт — оплата наличными.' : 'Официант принесёт счёт и терминал.'}</p>`}
+        <button class="btn btn--dark" data-bill-send ${canSend && !st.busy ? '' : 'disabled'} style="margin-top:14px"><span>${st.busy ? 'Оплачиваем…' : label}</span><span class="round-btn">${st.busy ? '<div class="spinner spinner--dark"></div>' : ICONS.arrowRight}</span></button>
+        ${isOnline ? '<p class="muted" style="font-size:12px;text-align:center;margin-top:12px">Картой, СБП или SberPay через CloudPayments. Данные карты не попадают в меню.</p>' : ''}`;
+    };
+    const send = async (box) => {
+      const all = !multi || picked.size === guests.length;
+      const ids = all ? null : [...picked];
+      if (st.method !== 'online') { closeSheet(); sendBillRequest(ids, st.method); return; }
+      const a = amounts();
+      st.busy = true; box.innerHTML = draw();
+      try {
+        const res = await runOnlinePay(tipAmount(a.kitchen), ids);
+        if (a.bar > 0) await sendBillRequest(ids, 'card', 'bar', true);
+        render();
+        if (res === 'ok') {
+          toast(a.bar > 0 ? 'Кухня оплачена. Бар — картой официанту, он уже идёт' : 'Оплачено, спасибо!');
+          if (S.session?.isPaid) { openFeedbackSheet(); return; }
+          closeSheet(); return;
+        }
+        toast('Проверяем оплату — статус обновится в течение минуты');
+        closeSheet(); refreshSession(true);
+      } catch (err) {
+        st.busy = false; toast(err.message, true);
+        if (err.status === 409) { closeSheet(); refreshSession(true); return; }
+        box.innerHTML = draw();
+      }
     };
     openSheet('<div id="bill-sheet"></div>', (sheet) => {
       const box = $('#bill-sheet'); box.innerHTML = draw();
       sheet.addEventListener('click', (e) => {
-        if (e.target.closest('[data-bill-all]')) { guests.forEach((g) => picked.add(String(g.id))); box.innerHTML = draw(); return; }
-        if (e.target.closest('[data-bill-me]')) { picked.clear(); if (me) picked.add(me); box.innerHTML = draw(); return; }
-        if (e.target.closest('[data-bill-send]')) {
-          const all = picked.size === guests.length;
-          closeSheet();
-          sendBillRequest(all ? null : [...picked]);
-        }
+        if (st.busy) return;
+        const m = e.target.closest('[data-bill-method]'); const t = e.target.closest('[data-tip]');
+        if (m) st.method = m.dataset.billMethod;
+        else if (t) st.tipPct = Number(t.dataset.tip);
+        else if (e.target.closest('[data-bill-all]')) guests.forEach((g) => picked.add(String(g.id)));
+        else if (e.target.closest('[data-bill-me]')) { picked.clear(); if (me) picked.add(me); }
+        else if (e.target.closest('[data-bill-send]')) { send(box); return; }
+        else return;
+        box.innerHTML = draw();
       });
       sheet.addEventListener('change', (e) => {
         const id = e.target.dataset?.billGuest;

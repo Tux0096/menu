@@ -33,7 +33,7 @@
     waiter: [['tables', 'Столы']],
     manager: [['tables', 'Столы'], ['hall', 'Контроль зала'], ['feedback', 'Отзывы']],
     admin: [['tables', 'Столы'], ['hall', 'Контроль зала'], ['menu', 'Меню и стоп-лист'], ['chips', 'AI-подсказки'],
-      ['promos', 'Баннеры и акции'], ['qr', 'QR-коды'], ['feedback', 'Отзывы'], ['staff', 'Сотрудники'], ['audit', 'Журнал']],
+      ['promos', 'Баннеры и акции'], ['qr', 'QR-коды'], ['payments', 'Оплата'], ['feedback', 'Отзывы'], ['staff', 'Сотрудники'], ['audit', 'Журнал']],
     marketing: [['menu', 'Карточки блюд'], ['promos', 'Баннеры и акции'], ['chips', 'AI-подсказки']],
   };
   // Что может каждая роль — показывается в карточке сотрудника
@@ -230,7 +230,7 @@
       ${lockedByOther ? '<div class="error-box">Стол сейчас редактирует другой официант</div>' : ''}
       ${s.readyCount ? `<div class="ready-box"><span>🔔 Готово на кухне: ${s.items.filter((i) => i.isReady).map((i) => `${esc(i.name)} ×${i.quantity}${i.guestName ? ` — ${esc(i.guestName)}` : ''}`).join(', ')}</span>
         <button class="btn btn--sm btn--dark" data-served>Вынесено всё</button></div>` : ''}
-      ${(s.billRequests || []).length ? `<div class="bill-box"><b>Счёт запрошен</b>${s.billRequests.map((r) => `<div>${esc(r.by ? `${r.by}: ` : '')}${r.scope === 'table' ? 'за весь стол' : esc((r.names || []).join(' и '))} — <b>${rub(r.amount)}</b> <span class="muted">${dateTime(r.at)}</span></div>`).join('')}</div>` : ''}
+      ${(s.billRequests || []).length ? `<div class="bill-box"><b>Счёт запрошен</b>${s.billRequests.map((r) => `<div>${esc(r.by ? `${r.by}: ` : '')}${r.part === 'bar' ? 'бар (кухня оплачена онлайн), ' : ''}${r.scope === 'table' ? 'за весь стол' : esc((r.names || []).join(' и '))} — <b>${rub(r.amount)}</b>${r.method ? ` <span class="pill" data-tone="wait">${r.method === 'cash' ? 'наличными' : 'картой'}</span>` : ''} <span class="muted">${dateTime(r.at)}</span></div>`).join('')}</div>` : ''}
       ${s.iikoLastError ? `<div class="error-box"><b>Ошибка iiko:</b> ${esc(s.iikoLastError)}<br>Не отправленное сохранено — нажмите «В работу» ещё раз.</div>` : ''}
       <div class="gbar">
         <span class="muted">Гостей</span>
@@ -417,6 +417,42 @@
             <img src="${esc(t.qr)}" alt="QR стол ${esc(t.table)}" loading="lazy">
             <div style="font-size:12px">Отсканируйте, чтобы открыть меню</div>
             <small><a href="${esc(t.url)}" target="_blank">${esc(t.url)}</a></small></div>`).join('')}</div>`;
+      },
+    },
+
+    // Ключи оплаты ресторана: онлайн — только кухня (CloudPayments), бар гость оплачивает картой официанту
+    payments: {
+      async render() {
+        const p = await api('GET', '/api/v1/admin/payments');
+        const r = S.restaurants.find((x) => x.slug === S.restaurant) || S.restaurants[0] || {};
+        return `<div class="card" style="max-width:720px"><div class="h2">Оплата — ${esc(r.name || '')}</div>
+          <p class="muted" style="margin-top:0">Гость выбирает в меню: <b>онлайн</b>, <b>картой официанту</b> или <b>наличными</b>, и за кого платит
+            (весь стол, свой заказ или отмеченные гости). Онлайн оплачивается только кухня; бар — картой официанту.
+            После онлайн-оплаты заказ кухни в iiko закрывается сам, официанту приходит «бар — принять картой».</p>
+          <div style="margin:0 0 14px"><span class="pill" data-tone="${p.ready ? 'ok' : ''}">${p.ready ? 'Онлайн-оплата работает' : p.onlineEnabled ? 'Не хватает ключей' : 'Онлайн-оплата выключена'}</span></div>
+          <form id="pay-form">
+            <label style="display:flex;gap:10px;align-items:center;margin-bottom:14px"><input type="checkbox" name="onlineEnabled" ${p.onlineEnabled ? 'checked' : ''}> Принимать оплату онлайн (CloudPayments)</label>
+            <div class="field"><label>Public ID (из кабинета CloudPayments → Сайты)</label><input class="inp" name="publicId" value="${esc(p.publicId || '')}" autocomplete="off" placeholder="pk_…"></div>
+            <div class="field"><label>Пароль для API (API Secret)${p.hasSecret ? ' — задан, пусто — не менять' : ''}</label><input class="inp" name="apiSecret" type="password" autocomplete="new-password" placeholder="${p.hasSecret ? '••••••••' : 'из кабинета CloudPayments'}"></div>
+            ${p.hasSecret ? '<label style="display:flex;gap:10px;align-items:center;margin:0 0 14px"><input type="checkbox" name="clearSecret"> Удалить сохранённый пароль API</label>' : ''}
+            <div class="field"><label>Тип оплаты в iiko кухни (ID, необязательно)</label><input class="inp" name="iikoPaymentTypeId" value="${esc(p.iikoPaymentTypeId || '')}" autocomplete="off" placeholder="пусто — тип с названием «Онлайн»"></div>
+            <p class="muted" style="font-size:12px">Пароль API хранится только на сервере и в браузер не возвращается. Уведомления (колбэк) CloudPayments не нужны — статус оплаты сервер проверяет сам.</p>
+            <div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить</button></div>
+          </form></div>`;
+      },
+      mounted() {
+        $('#pay-form')?.addEventListener('submit', async (e) => {
+          e.preventDefault();
+          const f = e.target.elements;
+          const body = {
+            onlineEnabled: f.onlineEnabled.checked, publicId: f.publicId.value.trim(), apiSecret: f.apiSecret.value.trim(),
+            clearSecret: Boolean(f.clearSecret?.checked), iikoPaymentTypeId: f.iikoPaymentTypeId.value.trim(),
+          };
+          if (body.onlineEnabled && (!body.publicId || (!body.apiSecret && !f.clearSecret && !$('#pay-form [name=apiSecret]').placeholder.startsWith('•')))) {
+            toast('Для онлайн-оплаты нужны Public ID и пароль API', true); return;
+          }
+          try { await api('POST', '/api/v1/admin/payments', body); toast('Сохранено'); render(); } catch (err) { toast(err.message, true); }
+        });
       },
     },
 
