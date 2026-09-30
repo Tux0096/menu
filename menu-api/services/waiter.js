@@ -208,6 +208,18 @@ export async function sendToKitchen(sessionId, staff) {
             items: delta,
             guestCount: session.guest_count || 1,
           });
+          // Касса должна быть на связи: иначе iiko примет заказ, но он зависнет и не дойдёт до кассы
+          if (!demo) {
+            const picked = await pickAliveTerminalGroup(src.organization_id, terminalGroupId).catch(() => null);
+            if (picked && picked.id && picked.id !== terminalGroupId) {
+              terminalGroupId = picked.id;
+              await saveTerminalGroup(restaurant.id, code, terminalGroupId);
+              tableId = null;
+            } else if (picked && !picked.id && picked.list.some((t) => t.id === terminalGroupId && t.isAlive === false)) {
+              throw new Error(`Касса ${code === MAIN ? 'кухни' : `«${src.name || code}»`} в iiko не на связи — включите iikoFront на этой кассе и повторите. `
+                + `Кассы: ${picked.list.map((t) => `${t.name || t.id}${t.isAlive ? ' — на связи' : t.isAlive === false ? ' — не на связи' : ''}`).join('; ')}`);
+            }
+          }
           await resolveTable();
           let created;
           try {

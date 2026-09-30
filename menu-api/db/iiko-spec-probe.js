@@ -16,7 +16,11 @@ async function get(url) {
 async function main() {
   const html = await get(`${BASE}/docs`);
   const urls = new Set([...html.matchAll(/(?:src|href|url|spec-url)\s*[=:]\s*["']([^"']+)["']/gi)].map((m) => m[1]));
-  const candidates = [...urls].filter((u) => /json|yaml|swagger|openapi|api-docs|\.js$/i.test(u)).map((u) => new URL(u, `${BASE}/docs`).href);
+  const redoc = html.match(/<redoc[^>]*>/i)?.[0] || '';
+  console.log(`iiko spec: тег redoc — ${redoc.slice(0, 300) || 'нет'}; скрипты — ${[...html.matchAll(/Redoc\.init\(([^,)]+)/g)].map((m) => m[1]).join(' ') || 'нет'}`);
+  const inline = [...html.matchAll(/["']([^"']*(?:swagger|openapi|api-docs|spec)[^"']*\.(?:json|yaml))["']/gi)].map((m) => m[1]);
+  const candidates = [...urls, ...inline].filter((u) => /json|yaml|swagger|openapi|api-docs/i.test(u) && !/redoc|standalone/i.test(u))
+    .map((u) => new URL(u, `${BASE}/docs`).href);
   candidates.push(`${BASE}/api-docs/docs`, `${BASE}/swagger/v1/swagger.json`, `${BASE}/api-docs/v1/swagger.json`, `${BASE}/docs/swagger.json`);
   console.log(`iiko spec: ссылки на странице — ${candidates.slice(0, 12).join(' ')}`);
   for (const url of [...new Set(candidates)]) {
