@@ -237,8 +237,10 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
   const data = preloaded || await requestExternalMenu(token, menu, [organizationId]);
   const categories = data.itemCategories || data.categories || [];
   const rows = [];
+  // Во внешних меню агрегаторов (OrderMaster) все разделы бывают помечены скрытыми — тогда пометка ничего не значит
+  const allHidden = categories.length > 0 && categories.every((c) => c.isHidden);
   for (const [ci, cat] of categories.entries()) {
-    if (cat.isHidden) continue;
+    if (cat.isHidden && !allHidden) continue;
     for (const [ii, item] of (cat.items || []).entries()) {
       if (item.isHidden) continue;
       const size = (item.itemSizes || []).find((z) => z.isDefault) || (item.itemSizes || [])[0];

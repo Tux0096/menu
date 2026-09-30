@@ -56,7 +56,15 @@ export function siteRank(name) {
   return i < 0 ? UNKNOWN : i;
 }
 
-/** Порядок разделов: ранг по сайту, внутри ранга — как в iiko. */
-export function orderGroups(groups) {
-  return (groups || []).map((g, i) => ({ ...g, order: siteRank(g.name) * 10000 + (Number(g.order) || i) }));
+const DRINKS = SITE_ORDER.length - 1;
+
+/**
+ * Порядок разделов: ранг по сайту, внутри ранга — как в iiko.
+ * Разделы бара (второй iiko) для гостя — просто напитки: встают в конец, рядом с напитками.
+ */
+export function orderGroups(groups, barGroupIds = new Set()) {
+  return (groups || []).map((g, i) => ({
+    ...g,
+    order: (barGroupIds.has(g.id) ? DRINKS : siteRank(g.name)) * 10000 + (Number(g.order) || i),
+  }));
 }

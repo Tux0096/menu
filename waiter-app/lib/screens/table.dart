@@ -452,7 +452,6 @@ class _TableScreenState extends State<TableScreen> {
       status = (it['kitchenLabel'] ?? 'на кухне').toString();
       statusColor = C.violet;
     }
-    final isBar = (it['source'] ?? 'main') != 'main';
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 12, 10, 10),
       child: Column(
@@ -478,11 +477,6 @@ class _TableScreenState extends State<TableScreen> {
                     Text.rich(
                       TextSpan(
                         children: [
-                          if (isBar)
-                            const TextSpan(
-                              text: 'бар · ',
-                              style: TextStyle(color: C.violet),
-                            ),
                           TextSpan(
                             text: status,
                             style: TextStyle(color: statusColor, fontWeight: FontWeight.w600),

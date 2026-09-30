@@ -193,7 +193,7 @@
 
     const row = (it, idx) => {
       const served = it.servedAt || it.kitchenStatus === 'Served';
-      const src = it.source && it.source !== 'main' ? `<span class="pill" data-tone="work">${esc(sourceLabel(it.source))}</span>` : '';
+      const src = ''; // кухня/бар делятся только при отправке в iiko — в интерфейсе одно меню
       if (it.isLocked) {
         return `<div class="trow is-sent ${served ? 'is-served' : ''} ${it.isReady ? 'is-ready' : ''}">
           <div class="trow__main"><div class="trow__name">${esc(it.name)} <span class="muted">×${it.quantity}</span></div>
@@ -268,7 +268,7 @@
         ${products.length ? `<input class="inp" id="prod-search" style="width:100%" placeholder="Поиск: название или артикул" value="${esc(S.productSearch)}" autocomplete="off">
           ${q ? '' : `<div class="picker__cats">${groups.map((g) => `<button class="${g.id === S.pickCat ? 'is-active' : ''}" data-pick-cat="${esc(g.id)}">${esc(g.name)}</button>`).join('')}</div>`}
           <div class="pick-list">${found.map((p) => { const n = inCart(p); return `<button class="pick-item" data-add="${esc(p.id)}" ${p.isInStopList ? 'disabled' : ''}>
-            <span class="pick-item__name">${esc(p.name)}${p.source && p.source !== 'main' ? ` <span class="pill" data-tone="work">${esc(sourceLabel(p.source))}</span>` : ''}${p.isInStopList ? ' <span class="pill" data-tone="bad">стоп</span>' : ''}${p.sku ? ` <span class="muted" style="font-size:11px">арт. ${esc(p.sku)}</span>` : ''}</span>
+            <span class="pick-item__name">${esc(p.name)}${p.isInStopList ? ' <span class="pill" data-tone="bad">стоп</span>' : ''}${p.sku ? ` <span class="muted" style="font-size:11px">арт. ${esc(p.sku)}</span>` : ''}</span>
             <span class="pick-item__price">${rub(p.price)}</span><span class="pick-item__add ${n ? 'has' : ''}">${n || '+'}</span></button>`; }).join('') || '<div class="muted" style="padding:12px">Ничего не найдено</div>'}</div>`
     : '<div class="error-box">Меню этого ресторана пустое — выгрузите его из iiko (админка → «Меню и стоп-лист»).</div>'}
       </div>
@@ -361,7 +361,8 @@
           S.adminMenu = { restaurant: S.restaurant, ...(await api('GET', '/api/v1/admin/menu')) };
         }
         S.adminSources = S.staff.role !== 'admin' ? null : await api('GET', '/api/v1/admin/sources').catch(() => null);
-        return sourcesCard() + menuTable();
+        // Подключения iiko (кухня, бар) настраиваются при деплое — в админке одно меню
+        return menuTable();
       },
     },
 
