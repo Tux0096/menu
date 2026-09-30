@@ -73,6 +73,8 @@ input.inp:focus, textarea.inp:focus, select.sel:focus { box-shadow: 0 0 0 2px va
 .pill[data-tone="work"] { background: #EEEDFF; color: var(--violet); }
 .pill[data-tone="ok"] { background: #EAF8F2; color: var(--ok); }
 .pill[data-tone="bad"] { background: #FDECEE; color: var(--danger); }
+.pill[data-tone="ready"] { background: #FFE9C7; color: #8A4B00; font-weight: 700; }
+.pill--stage { font-size: 11px; padding: 2px 8px; }
 .overdue { color: var(--danger); font-weight: 600; font-size: 12px; }
 
 /* order editor */

@@ -278,7 +278,7 @@ export async function sendToKitchen(sessionId, staff) {
 
   if (sentIds.length) {
     await pool.query(
-      `UPDATE table_order_items SET is_locked = TRUE, synced_to_iiko = TRUE, sent_at = NOW(), kitchen_status = COALESCE(kitchen_status, 'Added'), updated_at = NOW()
+      `UPDATE table_order_items SET is_locked = TRUE, synced_to_iiko = TRUE, sent_at = NOW(), kitchen_status = NULL, updated_at = NOW()
        WHERE id = ANY($1::uuid[])`,
       [sentIds],
     );

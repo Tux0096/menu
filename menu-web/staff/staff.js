@@ -178,6 +178,17 @@
 
   // ── Экран стола (официант): отдельный экран, блюда по гостям, панель действий снизу ──
   const COURSES = [[null, 'сразу'], [1, '1'], [2, '2'], [3, '3']];
+  // Статус блюда для официанта: отправлено → принято кассой → готовится → готово → вынесено
+  const STAGES = {
+    sent: ['Ждём подтверждения кассы', 'wait'], accepted: ['Принято кассой', ''], cooking: ['Готовится', 'work'],
+    ready: ['Готово — выносить', 'ready'], served: ['✓ Вынесено', 'ok'],
+  };
+  function stagePill(it) {
+    const served = it.servedAt || it.kitchenStatus === 'Served';
+    const stage = served ? 'served' : it.isReady ? 'ready' : it.stage || 'accepted';
+    const [label, tone] = STAGES[stage] || [it.kitchenLabel || 'на кухне', ''];
+    return `<span class="pill pill--stage" data-tone="${tone}">${esc(stage === 'accepted' && it.kitchenLabel ? it.kitchenLabel : label)}</span>`;
+  }
   function editorHtml() {
     const s = S.sessions.find((x) => x.sessionId === S.openId);
     if (!s || !S.edit) return '';
@@ -197,7 +208,7 @@
       if (it.isLocked) {
         return `<div class="trow is-sent ${served ? 'is-served' : ''} ${it.isReady ? 'is-ready' : ''}">
           <div class="trow__main"><div class="trow__name">${esc(it.name)} <span class="muted">×${it.quantity}</span></div>
-            <div class="trow__meta">${src}${served ? '<b class="served">✓ Вынесено</b>' : it.isReady ? '<b class="ready">Готово — выносить</b>' : esc(it.kitchenLabel || 'на кухне')}${it.course ? ` · курс ${it.course}` : ''}</div></div>
+            <div class="trow__meta">${src}${stagePill(it)}${it.course ? ` · курс ${it.course}` : ''}</div></div>
           ${it.isReady && !served ? `<button class="btn btn--sm btn--dark" data-served-item="${esc(it.id)}">Вынесено</button>` : `<b class="trow__sum">${rub(it.price * it.quantity)}</b>`}
         </div>`;
       }
