@@ -541,6 +541,22 @@ async function syncExtraSources(restaurants) {
   let failed = 0;
   for (const src of sources) {
     const r = restaurants.find((x) => x.id === src.restaurant_id);
+    // Кухня и алкоголь в одной iiko с двумя юрлицами (ИП + ООО с лицензией): iiko сам делит чек по юрлицам.
+    // Как только алкоголь есть в основном меню — отдельный источник бара больше не нужен.
+    if (process.env.IIKO_BAR_KEEP !== 'true') {
+      const { rows: [alc] } = await pool.query(
+        `SELECT COUNT(*)::int AS n FROM products p JOIN categories c ON c.id = p.category_id
+          WHERE p.restaurant_id = $1 AND COALESCE(p.source, 'main') = 'main' AND p.is_published
+            AND c.name ~* '(^|\\s)(вин|крепк|алкогол|коктейл|настойк|виски|водк|коньяк|текил)'`,
+        [r.id],
+      );
+      if (alc.n > 0) {
+        await pool.query('UPDATE restaurant_sources SET is_enabled = FALSE WHERE restaurant_id = $1 AND code = $2', [r.id, src.code]);
+        await pool.query('DELETE FROM products WHERE restaurant_id = $1 AND source = $2', [r.id, src.code]);
+        console.log(`→ ${r.name} · источник «${src.name}» отключён: алкоголь (${alc.n} поз.) уже в основном меню iiko — один заказ, чек делит iiko по юрлицам`);
+        continue;
+      }
+    }
     console.log(`→ ${r.name} · источник «${src.name}» (${src.code}, org ${src.organization_id}${src.creds ? `, ключ ${src.creds}` : ''})`);
     try {
       const token = await requestIikoTokenFor(src.creds);
