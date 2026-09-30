@@ -547,11 +547,12 @@
         <label style="display:flex;gap:8px;align-items:center">${sw(S.menu.onlyStop, 'data-only-stop')} Только стоп/скрытые</label>
       </div>
       <div class="tbl-wrap"><table class="tbl tbl--cards tbl--menu">
-        <tr><th></th><th>Блюдо</th><th>Категория</th><th>Цена</th><th title="Больше — выше в разделе; 0 — как в iiko">Приоритет</th>${canStop ? '<th>Стоп-лист</th>' : ''}<th>Скрыть</th><th>Рекомендуем</th><th></th></tr>
+        <tr><th></th><th>Блюдо</th><th>Категория</th><th>Цена</th><th>Метка</th><th title="Больше — выше в разделе; 0 — как в iiko">Приоритет</th>${canStop ? '<th>Стоп-лист</th>' : ''}<th>Скрыть</th><th>Рекомендуем</th><th></th></tr>
         ${rows.map((p) => `<tr>
           <td>${p.image ? `<img class="thumb" src="${esc(p.image)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">` : '<div class="thumb">🍽</div>'}</td>
           <td><b>${esc(p.name)}</b>${p.badge ? ` <span class="pill" data-tone="ok">${esc(BADGES[p.badge] || p.badge)}</span>` : ''}<div class="muted" style="font-size:12px">${p.sku ? `арт. ${esc(p.sku)} · ` : ''}${esc(p.weight || '')}${p.energy ? ` · ${Math.round(p.energy)} ккал` : ''}${p.allergens?.length ? ` · аллергены: ${esc(p.allergens.join(', '))}` : ''}</div></td>
           <td class="muted" data-label="Категория">${esc(p.group)}</td><td data-label="Цена">${p.price ? rub(p.price) : ''}</td>
+          <td data-label="Метка">${p.isHidden ? '' : `<select class="sel sel--sm sel--badge" data-badge-set="${esc(p.id)}" aria-label="Метка блюда"><option value="">—</option>${Object.entries(BADGES).map(([k, l]) => `<option value="${k}" ${p.badge === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`}</td>
           <td data-label="Приоритет">${p.isHidden ? '' : `<input class="inp inp--prio" type="number" inputmode="numeric" min="-999" max="999" step="1" value="${Number(p.priority) || 0}" data-prio="${esc(p.id)}" aria-label="Приоритет показа">`}</td>
           ${canStop ? `<td data-label="Стоп-лист">${sw(p.isInStopList, `data-ov="${esc(p.id)}" data-field="is_stopped" data-val="${!p.isInStopList}"`, true)}</td>` : ''}
           <td data-label="Скрыть">${sw(p.isHidden, `data-ov="${esc(p.id)}" data-field="is_hidden" data-val="${!p.isHidden}"`)}</td>
@@ -933,6 +934,10 @@
       render();
     } else if (e.target.dataset.seat != null) { S.edit.items[Number(e.target.dataset.seat)].seatNumber = Number(e.target.value) || null; changed(); }
     else if (e.target.id === 'menu-group') { S.menu.group = e.target.value; render(); }
+    else if (e.target.dataset.badgeSet) {
+      setOverride(e.target.dataset.badgeSet, { badge: e.target.value })
+        .then(() => toast(e.target.value ? 'Метка сохранена' : 'Метка снята')).catch((err) => toast(err.message, true));
+    }
     else if (e.target.dataset.prio) {
       setOverride(e.target.dataset.prio, { priority: Number(e.target.value) || 0 })
         .then(() => toast('Приоритет сохранён')).catch((err) => toast(err.message, true));
