@@ -26,7 +26,7 @@
     catalog: null,
     productSearch: '',
     lastUnreadIds: new Set(),
-    menu: { search: '', group: '', onlyStop: false },
+    menu: { search: '', group: '', onlyStop: false, src: '' },
   };
 
   const ROLE_TABS = {
@@ -533,7 +533,9 @@
     const q = S.menu.search.toLowerCase();
     const groups = [...new Set(m.products.map((p) => p.group).filter(Boolean))];
     const rows = m.products.filter((p) => (!q || p.name.toLowerCase().includes(q) || String(p.sku || '').toLowerCase().includes(q))
-      && (!S.menu.group || p.group === S.menu.group) && (!S.menu.onlyStop || p.isInStopList || p.isHidden));
+      && (!S.menu.group || p.group === S.menu.group) && (!S.menu.onlyStop || p.isInStopList || p.isHidden)
+      && (!S.menu.src || (S.menu.src === 'bar' ? (p.source || 'main') !== 'main' : (p.source || 'main') === 'main')));
+    const hasBar = m.products.some((p) => (p.source || 'main') !== 'main');
     const canStop = S.staff.role !== 'marketing';
     const sw = (on, attr, red = false) => `<button class="switch ${on ? 'is-on' : ''} ${red ? 'is-red' : ''}" ${attr}></button>`;
     return `<div class="card">
@@ -544,13 +546,14 @@
       <div class="toolbar">
         <input class="inp grow" id="menu-search" placeholder="Поиск: название или артикул" value="${esc(S.menu.search)}">
         <select class="sel" id="menu-group"><option value="">Все категории</option>${groups.map((g) => `<option ${g === S.menu.group ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select>
+        ${hasBar ? `<div class="seg" role="group" aria-label="Кухня или бар">${[['', 'Все'], ['main', 'Кухня'], ['bar', 'Бар']].map(([v, l]) => `<button class="${S.menu.src === v ? 'is-on' : ''}" data-menu-src="${v}">${l}</button>`).join('')}</div>` : ''}
         <label style="display:flex;gap:8px;align-items:center">${sw(S.menu.onlyStop, 'data-only-stop')} Только стоп/скрытые</label>
       </div>
       <div class="tbl-wrap"><table class="tbl tbl--cards tbl--menu">
         <tr><th></th><th>Блюдо</th><th>Категория</th><th>Цена</th><th>Метка</th><th title="Больше — выше в разделе; 0 — как в iiko">Приоритет</th>${canStop ? '<th>Стоп-лист</th>' : ''}<th>Скрыть</th><th>Рекомендуем</th><th></th></tr>
         ${rows.map((p) => `<tr>
           <td>${p.image ? `<img class="thumb" src="${esc(p.image)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">` : '<div class="thumb">🍽</div>'}</td>
-          <td><b>${esc(p.name)}</b>${p.badge ? ` <span class="pill" data-tone="ok">${esc(BADGES[p.badge] || p.badge)}</span>` : ''}<div class="muted" style="font-size:12px">${p.sku ? `арт. ${esc(p.sku)} · ` : ''}${esc(p.weight || '')}${p.energy ? ` · ${Math.round(p.energy)} ккал` : ''}${p.allergens?.length ? ` · аллергены: ${esc(p.allergens.join(', '))}` : ''}</div></td>
+          <td><b>${esc(p.name)}</b>${p.badge ? ` <span class="pill" data-tone="ok">${esc(BADGES[p.badge] || p.badge)}</span>` : ''}${p.video ? ' <span class="pill" data-tone="work">▶ видео</span>' : ''}<div class="muted" style="font-size:12px">${p.sku ? `арт. ${esc(p.sku)} · ` : ''}${esc(p.weight || '')}${p.energy ? ` · ${Math.round(p.energy)} ккал` : ''}${p.allergens?.length ? ` · аллергены: ${esc(p.allergens.join(', '))}` : ''}</div></td>
           <td class="muted" data-label="Категория">${esc(p.group)}</td><td data-label="Цена">${p.price ? rub(p.price) : ''}</td>
           <td data-label="Метка">${p.isHidden ? '' : `<select class="sel sel--sm sel--badge" data-badge-set="${esc(p.id)}" aria-label="Метка блюда"><option value="">—</option>${Object.entries(BADGES).map(([k, l]) => `<option value="${k}" ${p.badge === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`}</td>
           <td data-label="Приоритет">${p.isHidden ? '' : `<input class="inp inp--prio" type="number" inputmode="numeric" min="-999" max="999" step="1" value="${Number(p.priority) || 0}" data-prio="${esc(p.id)}" aria-label="Приоритет показа">`}</td>
@@ -579,9 +582,18 @@
       <form id="prod-form">
         <div style="display:flex;gap:14px;align-items:center;margin-bottom:10px">
           <img id="prod-img" src="${esc(p.image || '')}" alt="" style="width:96px;height:96px;border-radius:16px;object-fit:cover;background:#fff;${p.image ? '' : 'visibility:hidden'}">
-          <label class="btn btn--sm" style="cursor:pointer">Загрузить фото<input type="file" id="prod-file" accept="image/jpeg,image/png,image/webp" hidden></label>
+          <label class="btn btn--sm" style="cursor:pointer">Загрузить фото<input type="file" id="prod-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden></label>
         </div>
         ${f('image_url', 'Фото (ссылка)', p.image)}
+        <div style="display:flex;gap:14px;align-items:center;margin-top:12px">
+          <video id="prod-video" ${p.video ? `src="${esc(p.video)}"` : ''} muted loop playsinline autoplay style="width:96px;height:96px;border-radius:16px;object-fit:cover;background:#fff;${p.video ? '' : 'display:none'}"></video>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <label class="btn btn--sm" style="cursor:pointer">Загрузить видео<input type="file" id="prod-video-file" accept="video/mp4,video/webm,video/quicktime,image/gif,image/webp" hidden></label>
+            ${p.video ? '<button class="btn btn--sm btn--danger" type="button" data-video-clear>Убрать видео</button>' : ''}
+          </div>
+        </div>
+        <input type="hidden" name="video_url" value="${esc(p.video || '')}">
+        <p class="muted" style="font-size:12px;margin:6px 4px 0">«Живое» меню: короткое видео без звука (3–6 с, до 25 МБ, лучше MP4 квадрат 720 px) играет вместо фото по кругу. Анимированный WebP/GIF — тоже можно. Фото остаётся обложкой, пока видео грузится.</p>
         <div class="field" style="margin-top:10px"><label>Метка в меню</label><select class="sel" name="badge"><option value="">Без метки</option>${Object.entries(BADGES).map(([k, l]) => `<option value="${k}" ${p.badge === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
         <div class="field" style="margin-top:10px"><label>Описание</label><textarea class="inp" name="description">${esc(p.description || '')}</textarea></div>
         <div class="form-grid" style="margin-top:10px">
@@ -599,6 +611,33 @@
         try {
           for (const o of ownOverrides) await api('DELETE', `/api/v1/admin/menu/override/${o.id}`);
           S.adminMenu = null; closeModal(); toast('Карточка снова как в iiko'); render();
+        } catch (err) { toast(err.message, true); }
+      });
+      root.querySelector('[data-video-clear]')?.addEventListener('click', (e) => {
+        root.querySelector('[name=video_url]').value = '';
+        const v = $('#prod-video', root); v.removeAttribute('src'); v.style.display = 'none'; e.target.remove();
+        toast('Видео уберётся после «Сохранить»');
+      });
+      $('#prod-video-file', root).addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        if (file.size > 25 * 1024 * 1024) { toast('Видео больше 25 МБ — сожмите или обрежьте до 3–6 секунд', true); return; }
+        try {
+          toast('Загружаем…');
+          const res = await fetch('/api/v1/admin/upload', {
+            method: 'POST', headers: { 'Content-Type': file.type || 'video/mp4', Authorization: `Bearer ${S.token}` }, body: file,
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Не удалось загрузить');
+          if (file.type.startsWith('image/')) {
+            // Анимированная картинка — вместо фото
+            root.querySelector('[name=image_url]').value = data.url;
+            const img = $('#prod-img', root); img.src = data.url; img.style.visibility = 'visible';
+          } else {
+            root.querySelector('[name=video_url]').value = data.url;
+            const v = $('#prod-video', root); v.src = data.url; v.style.display = 'block'; v.play().catch(() => {});
+          }
+          toast('Загружено — нажмите «Сохранить»');
         } catch (err) { toast(err.message, true); }
       });
       $('#prod-file', root).addEventListener('change', async (e) => {
@@ -914,6 +953,7 @@
         toast(`Меню выгружено из iiko: ${S.adminMenu.products.filter((p) => !p.isHidden).length} блюд`); render(); return;
       }
       if (q('[data-only-stop]')) { S.menu.onlyStop = !S.menu.onlyStop; render(); return; }
+      if (q('[data-menu-src]')) { S.menu.src = q('[data-menu-src]').dataset.menuSrc; render(); return; }
       if (q('[data-ov]')) { const b = q('[data-ov]'); await setOverride(b.dataset.ov, { [b.dataset.field]: b.dataset.val === 'true' }); toast('Сохранено'); return; }
       if (q('[data-edit-product]')) { openProductEditor(q('[data-edit-product]').dataset.editProduct); return; }
       if (q('[data-banner-new]')) { openBannerForm(); return; }

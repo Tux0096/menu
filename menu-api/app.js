@@ -405,11 +405,16 @@ admin.use((req, res, next) => {
 });
 admin.get('/menu', h(async (req) => getAdminMenu(await staffRestaurant(req), { force: req.query.refresh === '1' })));
 // Загрузка фото блюда: тело запроса — сам файл (image/jpeg|png|webp), до 8 МБ
-const IMAGE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
-admin.post('/upload', express.raw({ type: Object.keys(IMAGE_TYPES), limit: '8mb' }), h(async (req) => {
-  const ext = IMAGE_TYPES[String(req.headers['content-type'] || '').split(';')[0]];
-  if (!ext || !req.body?.length) {
-    const err = new Error('Нужна картинка JPG, PNG или WebP до 8 МБ');
+// Фото (в том числе анимированные WebP/GIF) и короткие видео для «живого» меню
+const IMAGE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };
+const VIDEO_TYPES = { 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov' };
+const MEDIA_TYPES = { ...IMAGE_TYPES, ...VIDEO_TYPES };
+admin.post('/upload', express.raw({ type: Object.keys(MEDIA_TYPES), limit: '25mb' }), h(async (req) => {
+  const type = String(req.headers['content-type'] || '').split(';')[0];
+  const ext = MEDIA_TYPES[type];
+  const isVideo = Boolean(VIDEO_TYPES[type]);
+  if (!ext || !req.body?.length || (!isVideo && req.body.length > 8 * 1024 * 1024)) {
+    const err = new Error('Нужна картинка JPG, PNG, WebP или GIF до 8 МБ либо видео MP4/WebM до 25 МБ');
     err.status = 400;
     throw err;
   }

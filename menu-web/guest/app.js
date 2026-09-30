@@ -52,9 +52,32 @@
   };
   const imgHtml = (p, cls = 'dish__img', w = 320) => {
     const src = imgSrc(p.image, w);
-    const lazy = cls === 'product-hero' ? 'fetchpriority="high"' : 'loading="lazy"';
+    const hero = cls === 'product-hero';
+    const lazy = hero ? 'fetchpriority="high"' : 'loading="lazy"';
+    // «Живое» меню: короткое видео без звука по кругу; фото — обложка, пока видео грузится.
+    // Видео не качается заранее (preload="none") и играет только на экране — список не подвисает.
+    if (p.video) {
+      return `<div class="${cls} has-video"><video src="${esc(p.video)}" ${src ? `poster="${esc(src)}"` : ''} muted loop playsinline
+        preload="${hero ? 'auto' : 'none'}" data-live disablepictureinpicture disableremoteplayback aria-hidden="true"></video></div>`;
+    }
     return `<div class="${cls}">${src ? `<img src="${esc(src)}" alt="" ${lazy} decoding="async" onerror="this.remove()">` : ''}${src ? '' : emojiFor(p)}</div>`;
   };
+  // Играют только видео, которые видно на экране
+  const liveSeen = new WeakSet();
+  const liveObserver = typeof IntersectionObserver === 'function' ? new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      const v = e.target;
+      if (e.isIntersecting) { v.muted = true; v.play().catch(() => {}); } else if (!v.paused) v.pause();
+    }
+  }, { rootMargin: '120px 0px', threshold: 0.2 }) : null;
+  function watchLiveVideos(root = document) {
+    for (const v of root.querySelectorAll('video[data-live]')) {
+      if (liveSeen.has(v)) continue;
+      liveSeen.add(v);
+      v.muted = true;
+      if (liveObserver) liveObserver.observe(v); else v.play().catch(() => {});
+    }
+  }
 
   // ── Состояние ──────────────────────────────────────────────
   const params = new URLSearchParams(location.search);
@@ -785,6 +808,7 @@
     backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeSheet(); });
     enableSheetDrag(backdrop, sheet);
     onMount?.(sheet);
+    watchLiveVideos(sheet);
   }
   /** Шторка закрывается плавно — уезжает вниз. */
   function closeSheet() {
@@ -1217,6 +1241,7 @@
       morph(app, Object.assign(app.cloneNode(false), { innerHTML: html }));
     }
     watchTopbar();
+    watchLiveVideos();
   }
 
   // Строка категорий прилипает ровно под шапкой, какой бы высоты та ни была (вырез камеры, полный экран)
