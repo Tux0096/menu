@@ -91,6 +91,11 @@ chmod 600 "$ENV_FILE"
 
 echo "=== 4. База данных ==="
 node db/migrate.js
+# Пароль администратора задаётся секретом GitHub ADMIN_PASSWORD (вход: логин admin)
+if [ -n "${ADMIN_PASSWORD:-}" ]; then
+  set_env ADMIN_PASSWORD "$ADMIN_PASSWORD"
+  ADMIN_PASSWORD_RESET="$ADMIN_PASSWORD" node db/set-admin-password.js || echo "  ! пароль администратора не обновлён"
+fi
 timeout 60 node db/check-iiko.js || true
 # Меню из iiko сервер выгружает сам: после деплоя — полностью (сбрасываем отметку), дальше раз в сутки
 node --input-type=module -e "import pool from './db/pool.js'; await pool.query(\"DELETE FROM settings WHERE name = 'iiko_menu_synced_at'\"); await pool.end();" || true
