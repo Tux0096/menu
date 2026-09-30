@@ -258,17 +258,17 @@
     const products = S.catalog?.products || [];
     const groups = (S.catalog?.groups || []).filter((g) => products.some((p) => p.parentGroup === g.id));
     if (!S.pickCat || !groups.some((g) => g.id === S.pickCat)) S.pickCat = groups[0]?.id || null;
-    const found = q ? products.filter((p) => p.name.toLowerCase().includes(q)).slice(0, 40) : products.filter((p) => p.parentGroup === S.pickCat);
+    const found = q ? products.filter((p) => p.name.toLowerCase().includes(q) || String(p.sku || '').toLowerCase().includes(q)).slice(0, 40) : products.filter((p) => p.parentGroup === S.pickCat);
     const inCart = (p) => S.edit.items.filter((i) => !i.isLocked && String(i.productId) === String(p.id) && (Number(i.seatNumber) || null) === (S.pickSeat || null)).reduce((n, i) => n + i.quantity, 0);
     return `<div class="pick-backdrop" data-close-picker>
       <div class="pick-sheet" role="dialog" aria-label="Добавить блюда">
         <div class="pick-sheet__grip"></div>
         <div class="pick-sheet__head"><div class="h3" style="margin:0">Добавить блюда</div><button class="btn btn--sm btn--dark" data-close-picker-btn>Готово</button></div>
         <div class="seg seg--wide" role="group" aria-label="Кому">${[null, ...seats].map((n) => `<button class="${(S.pickSeat || null) === n ? 'is-on' : ''}" data-pick-seat="${n ?? ''}">${n ? esc(`${n} · ${nameOf(n)}`) : 'Всем'}</button>`).join('')}</div>
-        ${products.length ? `<input class="inp" id="prod-search" style="width:100%" placeholder="Поиск блюда" value="${esc(S.productSearch)}" autocomplete="off">
+        ${products.length ? `<input class="inp" id="prod-search" style="width:100%" placeholder="Поиск: название или артикул" value="${esc(S.productSearch)}" autocomplete="off">
           ${q ? '' : `<div class="picker__cats">${groups.map((g) => `<button class="${g.id === S.pickCat ? 'is-active' : ''}" data-pick-cat="${esc(g.id)}">${esc(g.name)}</button>`).join('')}</div>`}
           <div class="pick-list">${found.map((p) => { const n = inCart(p); return `<button class="pick-item" data-add="${esc(p.id)}" ${p.isInStopList ? 'disabled' : ''}>
-            <span class="pick-item__name">${esc(p.name)}${p.source && p.source !== 'main' ? ` <span class="pill" data-tone="work">${esc(sourceLabel(p.source))}</span>` : ''}${p.isInStopList ? ' <span class="pill" data-tone="bad">стоп</span>' : ''}</span>
+            <span class="pick-item__name">${esc(p.name)}${p.source && p.source !== 'main' ? ` <span class="pill" data-tone="work">${esc(sourceLabel(p.source))}</span>` : ''}${p.isInStopList ? ' <span class="pill" data-tone="bad">стоп</span>' : ''}${p.sku ? ` <span class="muted" style="font-size:11px">арт. ${esc(p.sku)}</span>` : ''}</span>
             <span class="pick-item__price">${rub(p.price)}</span><span class="pick-item__add ${n ? 'has' : ''}">${n || '+'}</span></button>`; }).join('') || '<div class="muted" style="padding:12px">Ничего не найдено</div>'}</div>`
     : '<div class="error-box">Меню этого ресторана пустое — выгрузите его из iiko (админка → «Меню и стоп-лист»).</div>'}
       </div>
@@ -531,7 +531,7 @@
     const m = S.adminMenu;
     const q = S.menu.search.toLowerCase();
     const groups = [...new Set(m.products.map((p) => p.group).filter(Boolean))];
-    const rows = m.products.filter((p) => (!q || p.name.toLowerCase().includes(q))
+    const rows = m.products.filter((p) => (!q || p.name.toLowerCase().includes(q) || String(p.sku || '').toLowerCase().includes(q))
       && (!S.menu.group || p.group === S.menu.group) && (!S.menu.onlyStop || p.isInStopList || p.isHidden));
     const canStop = S.staff.role !== 'marketing';
     const sw = (on, attr, red = false) => `<button class="switch ${on ? 'is-on' : ''} ${red ? 'is-red' : ''}" ${attr}></button>`;
@@ -541,23 +541,24 @@
         ${S.staff.role === 'admin' ? '<button class="btn btn--sm" data-menu-refresh>Перевыгрузить из iiko</button>' : ''}
       </div>
       <div class="toolbar">
-        <input class="inp grow" id="menu-search" placeholder="Поиск блюда" value="${esc(S.menu.search)}">
+        <input class="inp grow" id="menu-search" placeholder="Поиск: название или артикул" value="${esc(S.menu.search)}">
         <select class="sel" id="menu-group"><option value="">Все категории</option>${groups.map((g) => `<option ${g === S.menu.group ? 'selected' : ''}>${esc(g)}</option>`).join('')}</select>
         <label style="display:flex;gap:8px;align-items:center">${sw(S.menu.onlyStop, 'data-only-stop')} Только стоп/скрытые</label>
       </div>
       <div class="tbl-wrap"><table class="tbl tbl--cards tbl--menu">
-        <tr><th></th><th>Блюдо</th><th>Категория</th><th>Цена</th>${canStop ? '<th>Стоп-лист</th>' : ''}<th>Скрыть</th><th>Рекомендуем</th><th></th></tr>
+        <tr><th></th><th>Блюдо</th><th>Категория</th><th>Цена</th><th title="Больше — выше в разделе; 0 — как в iiko">Приоритет</th>${canStop ? '<th>Стоп-лист</th>' : ''}<th>Скрыть</th><th>Рекомендуем</th><th></th></tr>
         ${rows.map((p) => `<tr>
           <td>${p.image ? `<img class="thumb" src="${esc(p.image)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">` : '<div class="thumb">🍽</div>'}</td>
-          <td><b>${esc(p.name)}</b>${p.badge ? ` <span class="pill" data-tone="ok">${esc(BADGES[p.badge] || p.badge)}</span>` : ''}<div class="muted" style="font-size:12px">${esc(p.weight || '')}${p.energy ? ` · ${Math.round(p.energy)} ккал` : ''}${p.allergens?.length ? ` · аллергены: ${esc(p.allergens.join(', '))}` : ''}</div></td>
+          <td><b>${esc(p.name)}</b>${p.badge ? ` <span class="pill" data-tone="ok">${esc(BADGES[p.badge] || p.badge)}</span>` : ''}<div class="muted" style="font-size:12px">${p.sku ? `арт. ${esc(p.sku)} · ` : ''}${esc(p.weight || '')}${p.energy ? ` · ${Math.round(p.energy)} ккал` : ''}${p.allergens?.length ? ` · аллергены: ${esc(p.allergens.join(', '))}` : ''}</div></td>
           <td class="muted" data-label="Категория">${esc(p.group)}</td><td data-label="Цена">${p.price ? rub(p.price) : ''}</td>
+          <td data-label="Приоритет">${p.isHidden ? '' : `<input class="inp inp--prio" type="number" inputmode="numeric" min="-999" max="999" step="1" value="${Number(p.priority) || 0}" data-prio="${esc(p.id)}" aria-label="Приоритет показа">`}</td>
           ${canStop ? `<td data-label="Стоп-лист">${sw(p.isInStopList, `data-ov="${esc(p.id)}" data-field="is_stopped" data-val="${!p.isInStopList}"`, true)}</td>` : ''}
           <td data-label="Скрыть">${sw(p.isHidden, `data-ov="${esc(p.id)}" data-field="is_hidden" data-val="${!p.isHidden}"`)}</td>
           <td data-label="Рекомендуем">${p.isHidden ? '' : sw(p.isRecommended, `data-ov="${esc(p.id)}" data-field="is_recommended" data-val="${!p.isRecommended}"`)}</td>
           <td class="td-actions">${p.isHidden ? '' : `<button class="btn btn--sm" data-edit-product="${esc(p.id)}">Карточка</button>`}</td>
         </tr>`).join('')}
       </table></div>
-      <p class="muted" style="font-size:12px;margin-top:12px">Стоп-лист: блюдо остаётся в меню, но заказать его нельзя. Скрыть: блюдо пропадает из QR-меню. Правки действуют поверх выгрузки iiko и не теряются при обновлении меню.</p>
+      <p class="muted" style="font-size:12px;margin-top:12px">Стоп-лист: блюдо остаётся в меню, но заказать его нельзя. Скрыть: блюдо пропадает из QR-меню. Приоритет: чем больше число, тем выше блюдо в своём разделе (у гостя, официанта и в приложении); 0 — порядок как в iiko. Правки действуют поверх выгрузки iiko и не теряются при обновлении меню.</p>
     </div>`;
   }
 
@@ -931,6 +932,10 @@
       render();
     } else if (e.target.dataset.seat != null) { S.edit.items[Number(e.target.dataset.seat)].seatNumber = Number(e.target.value) || null; changed(); }
     else if (e.target.id === 'menu-group') { S.menu.group = e.target.value; render(); }
+    else if (e.target.dataset.prio) {
+      setOverride(e.target.dataset.prio, { priority: Number(e.target.value) || 0 })
+        .then(() => toast('Приоритет сохранён')).catch((err) => toast(err.message, true));
+    }
   });
   let inputT;
   document.addEventListener('input', (e) => {

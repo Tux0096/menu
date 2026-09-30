@@ -39,6 +39,8 @@ export async function getAdminMenu(restaurant, { force = false } = {}) {
       isInStopList: p.isInStopList,
       isRecommended: Boolean(p.isRecommended),
       badge: p.badge || null,
+      sku: p.sku || null,
+      priority: p.priority || 0,
       isHidden: false,
     })).concat(hidden.map((o) => ({
       id: o.product_id, name: o.product_name || o.name || o.product_id, group: '', isHidden: true,
@@ -49,7 +51,7 @@ export async function getAdminMenu(restaurant, { force = false } = {}) {
 
 const OVERRIDE_FIELDS = [
   'is_stopped', 'is_hidden', 'is_recommended', 'name', 'description', 'image_url', 'weight',
-  'energy', 'proteins', 'fats', 'carbs', 'allergens', 'product_name', 'badge',
+  'energy', 'proteins', 'fats', 'carbs', 'allergens', 'product_name', 'badge', 'priority',
 ];
 
 export async function saveOverride(restaurantId, productId, patch) {
@@ -59,6 +61,7 @@ export async function saveOverride(restaurantId, productId, patch) {
     if (patch[f] === undefined) continue;
     let v = patch[f];
     if (['energy', 'proteins', 'fats', 'carbs'].includes(f)) v = v === '' || v == null ? null : Number(v);
+    if (f === 'priority') v = Math.max(-999, Math.min(999, Math.round(Number(v) || 0)));
     if (['name', 'description', 'image_url', 'weight', 'product_name', 'badge'].includes(f)) v = v ? String(v) : null;
     if (f === 'allergens') v = Array.isArray(v) ? v.map((a) => String(a).trim()).filter(Boolean) : null;
     if (f.startsWith('is_')) v = Boolean(v);

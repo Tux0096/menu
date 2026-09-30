@@ -534,3 +534,6 @@ html { scroll-behavior: smooth; -webkit-tap-highlight-color: transparent; }
 .product-hero img { width: 100%; height: auto; max-height: 58vh; object-fit: contain; }
 .dish__img:has(img) { background: #fff; }
 .dish__img img { object-fit: contain; }
+
+/* Кнопка «Все разделы» закреплена у левого края строки категорий */
+.cats .cats__all { position: sticky; left: 0; z-index: 2; box-shadow: -20px 0 0 6px var(--bg), 0 0 0 6px var(--bg); }

@@ -94,7 +94,8 @@ class _MenuScreenState extends State<MenuScreen> {
     return [
       for (final g in _groups)
         for (final p in g.products)
-          if (p['name'].toString().toLowerCase().contains(q)) p,
+          if (p['name'].toString().toLowerCase().contains(q) || (p['sku'] ?? '').toString().toLowerCase().contains(q))
+            p,
     ];
   }
 
@@ -145,7 +146,7 @@ class _MenuScreenState extends State<MenuScreen> {
                 onChanged: (v) => setState(() => _q = v),
                 textInputAction: TextInputAction.search,
                 decoration: InputDecoration(
-                  hintText: 'Найти блюдо',
+                  hintText: 'Название или артикул',
                   prefixIcon: const Icon(Icons.search),
                   suffixIcon: _q.isEmpty
                       ? null

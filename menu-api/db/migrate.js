@@ -363,6 +363,10 @@ const SCHEMA = `
   ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS bill_requests JSONB NOT NULL DEFAULT '[]';
   -- Имена гостей, которых добавил официант (место → имя): «Мария» вместо «Гость 3»
   ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS seat_names JSONB NOT NULL DEFAULT '{}';
+  -- Артикул позиции из iiko (sku во внешнем меню, code в номенклатуре)
+  ALTER TABLE products ADD COLUMN IF NOT EXISTS sku VARCHAR(50);
+  -- Приоритет показа блюда в разделе: больше — выше; 0 — порядок как в iiko
+  ALTER TABLE menu_overrides ADD COLUMN IF NOT EXISTS priority INT NOT NULL DEFAULT 0;
   -- Телефоны официантов для push-уведомлений (Firebase Cloud Messaging)
   CREATE TABLE IF NOT EXISTS waiter_devices (
     token TEXT PRIMARY KEY,
