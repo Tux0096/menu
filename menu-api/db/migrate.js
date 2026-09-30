@@ -375,6 +375,16 @@ const SCHEMA = `
   ALTER TABLE table_payments ADD COLUMN IF NOT EXISTS guest_id UUID;
   ALTER TABLE table_payments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
   CREATE UNIQUE INDEX IF NOT EXISTS idx_table_payments_invoice ON table_payments (invoice_id) WHERE invoice_id IS NOT NULL;
+  ALTER TABLE table_payments ADD COLUMN IF NOT EXISTS guest_ids JSONB;
+  -- Ключи онлайн-оплаты по ресторанам (задаёт администратор в админке «Оплата»)
+  CREATE TABLE IF NOT EXISTS restaurant_payment_settings (
+    restaurant_id UUID PRIMARY KEY REFERENCES restaurants(id) ON DELETE CASCADE,
+    online_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+    cp_public_id VARCHAR(100),
+    cp_api_secret TEXT,
+    iiko_payment_type_id VARCHAR(64),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+  );
   -- Телефоны официантов для push-уведомлений (Firebase Cloud Messaging)
   CREATE TABLE IF NOT EXISTS waiter_devices (
     token TEXT PRIMARY KEY,

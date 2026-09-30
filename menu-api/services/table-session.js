@@ -237,8 +237,20 @@ export function mapSession({ session, restaurant, items, guests = [] }, extra = 
 
 export async function getSessionView(sessionId) {
   const ctx = await requireContext(sessionId);
-  const { rows } = await pool.query('SELECT rating FROM visit_feedback WHERE session_id = $1', [sessionId]);
-  return mapSession(ctx, { feedbackLeft: Boolean(rows[0]), feedbackRating: rows[0]?.rating || null });
+  const [{ rows }, { rows: paid }] = await Promise.all([
+    pool.query('SELECT rating FROM visit_feedback WHERE session_id = $1', [sessionId]),
+    pool.query(
+      "SELECT amount, guest_ids FROM table_payments WHERE session_id = $1 AND method = 'cloudpayments' AND status = 'completed'",
+      [ctx.session.id],
+    ),
+  ]);
+  // Кухня, оплаченная онлайн: весь стол или отмеченные гости (гостю не показываем её к оплате повторно)
+  const onlinePaid = {
+    wholeTable: paid.some((p) => !p.guest_ids),
+    guestIds: [...new Set(paid.flatMap((p) => (p.guest_ids || []).map(String)))],
+    amount: paid.reduce((n, p) => n + parseFloat(p.amount || 0), 0),
+  };
+  return mapSession(ctx, { feedbackLeft: Boolean(rows[0]), feedbackRating: rows[0]?.rating || null, onlinePaid });
 }
 
 // ── Вход по QR ──────────────────────────────────────────────────────────────
@@ -548,18 +560,29 @@ const CALL_REASONS = {
  * Запрос счёта. Гость выбирает, за кого платит: весь стол (по умолчанию), только свой заказ
  * или отмеченных гостей (например, за себя и свою спутницу). Официант видит, кто за кого и сколько.
  */
-export async function requestBill(sessionId, { guest = null, guestIds = null } = {}) {
+const BILL_METHODS = { card: 'картой', cash: 'наличными' };
+
+/**
+ * Гость просит счёт: способ (картой официанту / наличными) и за кого (весь стол или отмеченные гости).
+ * part: 'bar' — после онлайн-оплаты кухни официанту остаётся только бар (он оплачивается картой).
+ */
+export async function requestBill(sessionId, { guest = null, guestIds = null, method = null, part = null } = {}) {
   const ctx = await requireContext(sessionId);
   if (ctx.session.payment_status === 'paid') throw httpError(409, 'Счёт уже оплачен');
   if (!ctx.items.length) throw httpError(400, 'В заказе пока нет блюд');
   const guests = tableGuests(ctx);
   const ids = Array.isArray(guestIds) ? [...new Set(guestIds.map(String))].filter((id) => guests.some((g) => String(g.id) === id)) : [];
   const whole = !ids.length || ids.length >= guests.length;
-  const sumFor = (list) => ctx.items.filter((i) => list.includes(String(i.guest_id))).reduce((n, i) => n + parseFloat(i.line_total || 0), 0);
-  const amount = whole ? parseFloat(ctx.session.total || 0) : sumFor(ids);
+  const barOnly = part === 'bar';
+  const pay = BILL_METHODS[method] ? method : null;
+  const lines = ctx.items.filter((i) => (!barOnly || (i.source || 'main') !== 'main') && (whole || ids.includes(String(i.guest_id))));
+  const amount = !barOnly && whole ? parseFloat(ctx.session.total || 0) : lines.reduce((n, i) => n + parseFloat(i.line_total || 0), 0);
   const names = whole ? [] : ids.map((id) => guests.find((g) => String(g.id) === id)?.name || 'Гость');
   const by = guest ? (guests.find((g) => String(g.id) === String(guest.id))?.name || guest.name || 'Гость') : null;
-  const request = { at: new Date().toISOString(), by, byGuestId: guest?.id || null, scope: whole ? 'table' : 'guests', guestIds: whole ? [] : ids, names, amount };
+  const request = {
+    at: new Date().toISOString(), by, byGuestId: guest?.id || null, scope: whole ? 'table' : 'guests',
+    guestIds: whole ? [] : ids, names, amount, method: pay, part: barOnly ? 'bar' : 'all',
+  };
   await pool.query(
     `UPDATE table_sessions SET workflow_status = $2, bill_requested_at = NOW(), wait_notified_at = NULL,
        bill_requests = COALESCE(bill_requests, '[]'::jsonb) || $3::jsonb,
@@ -568,14 +591,16 @@ export async function requestBill(sessionId, { guest = null, guestIds = null } =
     [sessionId, WORKFLOW.BILL_REQUESTED, JSON.stringify([request])],
   );
   const who = whole ? 'за весь стол' : names.length === 1 && names[0] === by ? `только ${by}` : names.join(' и ');
+  const what = barOnly ? 'бар (кухня оплачена онлайн)' : who;
   await createWaiterNotification({
     restaurantId: ctx.restaurant.id,
     sessionId,
     tableNumber: ctx.session.table_number,
     type: NOTIFY_TYPES.BILL_REQUESTED,
-    title: `Стол №${ctx.session.table_number} — счёт`,
-    body: `${by ? `${by}: ` : ''}${who} — ${Math.round(amount)} ₽${whole ? '' : ` (весь стол ${Math.round(ctx.session.total)} ₽)`}`,
-    payload: { sessionId, total: parseFloat(ctx.session.total), amount, guestIds: request.guestIds },
+    title: `Стол №${ctx.session.table_number} — счёт${pay ? ` ${BILL_METHODS[pay]}` : ''}`,
+    body: `${by ? `${by}: ` : ''}${barOnly && !whole ? `${who}, ` : ''}${what} — ${Math.round(amount)} ₽${pay ? `, ${BILL_METHODS[pay]}` : ''}`
+      + `${whole || barOnly ? '' : ` (весь стол ${Math.round(ctx.session.total)} ₽)`}`,
+    payload: { sessionId, total: parseFloat(ctx.session.total), amount, guestIds: request.guestIds, method: pay, part: request.part },
   });
   return getSessionView(sessionId);
 }

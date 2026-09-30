@@ -275,7 +275,7 @@ class _TableScreenState extends State<TableScreen> {
           for (final r in (s['billRequests'] as List? ?? const []))
             _banner(
               Icons.receipt_long_outlined,
-              'Счёт: ${r['by'] != null ? '${r['by']} — ' : ''}${r['scope'] == 'table' ? 'за весь стол' : (r['names'] as List? ?? const []).join(' и ')} · ${rub((r['amount'] as num?) ?? 0)}',
+              'Счёт: ${r['by'] != null ? '${r['by']} — ' : ''}${r['part'] == 'bar' ? 'бар (кухня оплачена онлайн), ' : ''}${r['scope'] == 'table' ? 'за весь стол' : (r['names'] as List? ?? const []).join(' и ')} · ${rub((r['amount'] as num?) ?? 0)}${r['method'] == 'cash' ? ' · наличными' : r['method'] == 'card' ? ' · картой' : ''}',
               C.violet,
             ),
           _summary(s),

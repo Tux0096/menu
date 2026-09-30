@@ -14,7 +14,9 @@ import { listSources } from './services/sources.js';
 import legacyRoutes from './routes/legacy.js';
 import { syncAllRestaurants } from './db/sync-iiko.js';
 import { imageHandler, warmImages } from './services/images.js';
-import { checkPendingPayments, confirmOnlinePayment, onlinePayEnabled, startOnlinePayment } from './services/payments.js';
+import {
+  checkPendingPayments, confirmOnlinePayment, onlinePayConfig, paySettingsForAdmin, savePaySettings, startOnlinePayment,
+} from './services/payments.js';
 import { refreshStopLists, registerWebhooks, webhookToken } from './services/stoplist.js';
 import { getRestaurantCatalog, invalidateCatalogCache, warmCatalogs } from './services/catalog.js';
 import { checkOllamaHealth, getWelcomeSuggestions, suggestForQuery } from './services/ai-suggest.js';
@@ -142,7 +144,7 @@ app.get('/api/v1/config', h(async (req) => {
     tipPresets: [0, 10, 15, 20],
     iikoMode: isIikoDemo() ? 'demo' : 'live',
     paymentsEnabled: process.env.PAYMENTS_ENABLED === 'true',
-    onlinePay: onlinePayEnabled() ? { provider: 'cloudpayments', publicId: process.env.CLOUDPAYMENTS_PUBLIC_ID } : null,
+    onlinePay: await onlinePayConfig(r.id),
   };
 }));
 
@@ -255,7 +257,9 @@ app.post('/api/v1/table/submit-to-waiter', guestAuth(), bySessionBody, h(async (
 }));
 app.post('/api/v1/table/request-bill', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId');
-  return requestBill(req.body.sessionId, { guest: req.guest, guestIds: req.body.guestIds });
+  return requestBill(req.body.sessionId, {
+    guest: req.guest, guestIds: req.body.guestIds, method: req.body.method, part: req.body.part,
+  });
 }));
 app.post('/api/v1/table/call-waiter', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId');
@@ -264,7 +268,8 @@ app.post('/api/v1/table/call-waiter', guestAuth(), bySessionBody, h(async (req) 
 // Онлайн-оплата CloudPayments: счёт → виджет → проверка статуса по номеру счёта (колбэка нет)
 app.post('/api/v1/table/pay/start', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId');
-  return startOnlinePayment(req.body.sessionId, { tipAmount: req.body.tipAmount, guest: req.guest });
+  const guestIds = Array.isArray(req.body.guestIds) && req.body.guestIds.length ? req.body.guestIds.map(String) : null;
+  return startOnlinePayment(req.body.sessionId, { tipAmount: req.body.tipAmount, guest: req.guest, guestIds });
 }));
 app.post('/api/v1/table/pay/confirm', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId', 'invoiceId');
@@ -447,6 +452,16 @@ admin.post('/menu/sync', h(async (req) => {
   return getAdminMenu(r, { force: true });
 }));
 // Источники iiko ресторана: кухня (основной) + доп. (бар с алкоголем в другой организации/аккаунте iiko)
+// Оплата ресторана: ключи CloudPayments (секрет только записывается, наружу не отдаётся)
+admin.get('/payments', h(async (req) => paySettingsForAdmin((await staffRestaurant(req)).id)));
+admin.post('/payments', h(async (req) => {
+  const r = await staffRestaurant(req);
+  const res = await savePaySettings(r.id, req.body || {});
+  audit(req.staff, 'payments.save', 'restaurant', r.slug, {
+    onlineEnabled: res.onlineEnabled, publicId: res.publicId, secretChanged: Boolean(req.body?.apiSecret || req.body?.clearSecret),
+  });
+  return res;
+}));
 admin.get('/sources', h(async (req) => {
   const r = await staffRestaurant(req);
   return {
