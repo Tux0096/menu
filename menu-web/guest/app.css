@@ -546,3 +546,6 @@ html { scroll-behavior: smooth; -webkit-tap-highlight-color: transparent; }
 /* В карточке блюда — та же отметка количества на фото, что в меню */
 .hero-wrap { position: relative; border-radius: var(--r-card); overflow: hidden; }
 .dish__count--hero { font-size: 120px; border-radius: inherit; }
+.rest-item[disabled] { opacity: .55; cursor: default; }
+.rest-item em { font-style: normal; font-size: 12px; color: var(--muted); }
+.topbar__table--btn { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
