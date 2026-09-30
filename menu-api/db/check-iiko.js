@@ -43,10 +43,42 @@ async function main() {
   await printPaymentTypes('iiko', headers, rows.filter((r) => visible.has(r.organization_id)).map((r) => r.organization_id));
   for (const r of rows.filter((x) => visible.has(x.organization_id))) await checkTerminalGroups(headers, r);
   await diagnoseOrders(headers, rows.filter((x) => visible.has(x.organization_id)));
+  for (const r of rows.filter((x) => visible.has(x.organization_id))) await comparePrices(headers, r);
   if (!rows.some((r) => visible.has(r.organization_id))) {
     console.log('ВНИМАНИЕ: ни один ресторан меню не подключён к ключу — добавьте точки в iiko (Cloud API → интеграция → Подключенные точки)');
   }
   for (const creds of iikoCredsList().filter(Boolean)) await checkExtraKey(creds);
+}
+
+/**
+ * Цены: меню гостя (из внешнего меню iiko) против прайса номенклатуры iiko, по которому касса считает заказ.
+ * Только чтение.
+ */
+async function comparePrices(headers, r) {
+  try {
+    const { data } = await axios.post(`${IIKO_URL}/api/1/nomenclature`, { organizationId: r.organization_id }, { headers, timeout: 60000 });
+    const nom = new Map((data.products || []).map((p) => [String(p.id), p]));
+    const { rows } = await pool.query(
+      "SELECT iiko_id::text AS id, name, price::float AS price FROM products WHERE restaurant_id = $1 AND COALESCE(source, 'main') = 'main' AND is_published",
+      [r.id],
+    );
+    let same = 0; let missing = 0; const diff = [];
+    for (const p of rows) {
+      const n = nom.get(p.id);
+      const cur = n?.sizePrices?.[0]?.price?.currentPrice;
+      if (cur == null) { missing += 1; continue; }
+      if (Math.abs(cur - p.price) < 0.01) same += 1; else diff.push({ name: p.name, menu: p.price, iiko: cur });
+    }
+    const ratios = diff.map((d) => d.iiko / d.menu);
+    const avg = ratios.length ? ratios.reduce((a, b) => a + b, 0) / ratios.length : 0;
+    console.log(`${r.name}: цены меню vs номенклатура iiko — совпадают ${same}, отличаются ${diff.length}, нет в номенклатуре ${missing}`
+      + `${diff.length ? `, в среднем iiko ×${avg.toFixed(3)}` : ''}`);
+    for (const d of diff.slice(0, 8)) console.log(`  «${d.name}»: меню ${d.menu} ₽, iiko ${d.iiko} ₽`);
+    const cats = (data.productCategories || []).length;
+    if (cats) console.log(`  категорий цен/продуктов номенклатуры: ${cats}`);
+  } catch (e) {
+    console.log(`${r.name}: сравнение цен не удалось —`, e.response?.status || '', e.response?.data?.errorDescription || e.message);
+  }
 }
 
 /**
