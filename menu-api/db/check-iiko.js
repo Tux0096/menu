@@ -74,8 +74,27 @@ async function comparePrices(headers, r) {
     console.log(`${r.name}: цены меню vs номенклатура iiko — совпадают ${same}, отличаются ${diff.length}, нет в номенклатуре ${missing}`
       + `${diff.length ? `, в среднем iiko ×${avg.toFixed(3)}` : ''}`);
     for (const d of diff.slice(0, 8)) console.log(`  «${d.name}»: меню ${d.menu} ₽, iiko ${d.iiko} ₽`);
-    const cats = (data.productCategories || []).length;
-    if (cats) console.log(`  категорий цен/продуктов номенклатуры: ${cats}`);
+    const all = data.products || [];
+    console.log(`  номенклатура: продуктов ${all.length}, групп ${(data.groups || []).length}, категорий ${(data.productCategories || []).length}, размеров ${(data.sizes || []).length}`);
+    const probe = /сливочн\S* лосос/i;
+    for (const n of all.filter((x) => probe.test(x.name || '')).slice(0, 4)) {
+      console.log(`  номенклатура «${n.name}» [${n.id}] код ${n.code || '—'} артикул ${n.num || '—'} тип ${n.type} цены ${JSON.stringify(n.sizePrices || null).slice(0, 300)}`);
+    }
+    const { rows: mine } = await pool.query(
+      "SELECT iiko_id::text AS id, name, sku, price::float AS price FROM products WHERE restaurant_id = $1 AND name ~* 'сливочн\\S* лосос' LIMIT 3", [r.id],
+    );
+    for (const m of mine) console.log(`  меню «${m.name}» [${m.id}] артикул ${m.sku || '—'} цена ${m.price}`);
+    const bySku = new Map(all.filter((x) => x.code).map((x) => [String(x.code), x]));
+    const { rows: skus } = await pool.query("SELECT sku, price::float AS price FROM products WHERE restaurant_id = $1 AND sku IS NOT NULL AND COALESCE(source, 'main') = 'main'", [r.id]);
+    let skuHit = 0; let skuDiff = 0;
+    for (const x of skus) {
+      const n = bySku.get(String(x.sku));
+      if (!n) continue;
+      skuHit += 1;
+      const cur = n.sizePrices?.[0]?.price?.currentPrice;
+      if (cur != null && Math.abs(cur - x.price) >= 0.01) skuDiff += 1;
+    }
+    console.log(`  по артикулу: найдено ${skuHit} из ${skus.length}, цена отличается у ${skuDiff}`);
   } catch (e) {
     console.log(`${r.name}: сравнение цен не удалось —`, e.response?.status || '', e.response?.data?.errorDescription || e.message);
   }
