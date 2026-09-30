@@ -528,3 +528,9 @@ html { scroll-behavior: smooth; -webkit-tap-highlight-color: transparent; }
 
 /* Последний раздел тоже можно прокрутить под строку категорий */
 .list--last { min-height: calc(100dvh - var(--topbar-h, 60px) - 170px); align-content: start; }
+
+/* Фото блюда целиком, без обрезки: в шторке — по своим пропорциям, в карточке — вписано в квадрат */
+.product-hero:has(img) { aspect-ratio: auto; background: #fff; }
+.product-hero img { width: 100%; height: auto; max-height: 58vh; object-fit: contain; }
+.dish__img:has(img) { background: #fff; }
+.dish__img img { object-fit: contain; }
