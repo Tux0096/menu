@@ -7,7 +7,10 @@ dotenv.config();
 import pool from './pool.js';
 import { hashPassword, verifyPassword } from '../lib/passwords.js';
 
-const password = process.env.ADMIN_PASSWORD_RESET || '';
+// При вставке в секрет GitHub часто попадает перенос строки или пробел в конце — их не должно быть в пароле
+const raw = process.env.ADMIN_PASSWORD_RESET || '';
+const password = raw.trim();
+if (password !== raw) console.log('  в секрете ADMIN_PASSWORD были пробелы или перенос строки по краям — убраны');
 if (password.length < 6) {
   console.log('  пароль администратора: секрет ADMIN_PASSWORD короче 6 символов — не меняю');
   process.exit(0);
