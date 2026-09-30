@@ -211,11 +211,13 @@ export async function sendToKitchen(sessionId, staff) {
           // Касса должна быть на связи: иначе iiko примет заказ, но он зависнет и не дойдёт до кассы
           if (!demo) {
             const picked = await pickAliveTerminalGroup(src.organization_id, terminalGroupId).catch(() => null);
-            if (picked && picked.id && picked.id !== terminalGroupId) {
+            const current = picked?.list.find((t) => t.id === terminalGroupId);
+            // Переключаемся, только если выбранная касса точно не на связи (у бара на отдельной кассе — не трогаем)
+            if (picked && picked.id && picked.id !== terminalGroupId && current?.isAlive === false && !src.orderOverride) {
               terminalGroupId = picked.id;
               await saveTerminalGroup(restaurant.id, code, terminalGroupId);
               tableId = null;
-            } else if (picked && !picked.id && picked.list.some((t) => t.id === terminalGroupId && t.isAlive === false)) {
+            } else if (current?.isAlive === false) {
               throw new Error(`Касса ${code === MAIN ? 'кухни' : `«${src.name || code}»`} в iiko не на связи — включите iikoFront на этой кассе и повторите. `
                 + `Кассы: ${picked.list.map((t) => `${t.name || t.id}${t.isAlive ? ' — на связи' : t.isAlive === false ? ' — не на связи' : ''}`).join('; ')}`);
             }
@@ -228,7 +230,7 @@ export async function sendToKitchen(sessionId, staff) {
             if (demo || !isTerminalGroupError(e)) throw e;
             // iiko не принял заказ через эту кассу — пробуем другие терминальные группы организации
             const { list } = await pickAliveTerminalGroup(src.organization_id, terminalGroupId);
-            const others = list.filter((t) => t.id !== terminalGroupId && t.isAlive !== false)
+            const others = src.orderOverride ? [] : list.filter((t) => t.id !== terminalGroupId && t.isAlive !== false && !/бар|bar/i.test(t.name || ''))
               .sort((x, y) => Number(Boolean(y.isAlive)) - Number(Boolean(x.isAlive)));
             let lastErr = e;
             const cacheKey = code === MAIN ? String(session.table_number) : `${code}:${session.table_number}`;

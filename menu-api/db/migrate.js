@@ -386,6 +386,11 @@ const SCHEMA = `
     updated_at TIMESTAMPTZ DEFAULT NOW()
   );
   -- Типы оплат iiko кухни для оплаты официанту (пусто — ищутся автоматически: «Наличные», «Банковские карты»)
+  -- Куда отправлять заказы источника, если это другая касса, чем у его меню (бар: меню — барным ключом,
+  -- заказ — на кассу «Ново-Садовая Бар», которая видна основному ключу)
+  ALTER TABLE restaurant_sources ADD COLUMN IF NOT EXISTS order_creds VARCHAR(30);
+  ALTER TABLE restaurant_sources ADD COLUMN IF NOT EXISTS order_organization_id UUID;
+  ALTER TABLE restaurant_sources ADD COLUMN IF NOT EXISTS order_terminal_group_id UUID;
   ALTER TABLE restaurant_payment_settings ADD COLUMN IF NOT EXISTS iiko_cash_type_id VARCHAR(64);
   ALTER TABLE restaurant_payment_settings ADD COLUMN IF NOT EXISTS iiko_card_type_id VARCHAR(64);
   -- Телефоны официантов для push-уведомлений (Firebase Cloud Messaging)
