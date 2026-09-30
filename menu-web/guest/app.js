@@ -619,7 +619,7 @@
     if (b.productId) { openProduct(b.productId); return; }
     if (b.categoryId) {
       if (S.tab !== 'menu') go('menu');
-      setTimeout(() => document.getElementById(`cat-${b.categoryId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+      setTimeout(() => scrollToCategory(b.categoryId), 80);
       return;
     }
     if (b.url && /^https?:\/\//.test(b.url)) window.open(b.url, '_blank', 'noopener');
@@ -651,9 +651,9 @@
         ${ICONS.search}<input id="search" type="search" placeholder="Поиск по меню" value="${esc(S.menu.search)}" aria-label="Поиск">
       </form>
       ${S.menu.search ? '' : bannersHtml('menu')}
-      ${S.menu.search ? '' : `<div class="cats" id="cats"><button class="cats__all" data-action="all-cats" aria-label="Все разделы меню">${ICONS.grid}</button>${sections.map((s) => `<button data-cat="${esc(s.id)}">${esc(s.name)}</button>`).join('')}</div>`}
-      ${sections.length ? sections.map((s) => `<h2 class="section-title" id="cat-${esc(s.id)}">${esc(s.name)}</h2>
-        <div class="list">${s.items.map((p) => dishCard(p)).join('')}</div>`).join('')
+      ${S.menu.search ? '' : `<div class="cats" id="cats"><button class="cats__all" data-action="all-cats" aria-label="Все разделы меню">${ICONS.grid}</button>${sections.map((s) => `<button data-cat="${esc(s.id)}" class="${String(S.activeCat) === String(s.id) ? 'is-active' : ''}">${esc(s.name)}</button>`).join('')}</div>`}
+      ${sections.length ? sections.map((s, i) => `<h2 class="section-title" id="cat-${esc(s.id)}">${esc(s.name)}</h2>
+        <div class="list ${i === sections.length - 1 && !S.menu.search ? 'list--last' : ''}">${s.items.map((p) => dishCard(p)).join('')}</div>`).join('')
     : S.catalog.products?.length
       ? `<div class="empty"><div class="orb orb--md"></div>Ничего не нашлось. Спросите AI — он подберёт похожее.</div>`
       : `<div class="empty"><div class="orb orb--md"></div>Меню ресторана ещё загружается из iiko.<br>Загляните чуть позже или позовите официанта.</div>`}
@@ -1056,28 +1056,54 @@
         const b = e.target.closest('[data-cat-jump]');
         if (!b) return;
         closeSheet();
-        setTimeout(() => document.getElementById(`cat-${b.dataset.catJump}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+        setTimeout(() => scrollToCategory(b.dataset.catJump), 60);
       });
     });
   }
 
+  /** Высота закреплённой сверху части: шапка + строка категорий (с вырезом камеры и полноэкранным режимом). */
+  function stickyOffset() {
+    const top = document.querySelector('.topbar')?.offsetHeight || 0;
+    const bar = document.getElementById('cats')?.offsetHeight || 0;
+    return top + bar + 8;
+  }
+  function markCategory(id, center = true) {
+    const bar = document.getElementById('cats');
+    const chip = id && bar?.querySelector(`[data-cat="${CSS.escape(String(id))}"]`);
+    if (!chip) return;
+    S.activeCat = id;
+    bar.querySelectorAll('[data-cat]').forEach((b) => b.classList.toggle('is-active', b === chip));
+    if (center) bar.scrollTo({ left: chip.offsetLeft - bar.clientWidth / 2 + chip.clientWidth / 2, behavior: 'smooth' });
+  }
+  // Пока меню едет к выбранному разделу, подсветка не перескакивает на промежуточные
+  let spyLockUntil = 0;
+  function scrollToCategory(id) {
+    const el = document.getElementById(`cat-${id}`);
+    if (!el) return;
+    setTopbarHeight();
+    markCategory(id);
+    spyLockUntil = Date.now() + 1200;
+    const top = el.getBoundingClientRect().top + scrollY - stickyOffset();
+    scrollTo({ top: Math.max(0, top), behavior: 'smooth' });
+  }
+  addEventListener('scrollend', () => { spyLockUntil = 0; });
+
   // Подсветка раздела при прокрутке: активная категория видна в строке
   let spyFrame = 0;
   addEventListener('scroll', () => {
-    if (S.tab !== 'menu' || spyFrame) return;
+    if (S.tab !== 'menu' || spyFrame || Date.now() < spyLockUntil) return;
     spyFrame = requestAnimationFrame(() => {
       spyFrame = 0;
+      setTopbarHeight();
       const bar = document.getElementById('cats');
       if (!bar) return;
       const titles = [...document.querySelectorAll('.section-title')];
-      const line = bar.getBoundingClientRect().bottom + 12;
+      const line = stickyOffset() + 4;
       let cur = titles[0];
       for (const t of titles) { if (t.getBoundingClientRect().top <= line) cur = t; else break; }
       const id = cur?.id?.slice(4);
-      const chip = id && bar.querySelector(`[data-cat="${CSS.escape(id)}"]`);
-      if (!chip || chip.classList.contains('is-active')) return;
-      bar.querySelectorAll('[data-cat]').forEach((b) => b.classList.toggle('is-active', b === chip));
-      bar.scrollTo({ left: chip.offsetLeft - bar.clientWidth / 2 + chip.clientWidth / 2, behavior: 'smooth' });
+      if (!id || bar.querySelector('.is-active')?.dataset.cat === id) return;
+      markCategory(id);
     });
   }, { passive: true });
 
@@ -1194,6 +1220,26 @@
     } else {
       morph(app, Object.assign(app.cloneNode(false), { innerHTML: html }));
     }
+    watchTopbar();
+  }
+
+  // Строка категорий прилипает ровно под шапкой, какой бы высоты та ни была (вырез камеры, полный экран)
+  let topbarObserved = null;
+  const topbarRO = typeof ResizeObserver === 'function'
+    ? new ResizeObserver(() => setTopbarHeight()) : null;
+  function setTopbarHeight() {
+    const h = document.querySelector('.topbar')?.offsetHeight;
+    if (h) document.documentElement.style.setProperty('--topbar-h', `${h}px`);
+  }
+  addEventListener('resize', () => setTopbarHeight());
+  document.addEventListener('fullscreenchange', () => setTimeout(setTopbarHeight, 50));
+  function watchTopbar() {
+    const el = document.querySelector('.topbar');
+    setTopbarHeight();
+    if (!topbarRO || !el || el === topbarObserved) return;
+    if (topbarObserved) topbarRO.unobserve(topbarObserved);
+    topbarRO.observe(el);
+    topbarObserved = el;
   }
 
   document.addEventListener('click', (e) => {
@@ -1227,8 +1273,7 @@
     if (t.closest('[data-retry]')) { askAi(S.ai.query); return; }
     const cat = t.closest('[data-cat]');
     if (cat) {
-      document.querySelectorAll('#cats button').forEach((b) => b.classList.toggle('is-active', b === cat));
-      document.getElementById(`cat-${cat.dataset.cat}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      scrollToCategory(cat.dataset.cat);
       return;
     }
     const card = t.closest('#app .dish');

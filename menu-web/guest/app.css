@@ -236,7 +236,7 @@ img { display: block; }
 .search { margin: 4px 0 12px; min-height: 56px; padding: 6px 8px 6px 20px; }
 .search svg { width: 20px; height: 20px; color: var(--muted); flex-shrink: 0; }
 .cats {
-  position: sticky; top: calc(60px + var(--safe-t)); z-index: 15; margin: 0 -16px; padding: 6px 16px 10px;
+  position: sticky; top: var(--topbar-h, calc(60px + var(--safe-t))); z-index: 15; margin: 0 -16px; padding: 6px 16px 10px;
   display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; background: var(--bg);
 }
 .cats::-webkit-scrollbar { display: none; }
@@ -525,3 +525,6 @@ html { scroll-behavior: smooth; -webkit-tap-highlight-color: transparent; }
 .bill-guest__name { flex: 1; min-width: 0; font-weight: 500; }
 .bill-guest__name i { font-style: normal; color: var(--muted); font-weight: 400; }
 .bill-guest--note { cursor: default; color: var(--muted); }
+
+/* Последний раздел тоже можно прокрутить под строку категорий */
+.list--last { min-height: calc(100dvh - var(--topbar-h, 60px) - 170px); align-content: start; }
