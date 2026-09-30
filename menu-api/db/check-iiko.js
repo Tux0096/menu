@@ -42,10 +42,42 @@ async function main() {
   }
   await printPaymentTypes('iiko', headers, rows.filter((r) => visible.has(r.organization_id)).map((r) => r.organization_id));
   for (const r of rows.filter((x) => visible.has(x.organization_id))) await checkTerminalGroups(headers, r);
+  await diagnoseOrders(headers, rows.filter((x) => visible.has(x.organization_id)));
   if (!rows.some((r) => visible.has(r.organization_id))) {
     console.log('ВНИМАНИЕ: ни один ресторан меню не подключён к ключу — добавьте точки в iiko (Cloud API → интеграция → Подключенные точки)');
   }
   for (const creds of iikoCredsList().filter(Boolean)) await checkExtraKey(creds);
+}
+
+/**
+ * Диагностика заказов на стол (только чтение, заказы не создаются): какую версию сервера iiko знает облако
+ * и проходит ли запрос заказов стола (он проверяет ту же версию, что и создание заказа).
+ */
+async function diagnoseOrders(headers, rests) {
+  const post = (path, body) => axios.post(`${IIKO_URL}${path}`, body, { headers, timeout: 15000 }).then((x) => x.data);
+  try {
+    const { organizations = [] } = await post('/api/1/organizations', { returnAdditionalInfo: true, includeDisabled: true });
+    for (const o of organizations) {
+      const extra = Object.entries(o).filter(([k, v]) => !['id', 'name'].includes(k) && v != null && typeof v !== 'object')
+        .map(([k, v]) => `${k}=${v}`).join(', ');
+      console.log(`iiko организация ${o.name} [${o.id}]: ${extra}`);
+    }
+  } catch (e) { console.log('iiko: сведения об организации не получены —', e.response?.data?.errorDescription || e.message); }
+  for (const r of rests) {
+    try {
+      const { rows } = await pool.query(
+        "SELECT iiko_table_id FROM restaurant_table_cache WHERE restaurant_id = $1 AND table_number NOT LIKE '%:%' AND iiko_table_id IS NOT NULL LIMIT 3",
+        [r.id],
+      );
+      if (!rows.length) { console.log(`${r.name}: проверка заказов стола — нет известных столов`); continue; }
+      const data = await post('/api/1/order/by_table', {
+        organizationIds: [r.organization_id], tableIds: rows.map((x) => x.iiko_table_id), statuses: ['New', 'Bill'],
+      });
+      console.log(`${r.name}: запрос заказов стола в iiko проходит (заказов: ${(data.orders || []).length})`);
+    } catch (e) {
+      console.log(`${r.name}: запрос заказов стола — ОШИБКА iiko ${e.response?.status || ''}: ${e.response?.data?.errorDescription || e.message}`);
+    }
+  }
 }
 
 /**
@@ -105,10 +137,10 @@ async function checkExtraKey(creds) {
   try {
     console.log(`iiko ${creds}: ключ ${maskIikoKey(iikoApiLogin(creds))}`);
     const headers = { Authorization: `Bearer ${await requestIikoTokenFor(creds)}` };
-    const { data } = await axios.post(`${IIKO_URL}/api/1/organizations`, { returnAdditionalInfo: false, includeDisabled: false }, { headers, timeout: 15000 });
+    const { data } = await axios.post(`${IIKO_URL}/api/1/organizations`, { returnAdditionalInfo: true, includeDisabled: false }, { headers, timeout: 15000 });
     const orgs = data.organizations || [];
     console.log(`iiko ${creds}: доступно организаций — ${orgs.length}`);
-    for (const o of orgs) console.log(`  ${o.id}  ${o.name}`);
+    for (const o of orgs) console.log(`  ${o.id}  ${o.name}${o.version ? ` · версия сервера iiko ${o.version}` : ''}`);
     let menus = [];
     try {
       menus = (await axios.post(`${IIKO_URL}/api/2/menu`, {}, { headers, timeout: 15000 })).data.externalMenus || [];
