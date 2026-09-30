@@ -70,14 +70,28 @@ export async function takeSession(sessionId, staff) {
  * Официант правит состав (кейс 7): количество гостей, позиции, места (seatNumber), курс подачи.
  * Уже отправленные на кухню позиции не удаляются — только меняется место/курс.
  */
-export async function updateOrder(sessionId, staff, { items = [], guestCount } = {}) {
+/** Имена мест от официанта: { "3": "Мария" } — место 1–30, имя до 40 символов, пустое — удалить. */
+function cleanSeatNames(current, patch) {
+  const out = { ...(current || {}) };
+  for (const [k, v] of Object.entries(patch || {})) {
+    const seat = Math.floor(Number(k));
+    if (!(seat >= 1 && seat <= 30)) continue;
+    const name = String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, 40);
+    if (name) out[seat] = name; else delete out[seat];
+  }
+  return out;
+}
+
+export async function updateOrder(sessionId, staff, { items = [], guestCount, seatNames } = {}) {
   await withTransaction(async (client) => {
     const ctx = await lockSession(client, sessionId);
     assertEditable(ctx, staff);
     const lockedIds = new Set(ctx.items.filter((i) => i.is_locked).map((i) => i.id));
-    // Место = гость за столом (по порядку присоединения); место без гостя — просто номер места
+    // Место = гость за столом (по порядку присоединения); место без гостя — имя от официанта или номер места
     const guests = tableGuests(ctx);
-    const guestOf = (seat) => guests.find((g) => g.seat === Number(seat)) || null;
+    const names = seatNames ? cleanSeatNames(ctx.session.seat_names, seatNames) : (ctx.session.seat_names || {});
+    const guestOf = (seat) => guests.find((g) => g.seat === Number(seat))
+      || (names[Number(seat)] ? { id: null, name: names[Number(seat)] } : null);
 
     for (const it of items.filter((i) => i.id && lockedIds.has(i.id))) {
       const g = guestOf(it.seatNumber);
@@ -115,9 +129,9 @@ export async function updateOrder(sessionId, staff, { items = [], guestCount } =
          workflow_status = CASE WHEN workflow_status IN ('browsing','building_cart','cart_ready','reorder_pending')
                                 THEN 'waiter_review' ELSE workflow_status END,
          locked_by = $3, locked_until = NOW() + ($4 || ' milliseconds')::interval,
-         waiter_id = COALESCE(waiter_id, $3), updated_at = NOW()
+         waiter_id = COALESCE(waiter_id, $3), seat_names = $5::jsonb, updated_at = NOW()
        WHERE id = $1`,
-      [sessionId, gc, staff.id, String(EDIT_LOCK_MS)],
+      [sessionId, gc, staff.id, String(EDIT_LOCK_MS), JSON.stringify(names)],
     );
   });
   return getSessionView(sessionId);

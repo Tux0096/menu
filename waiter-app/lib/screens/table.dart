@@ -174,6 +174,37 @@ class _TableScreenState extends State<TableScreen> {
     );
   }
 
+  /// Имя гостя, которого добавил официант: «Мария» вместо «Гость 3».
+  Future<void> _nameSeat(int seat) async {
+    final ctrl = TextEditingController(text: cart.seatNames['$seat'] ?? '');
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Гость $seat'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              maxLength: 40,
+              textCapitalization: TextCapitalization.words,
+              decoration: const InputDecoration(hintText: 'Например, Мария', fillColor: C.bg),
+              onSubmitted: (v) => Navigator.pop(ctx, v),
+            ),
+            const Text('Имя увидят кухня и гости за столом.', style: TextStyle(color: C.muted, fontSize: 12)),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Пропустить')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctrl.text), child: const Text('Сохранить')),
+        ],
+      ),
+    );
+    if (name != null) cart.setSeatName(seat, name);
+  }
+
   Future<void> _close() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -316,7 +347,11 @@ class _TableScreenState extends State<TableScreen> {
             onMinus: cart.guestCount > [cart.guests.length, 1].reduce((a, b) => a > b ? a : b)
                 ? () => cart.setGuestCount(cart.guestCount - 1)
                 : null,
-            onPlus: () => cart.setGuestCount(cart.guestCount + 1),
+            onPlus: () {
+              cart.setGuestCount(cart.guestCount + 1);
+              // Новый гость — сразу предлагаем назвать (можно пропустить)
+              _nameSeat(cart.seats.last);
+            },
           ),
         ],
       ),
@@ -346,7 +381,25 @@ class _TableScreenState extends State<TableScreen> {
           ),
           const SizedBox(width: 10),
           Expanded(
-            child: Text(cart.seatName(seat), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
+            child: seat != null && !cart.isJoinedGuest(seat) && !_readOnly
+                ? InkWell(
+                    borderRadius: BorderRadius.circular(8),
+                    onTap: () => _nameSeat(seat),
+                    child: Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            cart.seatName(seat),
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        const Icon(Icons.edit_outlined, size: 16, color: C.muted),
+                      ],
+                    ),
+                  )
+                : Text(cart.seatName(seat), style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700)),
           ),
           if (list.isNotEmpty) Text(rub(sum), style: const TextStyle(color: C.muted)),
           if (!_readOnly)
