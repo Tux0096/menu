@@ -40,10 +40,25 @@ async function main() {
   } catch (e) {
     console.log('Внешние меню iiko: не удалось получить —', e.response?.status || '', e.response?.data?.errorDescription || e.message);
   }
-    if (!rows.some((r) => visible.has(r.organization_id))) {
+  await printPaymentTypes('iiko', headers, rows.filter((r) => visible.has(r.organization_id)).map((r) => r.organization_id));
+  if (!rows.some((r) => visible.has(r.organization_id))) {
     console.log('ВНИМАНИЕ: ни один ресторан меню не подключён к ключу — добавьте точки в iiko (Cloud API → интеграция → Подключенные точки)');
   }
   for (const creds of iikoCredsList().filter(Boolean)) await checkExtraKey(creds);
+}
+
+/** Типы оплат организаций — какой взять для онлайн-оплаты (IIKO_PAYMENT_TYPE_ID или название «Онлайн»). */
+async function printPaymentTypes(label, headers, orgIds) {
+  if (!orgIds.length) return;
+  try {
+    const { data } = await axios.post(`${IIKO_URL}/api/1/payment_types`, { organizationIds: orgIds }, { headers, timeout: 15000 });
+    const list = (data.paymentTypes || []).filter((t) => !t.isDeleted);
+    const online = list.find((t) => /онлайн|online|qr|cloud|интернет/i.test(t.name));
+    console.log(`${label}: типы оплат — ${list.map((t) => `${t.name} (${t.paymentTypeKind}) [${t.id}]`).join('; ') || 'нет'}`);
+    console.log(`${label}: для онлайн-оплаты ${online ? `возьмётся «${online.name}»` : 'нет типа «Онлайн» — создайте его в iiko или задайте секрет с ID'}`);
+  } catch (e) {
+    console.log(`${label}: типы оплат не получены —`, e.response?.status || '', e.response?.data?.errorDescription || e.message);
+  }
 }
 
 /**
@@ -65,6 +80,7 @@ async function checkExtraKey(creds) {
       menus = (await axios.post(`${IIKO_URL}/api/2/menu`, {}, { headers, timeout: 15000 })).data.externalMenus || [];
     } catch { /* нет внешних меню */ }
     console.log(`iiko ${creds}: внешние меню — ${menus.length ? menus.map((m) => `${m.name} [${m.id}]`).join('; ') : 'нет'}`);
+    await printPaymentTypes(`iiko ${creds}`, headers, orgs.map((o) => o.id));
 
     const slug = process.env.QR_RESTAURANT_SLUG || 'novo-sadovaya';
     const { rows: rest } = await pool.query('SELECT id, name FROM restaurants WHERE slug = $1', [slug]);

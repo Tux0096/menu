@@ -369,6 +369,12 @@ const SCHEMA = `
   ALTER TABLE menu_overrides ADD COLUMN IF NOT EXISTS priority INT NOT NULL DEFAULT 0;
   -- «Живое» меню: короткое видео блюда вместо фото (MP4/WebM), фото остаётся обложкой
   ALTER TABLE menu_overrides ADD COLUMN IF NOT EXISTS video_url TEXT;
+  -- Онлайн-оплата (CloudPayments): номер счёта, транзакция, кто платил
+  ALTER TABLE table_payments ADD COLUMN IF NOT EXISTS invoice_id VARCHAR(64);
+  ALTER TABLE table_payments ADD COLUMN IF NOT EXISTS transaction_id VARCHAR(64);
+  ALTER TABLE table_payments ADD COLUMN IF NOT EXISTS guest_id UUID;
+  ALTER TABLE table_payments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_table_payments_invoice ON table_payments (invoice_id) WHERE invoice_id IS NOT NULL;
   -- Телефоны официантов для push-уведомлений (Firebase Cloud Messaging)
   CREATE TABLE IF NOT EXISTS waiter_devices (
     token TEXT PRIMARY KEY,

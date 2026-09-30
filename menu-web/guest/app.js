@@ -893,7 +893,7 @@
     const draw = () => {
       const qty = S.cart[String(p.id)]?.qty || 0;
       const stopped = isStopped(p);
-      return `${imgHtml(p, 'product-hero', 720)}
+      return `<div class="hero-wrap">${imgHtml(p, 'product-hero', 720)}${qty && !stopped ? `<span class="dish__count dish__count--hero" aria-label="В заказе ${qty}">${qty}</span>` : ''}</div>
         <h2 style="margin-top:16px">${esc(p.name)}</h2>
         <div class="dish__price" style="margin:0 4px 12px"><b>${rub(p.price)}</b>${p.weight ? `<span>${esc(p.weight)}</span>` : ''}${stopped ? '<span class="tag tag--stop">Нет в наличии</span>' : ''}</div>
         ${p.description ? `<p class="muted" style="margin:0 4px;font-size:15px;line-height:1.45">${esc(p.description)}</p>` : ''}
@@ -908,13 +908,47 @@
         const inc = e.target.closest('[data-inc]'); const dec = e.target.closest('[data-dec]');
         if (inc) changeQty(p, 1); else if (dec) changeQty(p, -1); else return;
         e.stopPropagation();
-        $('#product-sheet').innerHTML = draw();
+        $('#product-sheet').innerHTML = draw(); watchLiveVideos($('#product-sheet'));
       });
     });
   }
 
+  // ── Онлайн-оплата CloudPayments ─────────────────────────────
+  function loadCpWidget() {
+    if (window.cp?.CloudPayments) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const sc = document.createElement('script');
+      sc.src = 'https://widget.cloudpayments.ru/bundles/cloudpayments.js';
+      sc.onload = () => resolve();
+      sc.onerror = () => reject(new Error('Не удалось открыть оплату — проверьте интернет'));
+      document.head.append(sc);
+    });
+  }
+  /** Виджет CloudPayments → проверка оплаты на сервере по номеру счёта (колбэка нет). */
+  async function runOnlinePay(tip) {
+    const p = await api('POST', '/api/v1/table/pay/start', { sessionId: S.sessionId, tipAmount: tip });
+    await loadCpWidget();
+    await new Promise((resolve) => {
+      const widget = new window.cp.CloudPayments({ language: 'ru-RU' });
+      widget.pay('charge', {
+        publicId: p.publicId, description: p.description, amount: p.amount, currency: 'RUB',
+        invoiceId: p.invoiceId, accountId: p.accountId, skin: 'mini',
+      }, { onSuccess: resolve, onFail: resolve, onComplete: () => {} });
+    });
+    // Статус спрашиваем у сервера несколько раз: банку нужно пару секунд
+    for (let i = 0; i < 8; i++) {
+      const r = await api('POST', '/api/v1/table/pay/confirm', { sessionId: S.sessionId, invoiceId: p.invoiceId });
+      if (r.session) applySession(r.session);
+      if (r.status === 'completed') return 'ok';
+      if (r.status === 'failed') throw new Error(r.reason ? `Оплата не прошла: ${r.reason}` : 'Оплата не прошла');
+      await new Promise((res) => setTimeout(res, 2000));
+    }
+    return 'pending';
+  }
+
   function openPaySheet() {
     const s = S.session;
+    const online = Boolean(S.config?.onlinePay);
     const methods = S.config?.paymentMethods || [];
     const tips = S.config?.tipPresets || [0, 10, 15, 20];
     const st = { method: methods[0]?.id || 'sbp', tipPct: 10, tipCustom: null, paying: false };
@@ -925,14 +959,14 @@
         <div class="sum-rows"><span>Заказ</span><span>${rub(s.total)}</span></div>
         <div class="sum-rows"><span>Чаевые официанту</span><span>${rub(tipAmount())}</span></div>
       </div>
-      <div class="label">Способ оплаты</div>
-      <div class="opt-grid" style="grid-template-columns:1fr 1fr">${methods.map((m) => `<button class="opt ${st.method === m.id ? 'is-active' : ''}" data-method="${m.id}">${esc(m.label)}</button>`).join('')}</div>
+      ${online ? '' : `<div class="label">Способ оплаты</div>
+      <div class="opt-grid" style="grid-template-columns:1fr 1fr">${methods.map((m) => `<button class="opt ${st.method === m.id ? 'is-active' : ''}" data-method="${m.id}">${esc(m.label)}</button>`).join('')}</div>`}
       <div class="label">Чаевые</div>
       <div class="opt-grid">${tips.map((t) => `<button class="opt ${st.tipCustom == null && st.tipPct === t ? 'is-active' : ''}" data-tip="${t}">${t ? `${t}%` : 'Без чаевых'}</button>`).join('')}
         <button class="opt ${st.tipCustom != null ? 'is-active' : ''}" data-tip="custom">Своя сумма</button></div>
       ${st.tipCustom != null ? `<div class="pill-input" style="min-height:56px;margin-bottom:16px"><input id="tip-custom" type="number" inputmode="numeric" min="0" placeholder="Сумма чаевых, ₽" value="${st.tipCustom || ''}"></div>` : ''}
       <button class="btn btn--dark" data-pay ${st.paying ? 'disabled' : ''}><span>${st.paying ? 'Оплачиваем…' : `Оплатить ${rub(s.total + tipAmount())}`}</span><span class="round-btn">${st.paying ? '<div class="spinner spinner--dark"></div>' : ICONS.arrowRight}</span></button>
-      <p class="muted" style="font-size:12px;text-align:center;margin-top:12px">Демо-оплата: платёжный провайдер подключается по выбору заказчика. Реквизиты карт не хранятся.</p>`;
+      <p class="muted" style="font-size:12px;text-align:center;margin-top:12px">${online ? 'Картой, СБП или SberPay через CloudPayments. Данные карты не попадают в меню.' : 'Демо-оплата: платёжный провайдер подключается по выбору заказчика. Реквизиты карт не хранятся.'}</p>`;
     openSheet('<div id="pay-sheet"></div>', (sheet) => {
       const box = $('#pay-sheet'); box.innerHTML = draw();
       sheet.addEventListener('input', (e) => {
@@ -950,6 +984,13 @@
         else if (pay && !st.paying) {
           st.paying = true; box.innerHTML = draw();
           try {
+            if (online) {
+              const res = await runOnlinePay(tipAmount());
+              render();
+              if (res === 'ok') { toast('Оплачено, спасибо!'); openFeedbackSheet(); return; }
+              toast('Проверяем оплату — статус обновится в течение минуты');
+              closeSheet(); refreshSession(true); return;
+            }
             const session = await api('POST', '/api/v1/table/guest-pay', { sessionId: S.sessionId, method: st.method, tipAmount: tipAmount() });
             applySession(session); render();
             openFeedbackSheet();
