@@ -361,6 +361,8 @@ const SCHEMA = `
   ALTER TABLE promo_blocks ADD COLUMN IF NOT EXISTS ends_at TIMESTAMPTZ;
   -- Запрос счёта: за кого платит гость (весь стол, только свой заказ или выбранные гости)
   ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS bill_requests JSONB NOT NULL DEFAULT '[]';
+  -- Имена гостей, которых добавил официант (место → имя): «Мария» вместо «Гость 3»
+  ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS seat_names JSONB NOT NULL DEFAULT '{}';
   -- Телефоны официантов для push-уведомлений (Firebase Cloud Messaging)
   CREATE TABLE IF NOT EXISTS waiter_devices (
     token TEXT PRIMARY KEY,

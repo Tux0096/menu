@@ -213,6 +213,7 @@ export function mapSession({ session, restaurant, items, guests = [] }, extra = 
     sentToProductionAt: session.sent_to_production_at,
     billRequestedAt: session.bill_requested_at,
     billRequests: session.bill_requests || [],
+    seatNames: session.seat_names || {},
     paidAt: session.paid_at,
     lastGuestActivityAt: session.last_guest_activity_at,
     waitingMinutes,

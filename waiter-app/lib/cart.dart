@@ -7,12 +7,16 @@ class TableCart extends ChangeNotifier {
   int guestCount = 1;
   int version = 0;
 
+  /// Имена гостей, которых добавил официант: место → имя.
+  Map<String, String> seatNames = {};
+
   void loadFrom(Map<String, dynamic> s) {
     items = List<Map<String, dynamic>>.from((s['items'] as List? ?? const []).map((e) => Map<String, dynamic>.from(e)));
     guests = List<Map<String, dynamic>>.from(
       (s['guests'] as List? ?? const []).map((e) => Map<String, dynamic>.from(e)),
     );
     guestCount = (s['guestCount'] as num?)?.toInt() ?? 1;
+    seatNames = {for (final e in ((s['seatNames'] as Map?) ?? const {}).entries) e.key.toString(): e.value.toString()};
     notifyListeners();
   }
 
@@ -24,7 +28,17 @@ class TableCart extends ChangeNotifier {
   String seatName(int? seat) {
     if (seat == null) return 'Без гостя';
     final g = guests.where((g) => g['seat'] == seat).firstOrNull;
-    return g != null ? g['name'].toString() : 'Гость $seat';
+    if (g != null) return g['name'].toString();
+    final named = seatNames['$seat'];
+    return named != null && named.isNotEmpty ? named : 'Гость $seat';
+  }
+
+  /// Гость присоединился сам (по QR) — его имя не меняем.
+  bool isJoinedGuest(int seat) => guests.any((g) => g['seat'] == seat);
+
+  void setSeatName(int seat, String name) {
+    seatNames = {...seatNames, '$seat': name.trim()};
+    _changed();
   }
 
   static int? seatOf(Map<String, dynamic> it) => (it['seatNumber'] as num?)?.toInt();
@@ -102,6 +116,7 @@ class TableCart extends ChangeNotifier {
 
   Map<String, dynamic> toBody() => {
     'guestCount': guestCount,
+    'seatNames': seatNames,
     'items': items
         .map(
           (i) => {

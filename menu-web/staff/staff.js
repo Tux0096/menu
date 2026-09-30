@@ -168,7 +168,7 @@
     if (!S.lastUnreadIds.size) S.lastUnreadIds.add('__none__');
     S.notes = notes; S.sessions = sessions;
     const open = sessions.find((x) => x.sessionId === S.openId);
-    if (open && S.edit && !S.edit.dirty) S.edit = { items: open.items.map((i) => ({ ...i })), guestCount: open.guestCount, dirty: false };
+    if (open && S.edit && !S.edit.dirty) S.edit = { items: open.items.map((i) => ({ ...i })), guestCount: open.guestCount, seatNames: { ...(open.seatNames || {}) }, dirty: false };
   }
 
   function statusPill(s) {
@@ -185,7 +185,7 @@
     const total = e.items.reduce((sum, i) => sum + i.price * i.quantity, 0);
     const guests = s.guests || [];
     const seats = Array.from({ length: Math.max(e.guestCount, guests.length, 1) }, (_, i) => i + 1);
-    const nameOf = (n) => guests.find((g) => g.seat === n)?.name || `Гость ${n}`;
+    const nameOf = (n) => guests.find((g) => g.seat === n)?.name || e.seatNames?.[n] || `Гость ${n}`;
     const lockedByOther = s.lockedBy && s.lockedBy !== S.staff.id;
     const pending = e.items.filter((i) => !i.isLocked);
     const pendingQty = pending.reduce((n, i) => n + i.quantity, 0);
@@ -235,7 +235,9 @@
       <div class="gbar">
         <span class="muted">Гостей</span>
         <div class="qty"><button class="icon-btn" data-guests="-1" aria-label="Меньше гостей">−</button><b>${e.guestCount}</b><button class="icon-btn" data-guests="1" aria-label="Больше гостей">+</button></div>
-        <div class="gbar__names">${guests.map((g) => `<span class="gchip"><b>${g.seat}</b> ${esc(g.name)}</span>`).join('')}</div>
+        <div class="gbar__names">${seats.map((n) => (guests.some((g) => g.seat === n)
+    ? `<span class="gchip"><b>${n}</b> ${esc(nameOf(n))}</span>`
+    : `<button class="gchip gchip--edit" data-seat-name="${n}" title="Назвать гостя"><b>${n}</b> ${esc(nameOf(n))} <span class="muted">✎</span></button>`)).join('')}</div>
       </div>
       <div class="tscreen__items">${blocks || '<div class="empty-note">Заказа пока нет. Нажмите «+ Блюдо», чтобы добавить из меню.</div>'}</div>
       <div class="tscreen__total"><span class="muted">Итого по столу</span><b>${rub(total)}</b></div>
@@ -714,6 +716,25 @@
     });
   }
 
+  /** Имя гостя, которого добавил официант: «Мария» вместо «Гость 3». */
+  function openSeatNameForm(seat) {
+    const current = S.edit?.seatNames?.[seat] || '';
+    modal(`<div class="h2">Гость ${seat}</div><form id="seat-name-form">
+      <div class="field"><label>Имя гостя</label><input class="inp" name="name" maxlength="40" autocomplete="off" placeholder="Например, Мария" value="${esc(current)}"></div>
+      <p class="muted" style="font-size:12px;margin:8px 4px 0">Имя увидят кухня (в комментарии к блюду) и гости за столом. Можно оставить пустым.</p>
+      <div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить</button><button class="btn" type="button" data-modal-close>Пропустить</button></div></form>`, (root) => {
+      const input = root.querySelector('[name=name]');
+      setTimeout(() => input.focus(), 50);
+      $('#seat-name-form', root).addEventListener('submit', (e) => {
+        e.preventDefault();
+        if (!S.edit) return closeModal();
+        S.edit.seatNames = { ...(S.edit.seatNames || {}), [seat]: input.value.trim() };
+        closeModal();
+        changed();
+      });
+    });
+  }
+
   function openStaffForm(u = {}) {
     modal(`<div class="h2">${u.id ? 'Сотрудник' : 'Новый сотрудник'}</div><form id="staff-form"><div class="form-grid">
       <div class="field"><label>Имя</label><input class="inp" name="name" value="${esc(u.name || '')}" required></div>
@@ -752,11 +773,11 @@
       const s = await api('POST', `/api/v1/waiter/session/${sessionId}/take`);
       const idx = S.sessions.findIndex((x) => x.sessionId === sessionId);
       if (idx >= 0) S.sessions[idx] = s; else S.sessions.unshift(s);
-      S.edit = { items: s.items.map((i) => ({ ...i })), guestCount: s.guestCount, dirty: false };
+      S.edit = { items: s.items.map((i) => ({ ...i })), guestCount: s.guestCount, seatNames: { ...(s.seatNames || {}) }, dirty: false };
     } catch (e) {
       toast(e.message, true);
       const s = await api('GET', `/api/v1/waiter/session/${sessionId}`);
-      S.edit = { items: s.items.map((i) => ({ ...i })), guestCount: s.guestCount, dirty: false };
+      S.edit = { items: s.items.map((i) => ({ ...i })), guestCount: s.guestCount, seatNames: { ...(s.seatNames || {}) }, dirty: false };
     }
     // Меню ресторана — свежее при каждом открытии стола (стоп-лист мог измениться)
     const slug = S.restaurant || S.restaurants[0]?.slug;
@@ -768,11 +789,11 @@
 
   async function saveEdit() {
     const version = S.editVersion || 0;
-    const s = await api('POST', `/api/v1/waiter/session/${S.openId}/cart`, { items: S.edit.items, guestCount: S.edit.guestCount });
+    const s = await api('POST', `/api/v1/waiter/session/${S.openId}/cart`, { items: S.edit.items, guestCount: S.edit.guestCount, seatNames: S.edit.seatNames || {} });
     const i = S.sessions.findIndex((x) => x.sessionId === S.openId);
     if (i >= 0) S.sessions[i] = s;
     // Пока сохраняли, официант мог ещё что-то поменять — тогда локальные правки не затираем
-    if ((S.editVersion || 0) === version) S.edit = { items: s.items.map((it) => ({ ...it })), guestCount: s.guestCount, dirty: false };
+    if ((S.editVersion || 0) === version) S.edit = { items: s.items.map((it) => ({ ...it })), guestCount: s.guestCount, seatNames: { ...(s.seatNames || {}) }, dirty: false };
     return s;
   }
 
@@ -831,10 +852,18 @@
         const s = await api('POST', `/api/v1/waiter/session/${S.openId}/served`, one ? { itemIds: [one] } : undefined);
         const i = S.sessions.findIndex((x) => x.sessionId === S.openId);
         if (i >= 0) S.sessions[i] = s;
-        if (!S.edit.dirty) S.edit = { items: s.items.map((it) => ({ ...it })), guestCount: s.guestCount, dirty: false };
+        if (!S.edit.dirty) S.edit = { items: s.items.map((it) => ({ ...it })), guestCount: s.guestCount, seatNames: { ...(s.seatNames || {}) }, dirty: false };
         toast('Отмечено: вынесено'); render(); return;
       }
-      if (q('[data-guests]')) { S.edit.guestCount = Math.max(1, S.edit.guestCount + Number(q('[data-guests]').dataset.guests)); changed(); return; }
+      if (q('[data-guests]')) {
+        const d = Number(q('[data-guests]').dataset.guests);
+        S.edit.guestCount = Math.max(1, S.edit.guestCount + d);
+        changed();
+        // Новый гость — сразу предлагаем назвать (можно пропустить)
+        if (d > 0) openSeatNameForm(Math.max(S.edit.guestCount, (S.sessions.find((x) => x.sessionId === S.openId)?.guests || []).length));
+        return;
+      }
+      if (q('[data-seat-name]')) { openSeatNameForm(Number(q('[data-seat-name]').dataset.seatName)); return; }
       if (q('[data-qty]')) {
         const b = q('[data-qty]'); const it = S.edit.items[Number(b.dataset.qty)];
         it.quantity += Number(b.dataset.d);
@@ -857,7 +886,7 @@
         if (S.edit.dirty) await saveEdit();
         try {
           const s = await api('POST', `/api/v1/waiter/session/${S.openId}/send-to-production`);
-          S.edit = { items: s.items.map((i) => ({ ...i })), guestCount: s.guestCount, dirty: false };
+          S.edit = { items: s.items.map((i) => ({ ...i })), guestCount: s.guestCount, seatNames: { ...(s.seatNames || {}) }, dirty: false };
           toast('Заказ отправлен на кухню');
         } catch (err) { toast(err.message, true); }
         render(); return;
