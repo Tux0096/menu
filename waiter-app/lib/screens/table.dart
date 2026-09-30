@@ -205,6 +205,33 @@ class _TableScreenState extends State<TableScreen> {
     if (name != null) cart.setSeatName(seat, name);
   }
 
+  /// Оплата официанту: вносится в iiko (кухня и бар) и счёт закрывается.
+  Future<void> _pay(String method) async {
+    final s = _s;
+    final online = ((s?['onlinePaid'] as Map?)?['amount'] as num?) ?? 0;
+    final due = (((s?['sentTotal'] as num?) ?? 0) - online).clamp(0, double.infinity);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(method == 'cash' ? 'Оплата наличными' : 'Оплата картой'),
+        content: Text('К оплате ${rub(due)}${online > 0 ? ' (онлайн уже оплачено ${rub(online)})' : ''}. Оплата внесётся в iiko, счёт закроется.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Оплачено')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await Api.I.post('/api/v1/waiter/session/${widget.sessionId}/pay', {'method': method});
+      if (!mounted) return;
+      toast(context, 'Оплачено, счёт закрыт в iiko');
+      Navigator.of(context).pop();
+    } on ApiError catch (e) {
+      if (mounted) toast(context, e.message);
+    }
+  }
+
   Future<void> _close() async {
     final ok = await showDialog<bool>(
       context: context,
@@ -243,10 +270,16 @@ class _TableScreenState extends State<TableScreen> {
           ],
         ),
         actions: [
-          if (s?['paymentsEnabled'] == true)
+          if (s != null && s['isPaid'] != true)
             PopupMenuButton<String>(
-              onSelected: (v) => v == 'close' ? _close() : null,
-              itemBuilder: (_) => const [PopupMenuItem(value: 'close', child: Text('Закрыть стол'))],
+              onSelected: (v) => v == 'close' ? _close() : _pay(v),
+              itemBuilder: (_) => [
+                if (((s['sentTotal'] as num?) ?? 0) > 0) ...const [
+                  PopupMenuItem(value: 'cash', child: Text('Оплата наличными')),
+                  PopupMenuItem(value: 'card', child: Text('Оплата картой')),
+                ],
+                const PopupMenuItem(value: 'close', child: Text('Закрыть стол')),
+              ],
             ),
         ],
       ),
