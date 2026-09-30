@@ -14,6 +14,7 @@ import { listSources } from './services/sources.js';
 import legacyRoutes from './routes/legacy.js';
 import { syncAllRestaurants } from './db/sync-iiko.js';
 import { imageHandler, warmImages } from './services/images.js';
+import { checkPendingPayments, confirmOnlinePayment, onlinePayEnabled, startOnlinePayment } from './services/payments.js';
 import { refreshStopLists, registerWebhooks, webhookToken } from './services/stoplist.js';
 import { getRestaurantCatalog, invalidateCatalogCache, warmCatalogs } from './services/catalog.js';
 import { checkOllamaHealth, getWelcomeSuggestions, suggestForQuery } from './services/ai-suggest.js';
@@ -141,6 +142,7 @@ app.get('/api/v1/config', h(async (req) => {
     tipPresets: [0, 10, 15, 20],
     iikoMode: isIikoDemo() ? 'demo' : 'live',
     paymentsEnabled: process.env.PAYMENTS_ENABLED === 'true',
+    onlinePay: onlinePayEnabled() ? { provider: 'cloudpayments', publicId: process.env.CLOUDPAYMENTS_PUBLIC_ID } : null,
   };
 }));
 
@@ -258,6 +260,17 @@ app.post('/api/v1/table/request-bill', guestAuth(), bySessionBody, h(async (req)
 app.post('/api/v1/table/call-waiter', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId');
   return callWaiter(req.body.sessionId, req.body.reason, req.body.comment);
+}));
+// Онлайн-оплата CloudPayments: счёт → виджет → проверка статуса по номеру счёта (колбэка нет)
+app.post('/api/v1/table/pay/start', guestAuth(), bySessionBody, h(async (req) => {
+  requireBody(req.body, 'sessionId');
+  return startOnlinePayment(req.body.sessionId, { tipAmount: req.body.tipAmount, guest: req.guest });
+}));
+app.post('/api/v1/table/pay/confirm', guestAuth(), bySessionBody, h(async (req) => {
+  requireBody(req.body, 'sessionId', 'invoiceId');
+  const res = await confirmOnlinePayment(req.body.invoiceId);
+  if (String(res.sessionId) !== String(req.body.sessionId)) throw Object.assign(new Error('Платёж не найден'), { status: 404 });
+  return { ...res, session: await getSessionView(req.body.sessionId) };
 }));
 app.post('/api/v1/table/guest-pay', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId');
@@ -622,6 +635,7 @@ warmCatalogs()
   .then(() => warmImages())
   .catch((e) => console.warn('картинки меню:', e.message));
 setInterval(() => syncIikoMenu(), 60 * 60 * 1000); // раз в час проверяем, не пора ли (раз в сутки)
+setInterval(() => checkPendingPayments().catch((e) => console.warn('онлайн-оплата:', e.message)), 30000);
 setInterval(refreshAllStopLists, parseInt(process.env.STOP_LIST_REFRESH_MS || '600000', 10));
 
 app.listen(PORT, () => {
