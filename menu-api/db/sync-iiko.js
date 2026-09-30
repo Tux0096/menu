@@ -222,7 +222,8 @@ async function requestExternalMenu(token, menu, organizationIds) {
 function priceForOrg(prices, organizationId) {
   const list = prices || [];
   for (const p of list) {
-    const orgsOf = p.organizations || (p.organizationId ? [p.organizationId] : null);
+    // Пустой список организаций — цена для всех (так бывает в меню агрегаторов, например OrderMaster)
+    const orgsOf = p.organizations?.length ? p.organizations : (p.organizationId ? [p.organizationId] : null);
     if (orgsOf && !orgsOf.includes(organizationId)) continue;
     if (!orgsOf && list.length > 1) continue;
     const v = Number(p.price ?? p.currentPrice ?? 0);
@@ -263,7 +264,19 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
     }
   }
   console.log(`  внешнее меню «${menu.name}»: ${rows.length} блюд с ценой для ресторана`);
-  if (!rows.length) return 0;
+  if (!rows.length) {
+    // Разбор, почему пусто: сколько разделов и позиций, как в меню записаны цены (без ключей и токенов)
+    const all = categories.flatMap((c) => c.items || []);
+    const sample = all.find((i) => (i.itemSizes || []).length);
+    console.log(`  разбор меню: разделов ${categories.length} (скрытых ${categories.filter((c) => c.isHidden).length}),`
+      + ` позиций ${all.length} (скрытых ${all.filter((i) => i.isHidden).length}, без размеров ${all.filter((i) => !(i.itemSizes || []).length).length});`
+      + ` поля ответа: ${Object.keys(data || {}).join(', ')}`);
+    if (sample) {
+      console.log(`  пример «${sample.name}»: цены ${JSON.stringify(sample.itemSizes[0].prices || null).slice(0, 400)};`
+        + ` организация источника ${organizationId}`);
+    }
+    return 0;
+  }
 
   const client = await pool.connect();
   try {
