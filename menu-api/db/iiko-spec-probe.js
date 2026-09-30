@@ -54,6 +54,14 @@ async function main() {
         if (node.content) for (const c of Object.values(node.content)) walk(c.schema, path, depth + 1);
       };
       if (op) walk(op.requestBody || { schema: op.parameters?.find((p) => p.in === 'body')?.schema }, 'body', 0);
+      console.log(`iiko spec: методы заказов в зал — ${Object.keys(spec.paths).filter((p) => /^\/api\/1\/order\//.test(p)).join(', ')}`);
+      const schemas = spec.components?.schemas || spec.definitions || {};
+      for (const [name, sch] of Object.entries(schemas)) {
+        const props = Object.entries(sch?.properties || {}).filter(([k]) => RE.test(k));
+        if (props.length && /order|table|create|change/i.test(name)) {
+          console.log(`  схема ${name}: ${props.map(([k, v]) => `${k} (${String(v?.description || v?.$ref || v?.type || '').replace(/\s+/g, ' ').slice(0, 160)})`).join('; ')}`);
+        }
+      }
       const empPaths = Object.keys(spec.paths).filter((p) => /employee|waiter/i.test(p));
       console.log(`iiko spec: методы сотрудников — ${empPaths.join(', ') || 'нет'}`);
       return;

@@ -784,6 +784,32 @@ function demoKitchenStatus(row) {
   return 'CookingCompleted';
 }
 
+/** Заказ источника в iiko не создался: снимаем отметку «отправлено», чтобы официант отправил повторно. */
+async function failIikoOrder(ctx, code, src, reason) {
+  const { session } = ctx;
+  const orders = { ...(session.iiko_orders || {}) };
+  delete orders[code];
+  const where = code === 'main' ? 'кухни' : `«${src.name || code}»`;
+  const text = /timeout/i.test(reason)
+    ? `Заказ ${where} не дошёл до кассы iiko (касса не на связи) — блюда снова не отправлены, нажмите «В работу» ещё раз`
+    : `iiko не создал заказ ${where}: ${reason} — блюда снова не отправлены`;
+  await pool.query(
+    `UPDATE table_order_items SET is_locked = FALSE, synced_to_iiko = FALSE, sent_at = NULL, kitchen_status = NULL, updated_at = NOW()
+     WHERE session_id = $1 AND COALESCE(source, 'main') = $2 AND is_locked AND served_at IS NULL`,
+    [session.id, code],
+  );
+  await pool.query(
+    `UPDATE table_sessions SET iiko_orders = $2, iiko_last_error = $3,
+       iiko_order_id = CASE WHEN $4 THEN NULL ELSE iiko_order_id END, updated_at = NOW() WHERE id = $1`,
+    [session.id, JSON.stringify(orders), text, code === 'main'],
+  );
+  await createWaiterNotification({
+    restaurantId: ctx.restaurant.id, sessionId: session.id, tableNumber: session.table_number,
+    type: NOTIFY_TYPES.IIKO_ERROR || 'iiko_error', title: `Стол №${session.table_number} — заказ не дошёл`, body: text,
+    payload: { sessionId: session.id, source: code },
+  }).catch(() => {});
+}
+
 export async function refreshFromIiko(sessionId) {
   const demo = isIikoDemo();
   const ctx = await getSessionContext(sessionId);
@@ -805,6 +831,11 @@ export async function refreshFromIiko(sessionId) {
         const src = await getSource(ctx.restaurant, code);
         const data = await withIikoCreds(src.creds, () => getOrdersByIds(src.organization_id, [o.orderId]));
         const info = (data?.orders || [])[0];
+        // iiko не создал заказ (касса не взяла его вовремя и т. п.) — блюда источника снова «не отправлены»
+        if (info?.creationStatus === 'Error') {
+          await failIikoOrder(ctx, code, src, info.errorInfo?.message || info.errorInfo?.description || 'iiko не создал заказ');
+          continue;
+        }
         const order = info?.order || info;
         if (!order) continue;
         if (code === 'main' || !orderStatus) orderStatus = order.status || info?.creationStatus || null;
