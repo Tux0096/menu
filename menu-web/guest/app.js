@@ -725,9 +725,6 @@
           <b>${l.qty}</b>
           <button class="round-btn round-btn--sm" data-inc="${esc(l.product.id)}" aria-label="Добавить">${ICONS.plus}</button>
         </div>`}
-        ${!s?.isPaid && fresh > 0 ? `<div class="course" role="group" aria-label="Курс подачи">
-          <span>Подать:</span>${[[null, 'сразу'], [1, '1-м'], [2, '2-м'], [3, '3-м']].map(([c, t]) => `<button class="${(l.course || null) === c ? 'is-on' : ''}" data-course="${esc(l.product.id)}" data-c="${c ?? ''}">${t}</button>`).join('')}
-        </div>` : ''}
       </div>`;
     }).join('');
 

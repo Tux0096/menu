@@ -5,6 +5,7 @@
  * и стоп-лист iiko + ручной стоп из админки.
  */
 import pool from '../db/pool.js';
+import { orderGroups } from './menu-order.js';
 import { getStopListIds } from './stoplist.js';
 
 const TTL_MS = parseInt(process.env.CATALOG_TTL_MS || '300000', 10);
@@ -258,6 +259,7 @@ export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
 
   return {
     ...raw.data,
+    groups: orderGroups(raw.data.groups),
     products,
     stopList: [...stop],
     source: raw.source,
