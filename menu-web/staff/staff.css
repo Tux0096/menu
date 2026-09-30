@@ -324,3 +324,15 @@ html, body { overflow-x: clip; }
 .banner-preview img { width: 100%; height: 100%; object-fit: cover; }
 [data-link][hidden] { display: none; }
 .bill-box { background: #ECEBFB; color: #091027; border-radius: 14px; padding: 12px 14px; margin: 10px 0; font-size: 14px; display: grid; gap: 4px; }
+
+/* Вкладки — отдельной строкой под шапкой, все видны сразу (на телефоне — прокрутка) */
+.tabs { order: 3; flex-basis: 100%; flex-wrap: wrap; overflow: visible; }
+.me { margin-left: auto; }
+@media (max-width: 760px) {
+  .tabs { gap: 6px; padding: 2px 0; }
+  .tabs button { padding: 8px 12px; font-size: 13px; }
+}
+/* Формы на телефоне — в одну колонку */
+@media (max-width: 520px) {
+  .modal .form-grid { grid-template-columns: 1fr !important; }
+}
