@@ -69,12 +69,23 @@ async function checkExtraKey(creds) {
     const slug = process.env.QR_RESTAURANT_SLUG || 'novo-sadovaya';
     const { rows: rest } = await pool.query('SELECT id, name FROM restaurants WHERE slug = $1', [slug]);
     if (!rest[0]) return;
-    const { rows: existing } = await pool.query('SELECT code FROM restaurant_sources WHERE restaurant_id = $1 AND creds = $2', [rest[0].id, creds]);
-    if (existing.length) { console.log(`iiko ${creds}: источник уже подключён к «${rest[0].name}»`); return; }
-    if (orgs.length !== 1) {
-      console.log(`iiko ${creds}: организаций ${orgs.length} — выберите нужную в админке: Меню → Источники iiko → «Добавить бар / другой iiko»`);
+    // Организация бара: явно (IIKO_BAR_ORGANIZATION_ID), по названию («Сакура», «бар») или единственная
+    const wantOrg = process.env[`IIKO_${creds}_ORGANIZATION_ID`];
+    const org = orgs.find((o) => o.id === wantOrg) || orgs.find((o) => /сакур|бар|bar/i.test(o.name))
+      || (orgs.length === 1 ? orgs[0] : null);
+    const { rows: existing } = await pool.query(
+      'SELECT code, organization_id FROM restaurant_sources WHERE restaurant_id = $1 AND creds = $2', [rest[0].id, creds],
+    );
+    if (existing.length && (!org || existing[0].organization_id === org.id || orgs.length === 1)) {
+      console.log(`iiko ${creds}: источник уже подключён к «${rest[0].name}» (организация ${orgs.find((o) => o.id === existing[0].organization_id)?.name || existing[0].organization_id})`);
       return;
     }
+    if (!org) {
+      console.log(`iiko ${creds}: организаций ${orgs.length} — выберите нужную в админке: Меню → Источники iiko → «Добавить бар / другой iiko»`
+        + ` или задайте секрет IIKO_${creds}_ORGANIZATION_ID`);
+      return;
+    }
+    orgs.splice(0, orgs.length, org);
     const wantMenu = process.env[`IIKO_${creds}_EXTERNAL_MENU_ID`];
     const menu = menus.find((m) => String(m.id) === String(wantMenu))
       || menus.find((m) => /бар|напит|алко|вин/i.test(m.name)) || (menus.length === 1 ? menus[0] : null);
@@ -85,7 +96,9 @@ async function checkExtraKey(creds) {
     } catch { /* группу выберет выгрузка стола */ }
     await pool.query(
       `INSERT INTO restaurant_sources (restaurant_id, code, name, organization_id, terminal_group_id, creds, external_menu_id, is_enabled, sort_order)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,10) ON CONFLICT (restaurant_id, code) DO NOTHING`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,10)
+       ON CONFLICT (restaurant_id, code) DO UPDATE SET organization_id = EXCLUDED.organization_id,
+         terminal_group_id = EXCLUDED.terminal_group_id, external_menu_id = EXCLUDED.external_menu_id`,
       [rest[0].id, code, label, orgs[0].id, terminalGroupId, creds, menu ? String(menu.id) : null],
     );
     console.log(`iiko ${creds}: подключён источник «${label}» к «${rest[0].name}» — организация ${orgs[0].name}`
