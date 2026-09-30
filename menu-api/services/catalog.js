@@ -265,12 +265,23 @@ export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
     .sort((a, b) => a.order - b.order);
   return {
     ...raw.data,
-    groups: orderGroups(raw.data.groups),
+    groups: orderGroups(raw.data.groups, barGroups(ranked)),
     products: ranked,
     stopList: [...stop],
     source: raw.source,
     fetchedAt: raw.fetchedAt || new Date(raw.at).toISOString(),
   };
+}
+
+/** Разделы, где все блюда из второго iiko (бар). */
+function barGroups(products) {
+  const bySource = new Map();
+  for (const p of products) {
+    const g = p.parentGroup;
+    if (!bySource.has(g)) bySource.set(g, new Set());
+    bySource.get(g).add(p.source || 'main');
+  }
+  return new Set([...bySource].filter(([, s]) => !s.has('main')).map(([g]) => g));
 }
 
 function isMainDish(product) {
