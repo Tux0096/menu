@@ -230,6 +230,7 @@ function applyOverride(product, o) {
   if (o.is_recommended) p.isRecommended = true;
   if (o.badge) p.badge = o.badge;
   if (o.priority) p.priority = Number(o.priority);
+  if (o.video_url) p.video = o.video_url;
   return p;
 }
 

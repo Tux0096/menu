@@ -367,6 +367,8 @@ const SCHEMA = `
   ALTER TABLE products ADD COLUMN IF NOT EXISTS sku VARCHAR(50);
   -- Приоритет показа блюда в разделе: больше — выше; 0 — порядок как в iiko
   ALTER TABLE menu_overrides ADD COLUMN IF NOT EXISTS priority INT NOT NULL DEFAULT 0;
+  -- «Живое» меню: короткое видео блюда вместо фото (MP4/WebM), фото остаётся обложкой
+  ALTER TABLE menu_overrides ADD COLUMN IF NOT EXISTS video_url TEXT;
   -- Телефоны официантов для push-уведомлений (Firebase Cloud Messaging)
   CREATE TABLE IF NOT EXISTS waiter_devices (
     token TEXT PRIMARY KEY,
