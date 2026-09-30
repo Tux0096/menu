@@ -214,18 +214,38 @@ export async function sendToKitchen(sessionId, staff) {
             created = await create();
           } catch (e) {
             if (demo || !isTerminalGroupError(e)) throw e;
-            // Касса ресторана не та или не на связи — берём живую терминальную группу и повторяем
-            const picked = await pickAliveTerminalGroup(src.organization_id, terminalGroupId);
-            if (!picked.id || picked.id === terminalGroupId) {
-              const names = picked.list.map((t) => `${t.name || t.id}${t.isAlive ? ' — на связи' : t.isAlive === false ? ' — не на связи' : ''}`).join('; ');
-              throw new Error('Касса iiko ресторана не на связи с облаком iiko (или iikoFront старше 7.1.5): '
-                + `включите главную кассу и проверьте подключение к iiko Cloud${names ? `. Кассы: ${names}` : ''}`);
+            // iiko не принял заказ через эту кассу — пробуем другие терминальные группы организации
+            const { list } = await pickAliveTerminalGroup(src.organization_id, terminalGroupId);
+            const others = list.filter((t) => t.id !== terminalGroupId && t.isAlive !== false)
+              .sort((x, y) => Number(Boolean(y.isAlive)) - Number(Boolean(x.isAlive)));
+            let lastErr = e;
+            const cacheKey = code === MAIN ? String(session.table_number) : `${code}:${session.table_number}`;
+            const dropCache = () => pool.query(
+              'DELETE FROM restaurant_table_cache WHERE restaurant_id = $1 AND table_number = $2', [restaurant.id, cacheKey],
+            );
+            const firstGroup = terminalGroupId;
+            for (const t of others) {
+              try {
+                terminalGroupId = t.id;
+                tableId = null;
+                await dropCache();
+                await resolveTable();
+                created = await create();
+                await saveTerminalGroup(restaurant.id, code, terminalGroupId);
+                lastErr = null;
+                break;
+              } catch (e2) { lastErr = e2; }
             }
-            terminalGroupId = picked.id;
-            await saveTerminalGroup(restaurant.id, code, terminalGroupId);
-            tableId = null;
-            await resolveTable();
-            created = await create();
+            if (lastErr) {
+              if (others.length) { terminalGroupId = firstGroup; await dropCache(); }
+              const raw = e.response?.data?.errorDescription || e.message || '';
+              const names = list.map((t) => `${t.name || t.id}${t.isAlive ? ' — на связи' : t.isAlive === false ? ' — не на связи' : ''}`).join('; ');
+              throw new Error(/server version/i.test(raw)
+                ? 'iiko Cloud не знает версию сервера iiko этого ресторана («0.0.0») и не принимает заказы на стол (нужна 7.1.5+). '
+                  + 'Касса на связи — нужна синхронизация iikoRMS/iikoFront с iiko Cloud: обратитесь в поддержку iiko или к интегратору. '
+                  + `Кассы: ${names || 'нет'}`
+                : raw);
+            }
           }
           if (created?.orderInfo?.creationStatus === 'Error') {
             throw new Error(created.orderInfo.errorInfo?.message || 'iiko отклонил заказ');
