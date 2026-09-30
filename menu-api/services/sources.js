@@ -25,9 +25,22 @@ export async function listSources(restaurant, { all = false } = {}) {
   ];
 }
 
+/**
+ * Источник для заказов. Если у источника задана отдельная касса для заказов (order_*), заказы идут туда:
+ * ключ, организация и касса — из order_*, а меню по-прежнему выгружается из его организации.
+ */
 export async function getSource(restaurant, code = MAIN) {
   const list = await listSources(restaurant, { all: true });
-  return list.find((s) => s.code === (code || MAIN)) || list[0];
+  const src = list.find((s) => s.code === (code || MAIN)) || list[0];
+  if (!src?.order_organization_id) return src;
+  return {
+    ...src,
+    creds: src.order_creds || '',
+    organization_id: src.order_organization_id,
+    terminal_group_id: src.order_terminal_group_id,
+    menu_organization_id: src.organization_id,
+    orderOverride: true,
+  };
 }
 
 /** Источник каждого блюда по iiko ID (по данным выгрузки; клиенту не доверяем). */

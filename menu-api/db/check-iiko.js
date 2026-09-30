@@ -48,6 +48,39 @@ async function main() {
     console.log('ВНИМАНИЕ: ни один ресторан меню не подключён к ключу — добавьте точки в iiko (Cloud API → интеграция → Подключенные точки)');
   }
   for (const creds of iikoCredsList().filter(Boolean)) await checkExtraKey(creds);
+  for (const r of rows.filter((x) => visible.has(x.organization_id))) await linkBarTerminal(headers, r);
+}
+
+/**
+ * Бар: меню — отдельным ключом (своя организация), а касса, на которой работает бар, может быть видна
+ * основному ключу (касса с «бар» в названии, не касса кухни). Тогда заказы бара отправляем на неё.
+ * Отключить: IIKO_BAR_ORDER_VIA_MAIN=false.
+ */
+async function linkBarTerminal(headers, r) {
+  if (process.env.IIKO_BAR_ORDER_VIA_MAIN === 'false') return;
+  try {
+    const { rows: srcs } = await pool.query(
+      "SELECT code, name, order_terminal_group_id FROM restaurant_sources WHERE restaurant_id = $1 AND is_enabled AND (code = 'bar' OR name ~* 'бар')",
+      [r.id],
+    );
+    if (!srcs.length) return;
+    const tg = (await axios.post(`${IIKO_URL}/api/1/terminal_groups`, { organizationIds: [r.organization_id], includeDisabled: false }, { headers, timeout: 15000 })).data;
+    const bar = (tg.terminalGroups || []).flatMap((g) => (g.items || []).map((t) => ({ ...t, org: g.organizationId || r.organization_id })))
+      .find((t) => /бар|bar/i.test(t.name || '') && t.id !== r.terminal_group_id);
+    for (const src of srcs) {
+      if (!bar) { console.log(`${r.name}: касса бара у основного ключа не найдена — заказы «${src.name}» идут его ключом`); continue; }
+      if (src.order_terminal_group_id === bar.id) { console.log(`${r.name}: заказы «${src.name}» → касса «${bar.name}» [${bar.id}]`); continue; }
+      await pool.query(
+        `UPDATE restaurant_sources SET order_creds = '', order_organization_id = $3, order_terminal_group_id = $4
+         WHERE restaurant_id = $1 AND code = $2`,
+        [r.id, src.code, bar.org, bar.id],
+      );
+      await pool.query('DELETE FROM restaurant_table_cache WHERE restaurant_id = $1 AND table_number LIKE $2', [r.id, `${src.code}:%`]);
+      console.log(`${r.name}: заказы «${src.name}» теперь идут на кассу «${bar.name}» [${bar.id}] (организация ${bar.org}, основной ключ)`);
+    }
+  } catch (e) {
+    console.log(`${r.name}: привязка кассы бара не удалась —`, e.response?.status || '', e.response?.data?.errorDescription || e.message);
+  }
 }
 
 /**
