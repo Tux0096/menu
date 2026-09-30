@@ -13,7 +13,8 @@ export function iikoApiLogin(creds = '') {
 
 /** Секрет клиента ключа (для ключей нового поколения): IIKO_CLIENT_SECRET или IIKO_MENU_CLIENT_SECRET. */
 export function iikoClientSecret(creds = '') {
-  if (creds) return process.env[`IIKO_${creds}_CLIENT_SECRET`] || '';
+  // Секрет клиента принадлежит приложению iiko, а не ключу — у второго ключа по умолчанию тот же, что у основного
+  if (creds) return process.env[`IIKO_${creds}_CLIENT_SECRET`] || iikoClientSecret();
   return process.env.IIKO_CLIENT_SECRET || process.env.IIKO_MENU_CLIENT_SECRET || '';
 }
 
@@ -25,7 +26,7 @@ export function iikoAppId(creds = '') {
 
 /**
  * Наборы ключей: '' — основной; 'BAR' и т.п. — второй iiko (IIKO_BAR_API_LOGIN / _APP_ID / _CLIENT_SECRET).
- * ID приложения у второго ключа по умолчанию тот же, что у основного.
+ * ID приложения и секрет клиента у второго ключа по умолчанию те же, что у основного.
  */
 export function iikoCredsList() {
   const extra = Object.keys(process.env)

@@ -6,7 +6,9 @@ import dotenv from 'dotenv';
 dotenv.config();
 import axios from 'axios';
 import pool from './pool.js';
-import { iikoApiLogin, iikoAppId, iikoClientSecret, maskIikoKey, requestIikoToken } from '../lib/iiko-token.js';
+import {
+  iikoApiLogin, iikoAppId, iikoClientSecret, iikoCredsList, maskIikoKey, requestIikoToken, requestIikoTokenFor,
+} from '../lib/iiko-token.js';
 
 const IIKO_URL = process.env.IIKO_URL || 'https://api-ru.iiko.services';
 
@@ -40,6 +42,56 @@ async function main() {
   }
     if (!rows.some((r) => visible.has(r.organization_id))) {
     console.log('ВНИМАНИЕ: ни один ресторан меню не подключён к ключу — добавьте точки в iiko (Cloud API → интеграция → Подключенные точки)');
+  }
+  for (const creds of iikoCredsList().filter(Boolean)) await checkExtraKey(creds);
+}
+
+/**
+ * Второй ключ iiko (например, IIKO_BAR_API_LOGIN — бар с алкоголем): что он видит, и — если источник ещё
+ * не настроен и организация одна — подключаем его к ресторану QR-меню автоматически (дальше правится в админке).
+ */
+async function checkExtraKey(creds) {
+  const code = creds.toLowerCase();
+  const label = code === 'bar' ? 'Бар' : `iiko ${creds}`;
+  try {
+    console.log(`iiko ${creds}: ключ ${maskIikoKey(iikoApiLogin(creds))}`);
+    const headers = { Authorization: `Bearer ${await requestIikoTokenFor(creds)}` };
+    const { data } = await axios.post(`${IIKO_URL}/api/1/organizations`, { returnAdditionalInfo: false, includeDisabled: false }, { headers, timeout: 15000 });
+    const orgs = data.organizations || [];
+    console.log(`iiko ${creds}: доступно организаций — ${orgs.length}`);
+    for (const o of orgs) console.log(`  ${o.id}  ${o.name}`);
+    let menus = [];
+    try {
+      menus = (await axios.post(`${IIKO_URL}/api/2/menu`, {}, { headers, timeout: 15000 })).data.externalMenus || [];
+    } catch { /* нет внешних меню */ }
+    console.log(`iiko ${creds}: внешние меню — ${menus.length ? menus.map((m) => `${m.name} [${m.id}]`).join('; ') : 'нет'}`);
+
+    const slug = process.env.QR_RESTAURANT_SLUG || 'novo-sadovaya';
+    const { rows: rest } = await pool.query('SELECT id, name FROM restaurants WHERE slug = $1', [slug]);
+    if (!rest[0]) return;
+    const { rows: existing } = await pool.query('SELECT code FROM restaurant_sources WHERE restaurant_id = $1 AND creds = $2', [rest[0].id, creds]);
+    if (existing.length) { console.log(`iiko ${creds}: источник уже подключён к «${rest[0].name}»`); return; }
+    if (orgs.length !== 1) {
+      console.log(`iiko ${creds}: организаций ${orgs.length} — выберите нужную в админке: Меню → Источники iiko → «Добавить бар / другой iiko»`);
+      return;
+    }
+    const wantMenu = process.env[`IIKO_${creds}_EXTERNAL_MENU_ID`];
+    const menu = menus.find((m) => String(m.id) === String(wantMenu))
+      || menus.find((m) => /бар|напит|алко|вин/i.test(m.name)) || (menus.length === 1 ? menus[0] : null);
+    let terminalGroupId = null;
+    try {
+      const tg = (await axios.post(`${IIKO_URL}/api/1/terminal_groups`, { organizationIds: [orgs[0].id], includeDisabled: false }, { headers, timeout: 15000 })).data;
+      terminalGroupId = tg?.terminalGroups?.[0]?.items?.[0]?.id || null;
+    } catch { /* группу выберет выгрузка стола */ }
+    await pool.query(
+      `INSERT INTO restaurant_sources (restaurant_id, code, name, organization_id, terminal_group_id, creds, external_menu_id, is_enabled, sort_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,TRUE,10) ON CONFLICT (restaurant_id, code) DO NOTHING`,
+      [rest[0].id, code, label, orgs[0].id, terminalGroupId, creds, menu ? String(menu.id) : null],
+    );
+    console.log(`iiko ${creds}: подключён источник «${label}» к «${rest[0].name}» — организация ${orgs[0].name}`
+      + `${menu ? `, меню «${menu.name}»` : ', внешнего меню нет — выберите его в админке'}`);
+  } catch (e) {
+    console.log(`iiko ${creds}: проверка не удалась —`, e.response?.status || '', e.response?.data?.errorDescription || e.message);
   }
 }
 
