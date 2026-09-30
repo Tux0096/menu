@@ -67,5 +67,7 @@ export async function requestIikoToken(apiLogin = iikoApiLogin(), clientSecret =
       errors.push(`${path}: ${e.response?.status || ''} ${e.response?.data?.errorDescription || e.response?.data?.message || e.message}`);
     }
   }
-  throw new Error(`iiko: не удалось получить токен — ${errors.join(' | ')}`);
+  // iiko повторяет ключ в тексте ошибки («Login … is not authorized») — в логи он попадать не должен
+  const safe = errors.join(' | ').replace(/[0-9a-f]{24,}/gi, (k) => `${k.slice(0, 4)}…${k.slice(-2)}`);
+  throw new Error(`iiko: не удалось получить токен — ${safe}`);
 }
