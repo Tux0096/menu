@@ -280,6 +280,22 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
     return 0;
   }
 
+  // Цены — как считает касса: из прайса номенклатуры iiko (во внешнем меню бывают цены сайта/доставки)
+  try {
+    const nom = await iikoPostRaw(token, '/api/1/nomenclature', { organizationId });
+    const prices = new Map((nom.products || [])
+      .map((p) => [String(p.id), Number(p.sizePrices?.[0]?.price?.currentPrice ?? 0)])
+      .filter(([, v]) => v > 0));
+    let changed = 0;
+    for (const r of rows) {
+      const v = prices.get(String(r.id));
+      if (v && Math.abs(v - r.price) >= 0.01) { r.price = v; changed += 1; }
+    }
+    console.log(`  цены по прайсу iiko: исправлено ${changed} из ${rows.length}${prices.size ? '' : ' (номенклатура без цен)'}`);
+  } catch (e) {
+    console.log('  цены по прайсу iiko: номенклатура не получена, остаются цены внешнего меню —', e.response?.status || '', e.message);
+  }
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
