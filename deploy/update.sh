@@ -115,6 +115,37 @@ else
   exit 1
 fi
 
+echo "=== 6б. Домены персонала: of.menu (официанты), adm.menu (админка) ==="
+# Сбой здесь не ломает деплой меню: без сертификата поддомены работают по HTTP, выпуск повторится при следующем деплое
+STAFF_CONF=/etc/nginx/sites-available/fuji-staff
+STAFF_CERT=/etc/letsencrypt/live/of.menu.franchise-fuji.ru/fullchain.pem
+staff_nginx() {
+  sudo cp "$REPO_DIR/deploy/nginx/$1" "$STAFF_CONF"
+  sudo ln -sf "$STAFF_CONF" /etc/nginx/sites-enabled/fuji-staff
+  if sudo nginx -t 2>/dev/null; then sudo systemctl reload nginx; return 0; fi
+  echo "  nginx: конфиг $1 не прошёл проверку — поддомены отключены"
+  sudo rm -f /etc/nginx/sites-enabled/fuji-staff; sudo nginx -t 2>/dev/null && sudo systemctl reload nginx
+  return 1
+}
+if sudo test -f "$STAFF_CERT"; then
+  staff_nginx fuji-staff.conf && echo "  https://of.menu.franchise-fuji.ru и https://adm.menu.franchise-fuji.ru — готово" || true
+else
+  sudo mkdir -p /var/www/certbot
+  if staff_nginx fuji-staff-http.conf; then
+    if command -v certbot >/dev/null && sudo certbot certonly --webroot -w /var/www/certbot \
+        -d of.menu.franchise-fuji.ru -d adm.menu.franchise-fuji.ru --cert-name of.menu.franchise-fuji.ru \
+        --non-interactive --agree-tos --register-unsafely-without-email --keep-until-expiring 2>&1 | tail -5; then
+      if sudo test -f "$STAFF_CERT"; then
+        staff_nginx fuji-staff.conf && echo "  сертификат выпущен, HTTPS включён" || true
+      else
+        echo "  сертификат не выпущен (проверьте A-записи of./adm. → IP сервера) — пока работает HTTP"
+      fi
+    else
+      echo "  certbot недоступен или выпуск не удался — пока работает HTTP"
+    fi
+  fi
+fi
+
 echo "=== 7. Проверка ==="
 for i in $(seq 1 15); do
   if curl -fsS http://127.0.0.1:3101/health; then echo; break; fi

@@ -33,8 +33,25 @@
     waiter: [['tables', 'Столы']],
     manager: [['tables', 'Столы'], ['hall', 'Контроль зала'], ['feedback', 'Отзывы']],
     admin: [['tables', 'Столы'], ['hall', 'Контроль зала'], ['menu', 'Меню и стоп-лист'], ['chips', 'AI-подсказки'],
-      ['promos', 'Акции'], ['qr', 'QR-коды'], ['feedback', 'Отзывы'], ['staff', 'Сотрудники'], ['audit', 'Журнал']],
+      ['promos', 'Баннеры и акции'], ['qr', 'QR-коды'], ['feedback', 'Отзывы'], ['staff', 'Сотрудники'], ['audit', 'Журнал']],
+    marketing: [['menu', 'Карточки блюд'], ['promos', 'Баннеры и акции'], ['chips', 'AI-подсказки']],
   };
+  // Что может каждая роль — показывается в карточке сотрудника
+  const ROLE_INFO = {
+    waiter: ['Официант', 'Столы и заказы гостей, отправка в iiko, «вынесено». Вход в приложении официанта по PIN.'],
+    manager: ['Управляющий', 'Статистика и контроль зала, отзывы гостей, плюс всё, что может официант.'],
+    marketing: ['Маркетинг', 'Контент меню: карточки блюд, фото, метки «Хит/Новинка», баннеры и акции, AI-подсказки. Без стоп-листа, сотрудников и настроек iiko.'],
+    admin: ['Администратор', 'Всё: сотрудники и их доступы, подключение iiko, QR-коды столов, стоп-лист, контент и статистика.'],
+  };
+  // Домены: of.menu… — экран официантов (только столы), adm.menu… — админка (без экрана столов)
+  const HOST = location.hostname.startsWith('of.') ? 'waiter' : location.hostname.startsWith('adm.') ? 'admin' : '';
+  function roleTabs(role) {
+    const all = ROLE_TABS[role] || ROLE_TABS.waiter;
+    const pick = HOST === 'waiter' ? all.filter(([k]) => k === 'tables') : HOST === 'admin' ? all.filter(([k]) => k !== 'tables') : all;
+    return pick.length ? pick : all;
+  }
+  const PLACEMENTS = { menu: 'Меню — карусель сверху', ai: 'Экран AI', order: 'Экран заказа' };
+  const BADGES = { hit: 'Хит', new: 'Новинка', spicy: 'Острое', veg: 'Вег', sale: 'Выгодно', chef: 'Шеф рекомендует' };
   const STATUS = {
     browsing: ['Изучает меню', ''], building_cart: ['Выбирает блюда', ''], cart_ready: ['Ждёт официанта', 'wait'],
     waiter_review: ['Уточняется', 'work'], in_production: ['На кухне', 'work'], reorder_pending: ['Дозаказ', 'wait'],
@@ -95,11 +112,11 @@
 
   // ── Каркас ─────────────────────────────────────────────────
   function shell(content) {
-    const tabs = ROLE_TABS[S.staff.role] || ROLE_TABS.waiter;
+    const tabs = roleTabs(S.staff.role);
     const unread = S.notes.filter((n) => !n.is_read).length;
     return `<div class="shell">
       <header class="top">
-        <div class="brand">ФУДЖИ<small>${esc({ waiter: 'официант', manager: 'управляющий', admin: 'администратор' }[S.staff.role])}</small></div>
+        <div class="brand">ФУДЖИ<small>${esc({ waiter: 'официант', manager: 'управляющий', admin: 'администратор', marketing: 'маркетинг' }[S.staff.role] || '')}</small></div>
         ${tabs.length > 1 ? `<nav class="tabs">${tabs.map(([k, l]) => `<button data-tab="${k}" class="${S.tab === k ? 'is-active' : ''}">${l}${k === 'tables' && unread ? `<span class="dot">${unread}</span>` : ''}</button>`).join('')}</nav>` : ''}
         <div class="me">
           <select class="sel" id="rest-select">${S.restaurants.map((r) => `<option value="${esc(r.slug)}" ${r.slug === S.restaurant ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select>
@@ -112,8 +129,8 @@
   }
 
   async function render() {
-    const tabs = (ROLE_TABS[S.staff.role] || ROLE_TABS.waiter).map(([k]) => k);
-    if (!tabs.includes(S.tab)) S.tab = 'tables';
+    const tabs = roleTabs(S.staff.role).map(([k]) => k);
+    if (!tabs.includes(S.tab)) S.tab = tabs[0];
     const view = VIEWS[S.tab];
     try {
       const tabsScroll = $('.tabs')?.scrollLeft || 0;
@@ -213,6 +230,7 @@
       ${lockedByOther ? '<div class="error-box">Стол сейчас редактирует другой официант</div>' : ''}
       ${s.readyCount ? `<div class="ready-box"><span>🔔 Готово на кухне: ${s.items.filter((i) => i.isReady).map((i) => `${esc(i.name)} ×${i.quantity}${i.guestName ? ` — ${esc(i.guestName)}` : ''}`).join(', ')}</span>
         <button class="btn btn--sm btn--dark" data-served>Вынесено всё</button></div>` : ''}
+      ${(s.billRequests || []).length ? `<div class="bill-box"><b>Счёт запрошен</b>${s.billRequests.map((r) => `<div>${esc(r.by ? `${r.by}: ` : '')}${r.scope === 'table' ? 'за весь стол' : esc((r.names || []).join(' и '))} — <b>${rub(r.amount)}</b> <span class="muted">${dateTime(r.at)}</span></div>`).join('')}</div>` : ''}
       ${s.iikoLastError ? `<div class="error-box"><b>Ошибка iiko:</b> ${esc(s.iikoLastError)}<br>Не отправленное сохранено — нажмите «В работу» ещё раз.</div>` : ''}
       <div class="gbar">
         <span class="muted">Гостей</span>
@@ -340,7 +358,7 @@
         if (!S.adminMenu || S.adminMenu.restaurant !== S.restaurant) {
           S.adminMenu = { restaurant: S.restaurant, ...(await api('GET', '/api/v1/admin/menu')) };
         }
-        S.adminSources = await api('GET', '/api/v1/admin/sources').catch(() => null);
+        S.adminSources = S.staff.role !== 'admin' ? null : await api('GET', '/api/v1/admin/sources').catch(() => null);
         return sourcesCard() + menuTable();
       },
     },
@@ -351,12 +369,38 @@
       fields: [['emoji', 'Эмодзи', 'text'], ['label', 'Текст чипа', 'text'], ['query', 'Запрос к AI', 'text'], ['sort_order', 'Порядок', 'number'], ['is_active', 'Показывать', 'bool']],
       hint: 'Чипы показываются гостю на экране AI. «Запрос к AI» — что будет искать помощник при нажатии.',
     }),
-    promos: crudView({
-      title: 'Маркетинговые блоки и акции',
+    promos: {
       path: '/api/v1/admin/promos',
-      fields: [['title', 'Заголовок', 'text'], ['text', 'Текст', 'text'], ['image_url', 'Картинка (URL)', 'text'], ['product_id', 'ID блюда', 'text'], ['sort_order', 'Порядок', 'number'], ['is_active', 'Активна', 'bool']],
-      hint: 'Блоки доступны гостевому приложению через /api/v1/config (promos).',
-    }),
+      async render() {
+        const rows = await api('GET', '/api/v1/admin/promos');
+        const rest = (id) => (id ? S.restaurants.find((r) => r.id === id)?.name || 'ресторан' : 'Все рестораны');
+        const state = (b) => {
+          const now = Date.now();
+          if (!b.is_active) return ['выключен', ''];
+          if (b.starts_at && new Date(b.starts_at) > now) return [`с ${dateTime(b.starts_at)}`, 'wait'];
+          if (b.ends_at && new Date(b.ends_at) <= now) return ['завершён', ''];
+          return ['показывается', 'ok'];
+        };
+        return `<div class="card"><div class="toolbar"><div class="h2 grow" style="margin:0">Баннеры и акции</div>
+            <button class="btn btn--dark btn--sm" data-banner-new>Добавить баннер</button></div>
+          <p class="muted" style="margin-top:0">Баннеры видят гости в QR-меню: карусель над меню, на экране AI или в заказе.
+            По нажатию открывается блюдо, раздел меню или ссылка. Картинка — 2:1, например 1200×600.</p>
+          ${rows.length ? `<div class="banner-grid">${rows.map((b) => {
+            const [label, tone] = state(b);
+            return `<div class="banner-card">
+              <div class="banner-card__img">${b.image_url ? `<img src="${esc(b.image_url)}" alt="" loading="lazy">` : `<span>${esc(b.title)}</span>`}</div>
+              <div class="banner-card__body">
+                <b>${esc(b.title)}</b>
+                <div class="muted" style="font-size:12px">${esc(PLACEMENTS[b.placement] || PLACEMENTS.menu)} · ${esc(rest(b.restaurant_id))}${b.ends_at ? ` · до ${dateTime(b.ends_at)}` : ''}</div>
+                <div style="display:flex;gap:6px;align-items:center;margin-top:8px"><span class="pill" data-tone="${tone}">${label}</span>
+                  <span class="grow"></span>
+                  <button class="btn btn--sm" data-banner-edit='${esc(JSON.stringify(b))}'>Изменить</button>
+                  <button class="btn btn--sm btn--danger" data-crud-del="/api/v1/admin/promos/${b.id}">Удалить</button></div>
+              </div></div>`;
+          }).join('')}</div>` : '<div class="muted" style="padding:24px 0;text-align:center">Баннеров пока нет</div>'}
+        </div>`;
+      },
+    },
 
     qr: {
       async render() {
@@ -390,7 +434,7 @@
       async render() {
         const [rows, rests] = await Promise.all([api('GET', '/api/v1/admin/staff'), api('GET', '/api/v1/admin/restaurants')]);
         S.staffRests = rests;
-        const roleName = { admin: 'Администратор', manager: 'Управляющий', waiter: 'Официант' };
+        const roleName = { admin: 'Администратор', manager: 'Управляющий', waiter: 'Официант', marketing: 'Маркетинг' };
         return `<div class="card"><div class="toolbar"><div class="h2 grow" style="margin:0">Сотрудники</div><button class="btn btn--dark btn--sm" data-staff-new>Добавить</button></div>
           <div class="tbl-wrap"><table class="tbl tbl--cards"><tr><th>Имя</th><th>Логин</th><th>Роль</th><th>PIN</th><th>Ресторан</th><th>Статус</th><th></th></tr>
           ${rows.map((u) => `<tr><td class="td-title">${esc(u.name)}</td><td data-label="Логин">${esc(u.login)}</td><td data-label="Роль">${roleName[u.role]}</td><td data-label="PIN">${u.hasPin ? '●●●●' : '—'}</td>
@@ -487,11 +531,12 @@
     const groups = [...new Set(m.products.map((p) => p.group).filter(Boolean))];
     const rows = m.products.filter((p) => (!q || p.name.toLowerCase().includes(q))
       && (!S.menu.group || p.group === S.menu.group) && (!S.menu.onlyStop || p.isInStopList || p.isHidden));
+    const canStop = S.staff.role !== 'marketing';
     const sw = (on, attr, red = false) => `<button class="switch ${on ? 'is-on' : ''} ${red ? 'is-red' : ''}" ${attr}></button>`;
     return `<div class="card">
       <div class="toolbar">
         <div class="h2 grow" style="margin:0">Меню <span class="muted" style="font-weight:400;font-size:14px">источник: ${esc(m.source)} · обновлено ${dateTime(m.fetchedAt)}</span></div>
-        <button class="btn btn--sm" data-menu-refresh>Перевыгрузить из iiko</button>
+        ${S.staff.role === 'admin' ? '<button class="btn btn--sm" data-menu-refresh>Перевыгрузить из iiko</button>' : ''}
       </div>
       <div class="toolbar">
         <input class="inp grow" id="menu-search" placeholder="Поиск блюда" value="${esc(S.menu.search)}">
@@ -499,12 +544,12 @@
         <label style="display:flex;gap:8px;align-items:center">${sw(S.menu.onlyStop, 'data-only-stop')} Только стоп/скрытые</label>
       </div>
       <div class="tbl-wrap"><table class="tbl tbl--cards tbl--menu">
-        <tr><th></th><th>Блюдо</th><th>Категория</th><th>Цена</th><th>Стоп-лист</th><th>Скрыть</th><th>Рекомендуем</th><th></th></tr>
+        <tr><th></th><th>Блюдо</th><th>Категория</th><th>Цена</th>${canStop ? '<th>Стоп-лист</th>' : ''}<th>Скрыть</th><th>Рекомендуем</th><th></th></tr>
         ${rows.map((p) => `<tr>
           <td>${p.image ? `<img class="thumb" src="${esc(p.image)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">` : '<div class="thumb">🍽</div>'}</td>
-          <td><b>${esc(p.name)}</b><div class="muted" style="font-size:12px">${esc(p.weight || '')}${p.energy ? ` · ${Math.round(p.energy)} ккал` : ''}${p.allergens?.length ? ` · аллергены: ${esc(p.allergens.join(', '))}` : ''}</div></td>
+          <td><b>${esc(p.name)}</b>${p.badge ? ` <span class="pill" data-tone="ok">${esc(BADGES[p.badge] || p.badge)}</span>` : ''}<div class="muted" style="font-size:12px">${esc(p.weight || '')}${p.energy ? ` · ${Math.round(p.energy)} ккал` : ''}${p.allergens?.length ? ` · аллергены: ${esc(p.allergens.join(', '))}` : ''}</div></td>
           <td class="muted" data-label="Категория">${esc(p.group)}</td><td data-label="Цена">${p.price ? rub(p.price) : ''}</td>
-          <td data-label="Стоп-лист">${sw(p.isInStopList, `data-ov="${esc(p.id)}" data-field="is_stopped" data-val="${!p.isInStopList}"`, true)}</td>
+          ${canStop ? `<td data-label="Стоп-лист">${sw(p.isInStopList, `data-ov="${esc(p.id)}" data-field="is_stopped" data-val="${!p.isInStopList}"`, true)}</td>` : ''}
           <td data-label="Скрыть">${sw(p.isHidden, `data-ov="${esc(p.id)}" data-field="is_hidden" data-val="${!p.isHidden}"`)}</td>
           <td data-label="Рекомендуем">${p.isHidden ? '' : sw(p.isRecommended, `data-ov="${esc(p.id)}" data-field="is_recommended" data-val="${!p.isRecommended}"`)}</td>
           <td class="td-actions">${p.isHidden ? '' : `<button class="btn btn--sm" data-edit-product="${esc(p.id)}">Карточка</button>`}</td>
@@ -532,6 +577,7 @@
           <label class="btn btn--sm" style="cursor:pointer">Загрузить фото<input type="file" id="prod-file" accept="image/jpeg,image/png,image/webp" hidden></label>
         </div>
         ${f('image_url', 'Фото (ссылка)', p.image)}
+        <div class="field" style="margin-top:10px"><label>Метка в меню</label><select class="sel" name="badge"><option value="">Без метки</option>${Object.entries(BADGES).map(([k, l]) => `<option value="${k}" ${p.badge === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
         <div class="field" style="margin-top:10px"><label>Описание</label><textarea class="inp" name="description">${esc(p.description || '')}</textarea></div>
         <div class="form-grid" style="margin-top:10px">
           ${f('weight', 'Вес / объём', p.weight)}${f('energy', 'Ккал', p.energy, 'number')}${f('proteins', 'Белки', p.proteins, 'number')}
@@ -569,6 +615,67 @@
         const fd = Object.fromEntries(new FormData(e.target));
         fd.allergens = fd.allergens ? fd.allergens.split(',').map((a) => a.trim()).filter(Boolean) : [];
         try { await setOverride(p.id, fd); closeModal(); toast('Карточка сохранена'); } catch (err) { toast(err.message, true); }
+      });
+    });
+  }
+
+  // ── Баннер ─────────────────────────────────────────────────
+  async function openBannerForm(b = {}) {
+    const cat = await fetch(`/api/v1/restaurants/${encodeURIComponent(S.restaurant)}/catalog`).then((r) => r.json()).catch(() => ({ products: [], groups: [] }));
+    const groups = (cat.groups || []).filter((g) => (cat.products || []).some((p) => p.parentGroup === g.id));
+    const products = (cat.products || []).filter((p) => p.price > 0);
+    const link = b.product_id ? 'product' : b.category_id ? 'category' : b.link_url ? 'url' : '';
+    const dt = (v) => (v ? new Date(new Date(v).getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '');
+    modal(`<div class="h2">${b.id ? 'Баннер' : 'Новый баннер'}</div><form id="banner-form">
+      <div class="banner-preview" id="bn-preview">${b.image_url ? `<img src="${esc(b.image_url)}" alt="">` : '<span>Картинка 2:1</span>'}</div>
+      <div style="display:flex;gap:8px;margin:8px 0 12px"><label class="btn btn--sm" style="cursor:pointer">Загрузить картинку<input type="file" id="bn-file" accept="image/jpeg,image/png,image/webp" hidden></label>
+        <input class="inp grow" name="image_url" placeholder="или ссылка на картинку" value="${esc(b.image_url || '')}"></div>
+      <div class="form-grid" style="grid-template-columns:1fr">
+        <div class="field"><label>Заголовок</label><input class="inp" name="title" required maxlength="200" value="${esc(b.title || '')}"></div>
+        <div class="field"><label>Текст (необязательно)</label><input class="inp" name="text" value="${esc(b.text || '')}"></div>
+      </div>
+      <div class="form-grid">
+        <div class="field"><label>Где показывать</label><select class="sel" name="placement">${Object.entries(PLACEMENTS).map(([k, l]) => `<option value="${k}" ${(b.placement || 'menu') === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div class="field"><label>Ресторан</label><select class="sel" name="restaurant_id"><option value="">Все рестораны</option>${S.restaurants.map((r) => `<option value="${r.id}" ${b.restaurant_id === r.id ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select></div>
+        <div class="field"><label>По нажатию</label><select class="sel" id="bn-link"><option value="">Ничего</option><option value="product" ${link === 'product' ? 'selected' : ''}>Открыть блюдо</option><option value="category" ${link === 'category' ? 'selected' : ''}>Открыть раздел меню</option><option value="url" ${link === 'url' ? 'selected' : ''}>Ссылка</option></select></div>
+        <div class="field" data-link="product" ${link === 'product' ? '' : 'hidden'}><label>Блюдо</label><select class="sel" name="product_id"><option value="">—</option>${products.map((p) => `<option value="${esc(p.id)}" ${String(b.product_id) === String(p.id) ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select></div>
+        <div class="field" data-link="category" ${link === 'category' ? '' : 'hidden'}><label>Раздел</label><select class="sel" name="category_id"><option value="">—</option>${groups.map((g) => `<option value="${esc(g.id)}" ${String(b.category_id) === String(g.id) ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}</select></div>
+        <div class="field" data-link="url" ${link === 'url' ? '' : 'hidden'}><label>Ссылка</label><input class="inp" name="link_url" type="url" placeholder="https://" value="${esc(b.link_url || '')}"></div>
+        <div class="field"><label>Показывать с</label><input class="inp" name="starts_at" type="datetime-local" value="${dt(b.starts_at)}"></div>
+        <div class="field"><label>Показывать до</label><input class="inp" name="ends_at" type="datetime-local" value="${dt(b.ends_at)}"></div>
+        <div class="field"><label>Порядок</label><input class="inp" name="sort_order" type="number" value="${esc(b.sort_order ?? 0)}"></div>
+        <label style="display:flex;gap:10px;align-items:center;margin-top:20px"><input type="checkbox" name="is_active" ${b.is_active !== false ? 'checked' : ''}> Показывать</label>
+      </div>
+      <div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить</button><button class="btn" type="button" data-modal-close>Отмена</button></div></form>`, (root) => {
+      const form = $('#banner-form', root);
+      const preview = (url) => { $('#bn-preview', root).innerHTML = url ? `<img src="${esc(url)}" alt="">` : '<span>Картинка 2:1</span>'; };
+      form.elements.image_url.addEventListener('change', (e) => preview(e.target.value));
+      $('#bn-link', root).addEventListener('change', (e) => {
+        root.querySelectorAll('[data-link]').forEach((el) => { el.hidden = el.dataset.link !== e.target.value; });
+      });
+      $('#bn-file', root).addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        try {
+          const res = await fetch('/api/v1/admin/upload', { method: 'POST', headers: { 'Content-Type': file.type, Authorization: `Bearer ${S.token}` }, body: file });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || 'Не удалось загрузить');
+          form.elements.image_url.value = data.url; preview(data.url); toast('Картинка загружена');
+        } catch (err) { toast(err.message, true); }
+      });
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const el = form.elements;
+        const linkType = $('#bn-link', root).value;
+        const iso = (v) => (v ? new Date(v).toISOString() : '');
+        const data = {
+          id: b.id, title: el.title.value.trim(), text: el.text.value.trim(), image_url: el.image_url.value.trim(),
+          placement: el.placement.value, restaurant_id: el.restaurant_id.value,
+          product_id: linkType === 'product' ? el.product_id.value : '', category_id: linkType === 'category' ? el.category_id.value : '',
+          link_url: linkType === 'url' ? el.link_url.value.trim() : '',
+          starts_at: iso(el.starts_at.value), ends_at: iso(el.ends_at.value), sort_order: el.sort_order.value, is_active: el.is_active.checked,
+        };
+        try { await api('POST', '/api/v1/admin/promos', data); closeModal(); toast('Баннер сохранён'); render(); } catch (err) { toast(err.message, true); }
       });
     });
   }
@@ -611,13 +718,15 @@
     modal(`<div class="h2">${u.id ? 'Сотрудник' : 'Новый сотрудник'}</div><form id="staff-form"><div class="form-grid">
       <div class="field"><label>Имя</label><input class="inp" name="name" value="${esc(u.name || '')}" required></div>
       <div class="field"><label>Логин</label><input class="inp" name="login" value="${esc(u.login || '')}" required></div>
-      <div class="field"><label>Роль</label><select class="sel" name="role">${[['waiter', 'Официант'], ['manager', 'Управляющий'], ['admin', 'Администратор']].map(([v, l]) => `<option value="${v}" ${u.role === v ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+      <div class="field"><label>Роль</label><select class="sel" name="role" id="staff-role">${['waiter', 'manager', 'marketing', 'admin'].map((v) => `<option value="${v}" ${u.role === v ? 'selected' : ''}>${ROLE_INFO[v][0]}</option>`).join('')}</select>
+        <small class="muted" id="role-info" style="display:block;margin-top:6px">${esc(ROLE_INFO[u.role || 'waiter'][1])}</small></div>
       <div class="field"><label>Ресторан</label><select class="sel" name="restaurantId"><option value="">Все</option>${(S.staffRests || []).map((r) => `<option value="${r.id}" ${u.restaurantId === r.id ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select></div>
       <div class="field"><label>${u.id ? 'Новый пароль (пусто — не менять)' : 'Пароль'}</label><input class="inp" name="password" type="password" ${u.id ? '' : 'required'}></div>
       <div class="field"><label>PIN для приложения официанта (4–6 цифр${u.hasPin ? ', пусто — не менять' : ''})</label><input class="inp" name="pin" inputmode="numeric" pattern="\\d{4,6}" maxlength="6" autocomplete="off" placeholder="${u.hasPin ? 'PIN задан' : 'например, 482915'}"></div>
       ${u.hasPin ? '<label style="display:flex;gap:10px;align-items:center;margin-top:20px"><input type="checkbox" name="clearPin"> Сбросить PIN</label>' : ''}
       <label style="display:flex;gap:10px;align-items:center;margin-top:20px"><input type="checkbox" name="isActive" ${u.isActive !== false ? 'checked' : ''}> Активен</label>
       </div><div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить</button><button class="btn" type="button" data-modal-close>Отмена</button></div></form>`, (root) => {
+      $('#staff-role', root).addEventListener('change', (e) => { $('#role-info', root).textContent = ROLE_INFO[e.target.value][1]; });
       $('#staff-form', root).addEventListener('submit', async (e) => {
         e.preventDefault();
         const fd = Object.fromEntries(new FormData(e.target));
@@ -775,6 +884,8 @@
       if (q('[data-only-stop]')) { S.menu.onlyStop = !S.menu.onlyStop; render(); return; }
       if (q('[data-ov]')) { const b = q('[data-ov]'); await setOverride(b.dataset.ov, { [b.dataset.field]: b.dataset.val === 'true' }); toast('Сохранено'); return; }
       if (q('[data-edit-product]')) { openProductEditor(q('[data-edit-product]').dataset.editProduct); return; }
+      if (q('[data-banner-new]')) { openBannerForm(); return; }
+      if (q('[data-banner-edit]')) { openBannerForm(JSON.parse(q('[data-banner-edit]').dataset.bannerEdit)); return; }
       if (q('[data-crud-new]')) { openCrudForm(q('[data-crud-new]').dataset.crudNew); return; }
       if (q('[data-crud-edit]')) { const { path, row } = JSON.parse(q('[data-crud-edit]').dataset.crudEdit); openCrudForm(path, row); return; }
       if (q('[data-crud-del]')) { if (!confirm('Удалить?')) return; await api('DELETE', q('[data-crud-del]').dataset.crudDel); render(); return; }

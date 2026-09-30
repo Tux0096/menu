@@ -31,8 +31,12 @@
     bell: '<svg viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 19.5V12a7 7 0 0114 0v7.5l2 2.5H5l2-2.5zM11.5 24.5a2.5 2.5 0 005 0"/></svg>',
     cart: '<svg viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 4.5h3.2l2.6 13h12.6l2.6-9.5H7.7"/><circle cx="10.5" cy="22.5" r="1.8"/><circle cx="19.5" cy="22.5" r="1.8"/></svg>',
     search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>',
+    spark: '<svg viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M14 3.5l2.4 6.6 6.6 2.4-6.6 2.4L14 21.5l-2.4-6.6-6.6-2.4 6.6-2.4L14 3.5z"/><path d="M22 19.5l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9.9-2.1z"/></svg>',
+    grid: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>',
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   };
+  // Метки блюд (задаёт маркетинг в админке)
+  const BADGES = { hit: 'Хит', new: 'Новинка', spicy: 'Острое', veg: 'Вег', sale: 'Выгодно', chef: 'Шеф рекомендует' };
   const GROUP_EMOJI = [['ролл', '🍣'], ['суш', '🍣'], ['сет', '🍱'], ['пицц', '🍕'], ['суп', '🍜'], ['wok', '🥡'], ['лапш', '🍜'],
     ['салат', '🥗'], ['закуск', '🥟'], ['десерт', '🍰'], ['напит', '🥤'], ['бар', '🍸'], ['чай', '🍵'], ['кофе', '☕'],
     ['бургер', '🍔'], ['поке', '🥙'], ['соус', '🥢'], ['горяч', '🔥']];
@@ -40,14 +44,17 @@
     const hay = `${p.parentGroupName || ''} ${p.name || ''}`.toLowerCase();
     return (GROUP_EMOJI.find(([k]) => hay.includes(k)) || [null, '🍽'])[1];
   };
-  const imgSrc = (src) => {
+  // Фото из iiko — через /img: сервер отдаёт WebP нужной ширины (в 20–50 раз легче оригинала)
+  const imgSrc = (src, w = 480) => {
     if (!src) return null;
-    if (/^https?:\/\//.test(src) || src.startsWith('/')) return src;
+    if (/^https?:\/\//.test(src)) return `/img?w=${w}&u=${encodeURIComponent(src)}`;
+    if (src.startsWith('/')) return src;
     return `/${src}`;
   };
-  const imgHtml = (p, cls = 'dish__img') => {
-    const src = imgSrc(p.image);
-    return `<div class="${cls}">${src ? `<img src="${esc(src)}" alt="" loading="lazy" onerror="this.remove()">` : ''}${src ? '' : emojiFor(p)}</div>`;
+  const imgHtml = (p, cls = 'dish__img', w = 320) => {
+    const src = imgSrc(p.image, w);
+    const lazy = cls === 'product-hero' ? 'fetchpriority="high"' : 'loading="lazy"';
+    return `<div class="${cls}">${src ? `<img src="${esc(src)}" alt="" ${lazy} decoding="async" onerror="this.remove()">` : ''}${src ? '' : emojiFor(p)}</div>`;
   };
 
   // ── Состояние ──────────────────────────────────────────────
@@ -365,36 +372,37 @@
 
   function nav() {
     const count = cartCount();
-    return `<nav class="nav" aria-label="Навигация">
-      <button class="nav__ai ${S.tab === 'ai' ? 'is-active' : ''}" data-go="ai" aria-label="AI-помощник"><div class="orb"></div><span>AI</span></button>
-      <div class="nav__bar">
-        <button class="nav__btn ${S.tab === 'menu' ? 'is-active' : ''}" data-go="menu" aria-label="Меню">${ICONS.home}</button>
-        <button class="nav__btn" data-action="call" aria-label="Позвать официанта">${ICONS.bell}</button>
-        <button class="nav__btn ${S.tab === 'order' ? 'is-active' : ''}" data-go="order" aria-label="Заказ">${ICONS.cart}${count ? `<span class="badge">${count}</span>` : ''}</button>
-      </div>
+    const item = (attrs, icon, label, active, badge = '') => `<button class="fnav__item ${active ? 'is-active' : ''}" ${attrs}>
+        <span class="fnav__icon">${icon}${badge}</span><span class="fnav__label">${label}</span></button>`;
+    return `<nav class="fnav" aria-label="Навигация">
+      ${item('data-go="menu"', ICONS.home, 'Меню', S.tab === 'menu')}
+      ${item('data-go="ai"', ICONS.spark, 'AI', S.tab === 'ai')}
+      ${item('data-action="call"', ICONS.bell, 'Официант', false)}
+      ${item('data-go="order"', ICONS.cart, 'Заказ', S.tab === 'order', count ? `<span class="fnav__badge">${count}</span>` : '')}
     </nav>`;
   }
+
 
   function dishCard(p, { reason = null } = {}) {
     const qty = S.cart[String(p.id)]?.qty || 0;
     const stopped = isStopped(p);
     const sub = reason || p.description || '';
+    const label = p.badge ? `<span class="dish__label" data-badge="${esc(p.badge)}">${esc(BADGES[p.badge] || p.badge)}</span>` : '';
     return `<article class="dish ${stopped ? 'is-stopped' : ''} ${qty && !stopped ? 'has-qty' : ''}" data-product="${esc(p.id)}">
-      ${imgHtml(p)}
+      <div class="dish__photo">${imgHtml(p)}${label}${qty && !stopped ? `<span class="dish__count" aria-label="В заказе ${qty}">${qty}</span>` : ''}</div>
       <div class="dish__body">
-        <div>
+        <div class="dish__head">
           <div class="dish__name">${esc(p.name)}</div>
-          ${sub ? `<div class="dish__desc" style="margin-top:6px">${esc(sub)}</div>` : ''}
+          ${sub ? `<div class="dish__desc">${esc(sub)}</div>` : ''}
         </div>
-        <div class="dish__price"><b>${rub(p.price)}</b>${p.weight ? `<span>${esc(p.weight)}</span>` : ''}
-          ${stopped ? '<span class="tag tag--stop">Нет в наличии</span>' : ''}</div>
-      </div>
-      <div class="dish__action">
-        ${stopped ? '' : qty ? `<div class="qty">
-            <button class="round-btn round-btn--sm round-btn--light" data-dec="${esc(p.id)}" aria-label="Убрать">${ICONS.minus}</button>
+        <div class="dish__foot">
+          <div class="dish__price"><div>${qty && !stopped ? `<i>${qty} шт |</i>` : ''}${rub(p.price)}</div>${p.weight ? `<span>${esc(p.weight)}</span>` : ''}</div>
+          ${stopped ? '<span class="tag tag--stop">Нет в наличии</span>' : qty ? `<div class="fqty">
+            <button data-dec="${esc(p.id)}" aria-label="Убрать">${ICONS.minus}</button>
             <b>${qty}</b>
-            <button class="round-btn round-btn--sm" data-inc="${esc(p.id)}" aria-label="Добавить">${ICONS.plus}</button>
-          </div>` : `<button class="round-btn round-btn--sm" data-inc="${esc(p.id)}" aria-label="Добавить ${esc(p.name)}">${ICONS.plus}</button>`}
+            <button data-inc="${esc(p.id)}" aria-label="Добавить">${ICONS.plus}</button>
+          </div>` : `<button class="add-btn" data-inc="${esc(p.id)}" aria-label="Добавить ${esc(p.name)}">${ICONS.plus}</button>`}
+        </div>
       </div>
     </article>`;
   }
@@ -537,6 +545,7 @@
         <h1>Спросите Fudji Ai</h1>
         <div class="ai-hero__hello">${esc(hello)}</div>
       </section>
+      ${hasResults ? '' : bannersHtml('ai')}
       ${body}
       <div class="ai-bottom">
         <div class="chips">${chips}</div>
@@ -591,6 +600,30 @@
     </div>`;
   }
 
+  // ── Баннеры маркетинга (админка → «Баннеры и акции») ────────
+  function bannersHtml(placement) {
+    const list = (S.config?.promos || []).filter((b) => (b.placement || 'menu') === placement);
+    if (!list.length) return '';
+    return `<div class="banners">${list.map((b) => {
+      const src = imgSrc(b.image, 960);
+      return `<button class="banner ${src ? 'has-img' : ''}" data-banner="${esc(b.id)}">
+        ${src ? `<img src="${esc(src)}" alt="" loading="lazy" decoding="async">` : ''}
+        <div class="banner__text"><div class="banner__title">${esc(b.title)}</div>${b.text ? `<div class="banner__sub">${esc(b.text)}</div>` : ''}</div>
+      </button>`;
+    }).join('')}</div>`;
+  }
+  function openBanner(id) {
+    const b = (S.config?.promos || []).find((x) => String(x.id) === String(id));
+    if (!b) return;
+    if (b.productId) { openProduct(b.productId); return; }
+    if (b.categoryId) {
+      if (S.tab !== 'menu') go('menu');
+      setTimeout(() => document.getElementById(`cat-${b.categoryId}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+      return;
+    }
+    if (b.url && /^https?:\/\//.test(b.url)) window.open(b.url, '_blank', 'noopener');
+  }
+
   // ── Экран: меню ────────────────────────────────────────────
   function menuSections() {
     const products = S.catalog?.products || [];
@@ -616,7 +649,8 @@
       <form class="pill-input search" id="search-form" onsubmit="return false">
         ${ICONS.search}<input id="search" type="search" placeholder="Поиск по меню" value="${esc(S.menu.search)}" aria-label="Поиск">
       </form>
-      ${S.menu.search ? '' : `<div class="cats" id="cats">${sections.map((s) => `<button data-cat="${esc(s.id)}">${esc(s.name)}</button>`).join('')}</div>`}
+      ${S.menu.search ? '' : bannersHtml('menu')}
+      ${S.menu.search ? '' : `<div class="cats" id="cats"><button class="cats__all" data-action="all-cats" aria-label="Все разделы меню">${ICONS.grid}</button>${sections.map((s) => `<button data-cat="${esc(s.id)}">${esc(s.name)}</button>`).join('')}</div>`}
       ${sections.length ? sections.map((s) => `<h2 class="section-title" id="cat-${esc(s.id)}">${esc(s.name)}</h2>
         <div class="list">${s.items.map((p) => dishCard(p)).join('')}</div>`).join('')
     : S.catalog.products?.length
@@ -714,6 +748,7 @@
     const multi = (s?.guests || []).length > 1;
     return `${topbar()}<main class="screen">
       <h1 class="page-title">Заказ</h1>
+      ${bannersHtml('order')}
       <section class="card">
         <div class="steps">${stepper}</div>
         <div class="status-text">${esc(s?.workflowLabel || 'Добро пожаловать')}</div>
@@ -837,7 +872,7 @@
     const draw = () => {
       const qty = S.cart[String(p.id)]?.qty || 0;
       const stopped = isStopped(p);
-      return `${imgHtml(p, 'product-hero')}
+      return `${imgHtml(p, 'product-hero', 720)}
         <h2 style="margin-top:16px">${esc(p.name)}</h2>
         <div class="dish__price" style="margin:0 4px 12px"><b>${rub(p.price)}</b>${p.weight ? `<span>${esc(p.weight)}</span>` : ''}${stopped ? '<span class="tag tag--stop">Нет в наличии</span>' : ''}</div>
         ${p.description ? `<p class="muted" style="margin:0 4px;font-size:15px;line-height:1.45">${esc(p.description)}</p>` : ''}
@@ -951,14 +986,99 @@
     }
   }
 
-  async function requestBill() {
-    try { applySession(await api('POST', '/api/v1/table/request-bill', { sessionId: S.sessionId })); toast('Официант получил запрос счёта'); render(); } catch (e) { toast(e.message, true); }
+  async function sendBillRequest(guestIds = null) {
+    try {
+      applySession(await api('POST', '/api/v1/table/request-bill', { sessionId: S.sessionId, guestIds }));
+      toast('Официант получил запрос счёта'); render();
+    } catch (e) { toast(e.message, true); }
+  }
+
+  /** Счёт: за весь стол, только за себя или за выбранных гостей (например, за себя и спутницу). */
+  function requestBill() {
+    const s = S.session;
+    const guests = s?.guests || [];
+    if (guests.length < 2) { sendBillRequest(); return; }
+    const me = String(S.guest?.id || '');
+    const sumOf = (id) => (s.items || []).filter((i) => String(i.guestId) === String(id)).reduce((n, i) => n + i.lineTotal, 0);
+    const noGuest = (s.items || []).filter((i) => !i.guestId).reduce((n, i) => n + i.lineTotal, 0);
+    const picked = new Set(guests.map((g) => String(g.id)));
+    const draw = () => {
+      const all = picked.size === guests.length;
+      const amount = all ? s.total : [...picked].reduce((n, id) => n + sumOf(id), 0);
+      return `<h2>Счёт</h2>
+        <p class="sheet__hint">Отметьте, за кого платите. Официант принесёт счёт на эту сумму.</p>
+        <div class="opt-grid" style="grid-template-columns:1fr 1fr">
+          <button class="opt ${all ? 'is-active' : ''}" data-bill-all>Весь стол</button>
+          <button class="opt ${picked.size === 1 && picked.has(me) ? 'is-active' : ''}" data-bill-me>Только мой заказ</button>
+        </div>
+        <div class="bill-guests">${guests.map((g) => `<label class="bill-guest">
+            <input type="checkbox" data-bill-guest="${esc(g.id)}" ${picked.has(String(g.id)) ? 'checked' : ''}>
+            <span class="bill-guest__box">${ICONS.check}</span>
+            <span class="bill-guest__name">${esc(g.name)}${String(g.id) === me ? ' <i>(вы)</i>' : ''}</span>
+            <b>${rub(sumOf(g.id))}</b></label>`).join('')}
+          ${noGuest ? `<div class="bill-guest bill-guest--note"><span class="bill-guest__name">Добавил официант, без гостя</span><b>${rub(noGuest)}</b></div>` : ''}
+        </div>
+        ${noGuest && !all ? '<p class="sheet__hint" style="margin-top:8px">Блюда без гостя входят только в счёт за весь стол.</p>' : ''}
+        <button class="btn btn--dark" data-bill-send ${picked.size ? '' : 'disabled'} style="margin-top:14px"><span>Попросить счёт<span class="btn__sub">${rub(amount)}</span></span><span class="round-btn">${ICONS.arrowRight}</span></button>`;
+    };
+    openSheet('<div id="bill-sheet"></div>', (sheet) => {
+      const box = $('#bill-sheet'); box.innerHTML = draw();
+      sheet.addEventListener('click', (e) => {
+        if (e.target.closest('[data-bill-all]')) { guests.forEach((g) => picked.add(String(g.id))); box.innerHTML = draw(); return; }
+        if (e.target.closest('[data-bill-me]')) { picked.clear(); if (me) picked.add(me); box.innerHTML = draw(); return; }
+        if (e.target.closest('[data-bill-send]')) {
+          const all = picked.size === guests.length;
+          closeSheet();
+          sendBillRequest(all ? null : [...picked]);
+        }
+      });
+      sheet.addEventListener('change', (e) => {
+        const id = e.target.dataset?.billGuest;
+        if (!id) return;
+        if (e.target.checked) picked.add(id); else picked.delete(id);
+        box.innerHTML = draw();
+      });
+    });
   }
 
   async function newVisit() {
     S.cart = {}; persistCart(); S.ai.results = null; store.del('aiResults');
     try { await enterTable(); go('ai'); } catch (e) { toast(e.message, true); }
   }
+
+  /** Все разделы меню одним списком — строка категорий вмещает только несколько. */
+  function openCategoriesSheet() {
+    const sections = menuSections();
+    openSheet(`<h2>Разделы меню</h2><div class="cat-list">${sections.map((s) => `<button data-cat-jump="${esc(s.id)}">
+        <span>${esc(s.name)}</span><i>${s.items.length}</i></button>`).join('')}</div>`, (sheet) => {
+      sheet.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-cat-jump]');
+        if (!b) return;
+        closeSheet();
+        setTimeout(() => document.getElementById(`cat-${b.dataset.catJump}`)?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
+      });
+    });
+  }
+
+  // Подсветка раздела при прокрутке: активная категория видна в строке
+  let spyFrame = 0;
+  addEventListener('scroll', () => {
+    if (S.tab !== 'menu' || spyFrame) return;
+    spyFrame = requestAnimationFrame(() => {
+      spyFrame = 0;
+      const bar = document.getElementById('cats');
+      if (!bar) return;
+      const titles = [...document.querySelectorAll('.section-title')];
+      const line = bar.getBoundingClientRect().bottom + 12;
+      let cur = titles[0];
+      for (const t of titles) { if (t.getBoundingClientRect().top <= line) cur = t; else break; }
+      const id = cur?.id?.slice(4);
+      const chip = id && bar.querySelector(`[data-cat="${CSS.escape(id)}"]`);
+      if (!chip || chip.classList.contains('is-active')) return;
+      bar.querySelectorAll('[data-cat]').forEach((b) => b.classList.toggle('is-active', b === chip));
+      bar.scrollTo({ left: chip.offsetLeft - bar.clientWidth / 2 + chip.clientWidth / 2, behavior: 'smooth' });
+    });
+  }, { passive: true });
 
   function go(tab) {
     S.tab = tab;
@@ -1099,6 +1219,8 @@
       }
       return;
     }
+    const banner = t.closest('[data-banner]');
+    if (banner) { openBanner(banner.dataset.banner); return; }
     const chip = t.closest('[data-chip]');
     if (chip) { askAi(chip.dataset.chip, true); return; }
     if (t.closest('[data-retry]')) { askAi(S.ai.query); return; }
@@ -1119,6 +1241,7 @@
     else if (action === 'submit') submitToWaiter(t.closest('button'));
     else if (action === 'pay') openPaySheet();
     else if (action === 'bill') requestBill();
+    else if (action === 'all-cats') openCategoriesSheet();
     else if (action === 'feedback') openFeedbackSheet();
     else if (action === 'new-visit') newVisit();
     else if (action === 'clear') {

@@ -13,6 +13,7 @@ import { iikoCredsList, iikoApiLogin, maskIikoKey } from './lib/iiko-token.js';
 import { listSources } from './services/sources.js';
 import legacyRoutes from './routes/legacy.js';
 import { syncAllRestaurants } from './db/sync-iiko.js';
+import { imageHandler, warmImages } from './services/images.js';
 import { refreshStopLists, registerWebhooks, webhookToken } from './services/stoplist.js';
 import { getRestaurantCatalog, invalidateCatalogCache, warmCatalogs } from './services/catalog.js';
 import { checkOllamaHealth, getWelcomeSuggestions, suggestForQuery } from './services/ai-suggest.js';
@@ -80,6 +81,9 @@ async function staffRestaurant(req) {
 
 // ── Публичное: рестораны, меню, конфиг ──────────────────────────────────────
 
+// Картинки меню: уменьшенные WebP из кэша (оригиналы iiko — мегабайты)
+app.get('/img', (req, res, next) => imageHandler(req, res).catch(next));
+
 app.get('/health', h(async () => ({
   ok: true,
   db: (await pool.query('SELECT 1 AS ok')).rows[0].ok === 1,
@@ -115,10 +119,17 @@ app.get('/api/v1/config', h(async (req) => {
     listRows('ai_chips', { activeOnly: true }),
     listRows('promo_blocks', { activeOnly: true }),
   ]);
+  // Баннеры: общие и этого ресторана, в пределах дат показа
+  const now = Date.now();
+  const live = promos.filter((p) => (!p.restaurant_id || p.restaurant_id === r.id)
+    && (!p.starts_at || new Date(p.starts_at).getTime() <= now) && (!p.ends_at || new Date(p.ends_at).getTime() > now));
   return {
     restaurant: { name: r.name, address: r.address, slug: r.slug, phone: r.phone },
     chips: chips.map((c) => ({ id: c.id, label: c.label, query: c.query, emoji: c.emoji })),
-    promos,
+    promos: live.map((p) => ({
+      id: p.id, title: p.title, text: p.text, image: p.image_url, placement: p.placement || 'menu',
+      productId: p.product_id || null, categoryId: p.category_id || null, url: p.link_url || null,
+    })),
     fujiAppLoginUrl: process.env.FUJI_APP_LOGIN_URL || null,
     guestAuthRequired: process.env.GUEST_AUTH_REQUIRED !== 'false',
     paymentMethods: [
@@ -242,7 +253,7 @@ app.post('/api/v1/table/submit-to-waiter', guestAuth(), bySessionBody, h(async (
 }));
 app.post('/api/v1/table/request-bill', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId');
-  return requestBill(req.body.sessionId);
+  return requestBill(req.body.sessionId, { guest: req.guest, guestIds: req.body.guestIds });
 }));
 app.post('/api/v1/table/call-waiter', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId');
@@ -284,14 +295,14 @@ app.post('/api/v1/staff/login', h(async (req) => {
   requireBody(req.body, 'login', 'password');
   return staffLogin(req.body.login, req.body.password);
 }));
-app.get('/api/v1/staff/me', staffAuth(), h(async (req) => req.staff));
+app.get('/api/v1/staff/me', staffAuth('waiter', ['marketing']), h(async (req) => req.staff));
 // Приложение официанта: вход по PIN в выбранном ресторане
 app.post('/api/v1/staff/pin-login', h(async (req) => {
   requireBody(req.body, 'restaurant', 'pin');
   const r = await resolveRestaurant(req.body.restaurant);
   return pinLogin(r.id, req.body.pin, req.ip);
 }));
-app.get('/api/v1/staff/restaurants', staffAuth(), h(async () => listRestaurants()));
+app.get('/api/v1/staff/restaurants', staffAuth('waiter', ['marketing']), h(async () => listRestaurants()));
 
 const waiter = express.Router();
 waiter.use(staffAuth('waiter'));
@@ -384,7 +395,14 @@ app.get('/api/v1/manager/dashboard', staffAuth('manager'), h(async (req) => getH
 // ── Админка ─────────────────────────────────────────────────────────────────
 
 const admin = express.Router();
-admin.use(staffAuth('admin'));
+// Роли админки: администратор — всё (сотрудники и доступы, iiko, QR); маркетинг — только контент меню:
+// карточки блюд, фото, метки, баннеры, подсказки AI; управляющий — статистика (/api/v1/manager/*)
+const CONTENT_ROUTES = [['GET', /^\/menu$/], ['POST', /^\/upload$/], ['*', /^\/menu\/override/], ['*', /^\/chips/],
+  ['*', /^\/promos/], ['GET', /^\/restaurants$/]];
+admin.use((req, res, next) => {
+  const content = CONTENT_ROUTES.some(([m, re]) => (m === '*' || m === req.method) && re.test(req.path));
+  return staffAuth('admin', content ? ['marketing'] : [])(req, res, next);
+});
 admin.get('/menu', h(async (req) => getAdminMenu(await staffRestaurant(req), { force: req.query.refresh === '1' })));
 // Загрузка фото блюда: тело запроса — сам файл (image/jpeg|png|webp), до 8 МБ
 const IMAGE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
@@ -468,6 +486,8 @@ admin.delete('/sources/:code', h(async (req) => {
 }));
 admin.post('/menu/override', h(async (req) => {
   requireBody(req.body, 'productId');
+  // Стоп-лист — операционная задача зала, не маркетинга
+  if (req.staff.role === 'marketing') delete req.body.is_stopped;
   const r = await staffRestaurant(req);
   const restaurantId = req.body.scope === 'global' ? null : r.id;
   const row = await saveOverride(restaurantId, req.body.productId, req.body);
@@ -572,6 +592,7 @@ async function syncIikoMenu({ force = false, slugs = null } = {}) {
     }
     invalidateCatalogCache();
     await warmCatalogs();
+    warmImages().catch(() => {});
   } catch (e) {
     console.warn('iiko sync:', e.message);
   } finally {
@@ -592,7 +613,9 @@ warmCatalogs()
   .then(() => syncIikoMenu())
   .then(() => refreshAllStopLists())
   .then(() => registerWebhooks())
-  .catch((e) => console.warn('startup iiko:', e.message));
+  .catch((e) => console.warn('startup iiko:', e.message))
+  .then(() => warmImages())
+  .catch((e) => console.warn('картинки меню:', e.message));
 setInterval(() => syncIikoMenu(), 60 * 60 * 1000); // раз в час проверяем, не пора ли (раз в сутки)
 setInterval(refreshAllStopLists, parseInt(process.env.STOP_LIST_REFRESH_MS || '600000', 10));
 

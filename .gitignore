@@ -31,3 +31,4 @@ Thumbs.db
 
 # Фото блюд из админки
 menu-api/media/
+.cache/

@@ -347,6 +347,20 @@ const SCHEMA = `
   );
 
   ALTER TABLE staff_users ADD COLUMN IF NOT EXISTS pin_hash TEXT;
+  -- Роль «Маркетинг»: только контент меню (баннеры, подсказки AI, карточки блюд)
+  ALTER TABLE staff_users DROP CONSTRAINT IF EXISTS staff_users_role_check;
+  ALTER TABLE staff_users ADD CONSTRAINT staff_users_role_check CHECK (role IN ('admin', 'manager', 'waiter', 'marketing'));
+  -- Метка блюда в меню: hit, new, spicy, veg, sale, chef
+  ALTER TABLE menu_overrides ADD COLUMN IF NOT EXISTS badge VARCHAR(20);
+  -- Баннеры: где показывать, в каком ресторане, куда ведут, когда показывать
+  ALTER TABLE promo_blocks ADD COLUMN IF NOT EXISTS placement VARCHAR(20) NOT NULL DEFAULT 'menu';
+  ALTER TABLE promo_blocks ADD COLUMN IF NOT EXISTS restaurant_id UUID REFERENCES restaurants(id) ON DELETE CASCADE;
+  ALTER TABLE promo_blocks ADD COLUMN IF NOT EXISTS category_id VARCHAR(100);
+  ALTER TABLE promo_blocks ADD COLUMN IF NOT EXISTS link_url TEXT;
+  ALTER TABLE promo_blocks ADD COLUMN IF NOT EXISTS starts_at TIMESTAMPTZ;
+  ALTER TABLE promo_blocks ADD COLUMN IF NOT EXISTS ends_at TIMESTAMPTZ;
+  -- Запрос счёта: за кого платит гость (весь стол, только свой заказ или выбранные гости)
+  ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS bill_requests JSONB NOT NULL DEFAULT '[]';
   -- Телефоны официантов для push-уведомлений (Firebase Cloud Messaging)
   CREATE TABLE IF NOT EXISTS waiter_devices (
     token TEXT PRIMARY KEY,
