@@ -547,7 +547,7 @@ async function syncExtraSources(restaurants) {
       const { rows: [alc] } = await pool.query(
         `SELECT COUNT(*)::int AS n FROM products p JOIN categories c ON c.id = p.category_id
           WHERE p.restaurant_id = $1 AND COALESCE(p.source, 'main') = 'main' AND p.is_published
-            AND c.name ~* '(^|\s)(вин|крепк|алкогол|коктейл|настойк|виски|водк|коньяк|текил)'`,
+            AND c.name ~* '(^|\\s)(вин|крепк|алкогол|коктейл|настойк|виски|водк|коньяк|текил)'`,
         [r.id],
       );
       if (alc.n > 0) {
