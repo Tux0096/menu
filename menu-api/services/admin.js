@@ -98,8 +98,12 @@ export async function saveOverride(restaurantId, productId, patch) {
   return row;
 }
 
-export async function deleteOverride(id) {
-  await pool.query('DELETE FROM menu_overrides WHERE id = $1', [id]);
+/** Удалить правку; сотрудник ресторана — только правки своего ресторана (не общие) */
+export async function deleteOverride(id, ownRestaurantId = null) {
+  await pool.query(
+    'DELETE FROM menu_overrides WHERE id::text = $1 AND ($2::uuid IS NULL OR restaurant_id = $2)',
+    [String(id), ownRestaurantId],
+  );
   invalidateCatalogCache();
 }
 

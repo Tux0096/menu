@@ -8,15 +8,10 @@
 import axios from 'axios';
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import pool from '../db/pool.js';
+import { httpError } from '../lib/http.js';
 
 const LEGACY_API = process.env.LEGACY_API_URL || 'https://apiv2.infra-fuji.ru';
 const TOKEN_TTL_DAYS = parseInt(process.env.GUEST_TOKEN_TTL_DAYS || '30', 10);
-
-function httpError(status, message) {
-  const err = new Error(message);
-  err.status = status;
-  return err;
-}
 
 export function normalizePhone(raw) {
   let digits = String(raw || '').replace(/\D/g, '');
@@ -37,6 +32,13 @@ function mapGuest(row) {
     visitsCount: row.visits_count || 0,
     isFujiUser: Boolean(row.fuji_user_id),
   };
+}
+
+/** Гость в ответе клиенту: без полного номера телефона (на экране — только маска) */
+export function publicGuest(guest) {
+  if (!guest) return null;
+  const { phone, ...rest } = guest;
+  return rest;
 }
 
 async function upsertGuest({ phone, name, fujiUserId = null }) {
@@ -68,7 +70,7 @@ export async function loginByPhone({ phone, name }) {
   const cleanName = String(name || '').trim().slice(0, 100);
   const guest = await upsertGuest({ phone: normalized, name: cleanName });
   const token = await issueToken(guest.id);
-  return { token, guest: mapGuest(guest) };
+  return { token, guest: publicGuest(mapGuest(guest)) };
 }
 
 function decodeJwt(token) {
@@ -123,7 +125,7 @@ export async function loginByFujiToken(fujiToken) {
     fujiUserId: String(profile?.id || profile?.user?.id || phone),
   });
   const token = await issueToken(guest.id);
-  return { token, guest: mapGuest(guest) };
+  return { token, guest: publicGuest(mapGuest(guest)) };
 }
 
 export async function getGuestByToken(token) {
@@ -143,9 +145,10 @@ export async function updateGuestProfile(guestId, { name, allergens }) {
        name = COALESCE($2, name),
        allergens = COALESCE($3, allergens)
      WHERE id = $1 RETURNING *`,
-    [guestId, name ? String(name).slice(0, 100) : null, Array.isArray(allergens) ? allergens.map(String) : null],
+    [guestId, name ? String(name).slice(0, 100) : null,
+      Array.isArray(allergens) ? allergens.slice(0, 30).map((a) => String(a).slice(0, 60)) : null],
   );
-  return mapGuest(rows[0]);
+  return publicGuest(mapGuest(rows[0]));
 }
 
 export function guestTokenFromRequest(req) {

@@ -18,15 +18,17 @@ import { changeOrderPayments, closeTableOrder, iikoRequest, isIikoDemo, withIiko
 import { getSource, MAIN } from './sources.js';
 import { createWaiterNotification } from './waiter-notifications.js';
 import { NOTIFY_TYPES } from '../lib/table-workflow-config.js';
+import { httpError } from '../lib/http.js';
+import { withSessionMutex } from '../lib/session-mutex.js';
 
 const CP_API = 'https://api.cloudpayments.ru';
 const PAID_STATUSES = new Set(['Completed', 'Authorized']);
 const FAILED_STATUSES = new Set(['Declined', 'Cancelled', 'Voided']);
 
-function httpError(status, message) {
-  const e = new Error(message);
-  e.status = status;
-  return e;
+/** Чаевые: целые рубли, не больше суммы счёта и не больше 50 000 ₽ (защита от опечатки «лишний ноль») */
+function clampTip(tipAmount, base) {
+  const tip = Math.max(0, Math.round(Number(tipAmount) || 0));
+  return Math.min(tip, Math.max(0, Math.round(Number(base) || 0)), 50000);
 }
 
 // ── Настройки ресторана ─────────────────────────────────────────────────────
@@ -122,18 +124,39 @@ function kitchenDue(st, guestIds) {
 // ── Онлайн-оплата ───────────────────────────────────────────────────────────
 
 /** Начать оплату кухни онлайн: счёт в нашей базе и параметры для виджета CloudPayments. */
-export async function startOnlinePayment(sessionId, { tipAmount = 0, guest = null, guestIds = null } = {}) {
+export function startOnlinePayment(sessionId, opts = {}) {
+  return withSessionMutex(sessionId, () => startOnlinePaymentNow(sessionId, opts));
+}
+
+async function startOnlinePaymentNow(sessionId, { tipAmount = 0, guest = null, guestIds = null } = {}) {
+  // Незавершённые счета визита сначала досматриваем: вдруг уже оплачены (гость платил в другой вкладке)
+  const { rows: pending } = await pool.query(
+    "SELECT invoice_id, guest_id, guest_ids, created_at FROM table_payments WHERE session_id::text = $1 AND status = 'pending' AND invoice_id IS NOT NULL",
+    [String(sessionId)],
+  );
+  for (const p of pending) await confirmOnlinePayment(p.invoice_id).catch(() => null);
   const st = await sessionState(sessionId);
   const settings = await paySettings(st.session.rid);
   if (!settings.enabled) throw httpError(403, 'Онлайн-оплата в этом ресторане пока не подключена — оплатите официанту');
   if (st.session.payment_status === 'paid') throw httpError(409, 'Счёт уже оплачен');
+  if (st.session.status !== 'open') throw httpError(409, 'Визит закрыт — отсканируйте QR-код ещё раз');
   const ids = Array.isArray(guestIds) && guestIds.length ? guestIds.map(String) : null;
+  // Другой гость прямо сейчас оплачивает те же блюда — не выставляем второй счёт на них
+  const overlaps = (other) => !other || !ids || other.some((g) => ids.includes(String(g)));
+  const { rows: busy } = await pool.query(
+    `SELECT guest_id, guest_ids FROM table_payments WHERE session_id = $1 AND status = 'pending'
+       AND invoice_id IS NOT NULL AND created_at > NOW() - INTERVAL '5 minutes'`,
+    [st.session.id],
+  );
+  if (busy.some((b) => String(b.guest_id || '') !== String(guest?.id || '-') && overlaps(b.guest_ids))) {
+    throw httpError(409, 'Сейчас этот счёт оплачивает другой гость — подождите минуту');
+  }
   if (st.kitchen.some((i) => !i.is_locked && (!ids || ids.includes(String(i.guest_id))))) {
     throw httpError(400, 'Часть заказа ещё не передана на кухню — дождитесь официанта или позовите его');
   }
   const due = kitchenDue(st, ids);
   if (due.amount <= 0) throw httpError(400, 'Кухня уже оплачена — напитки бара оплачиваются картой официанту');
-  const tip = Math.max(0, Math.round(Number(tipAmount) || 0));
+  const tip = clampTip(tipAmount, due.amount);
   const invoiceId = `QR-${String(st.session.table_number).replace(/[^\w-]/g, '')}-${randomUUID().slice(0, 8)}`;
   await pool.query(
     `INSERT INTO table_payments (session_id, amount, tip_amount, method, status, invoice_id, guest_id, guest_ids)
@@ -181,7 +204,10 @@ export async function confirmOnlinePayment(invoiceId) {
   const m = data?.Model;
   if (!data?.Success || !m) return { status: 'pending', sessionId: pay.session_id };
   const expected = parseFloat(pay.amount) + parseFloat(pay.tip_amount || 0);
-  if (PAID_STATUSES.has(m.Status) && Number(m.Amount) + 0.01 >= expected) {
+  // Платёж должен быть именно по этому счёту, в рублях и на полную сумму
+  const sameInvoice = !m.InvoiceId || String(m.InvoiceId) === String(pay.invoice_id);
+  const rub = !m.Currency || m.Currency === 'RUB' || m.CurrencyCode === 0;
+  if (PAID_STATUSES.has(m.Status) && sameInvoice && rub && Number(m.Amount) + 0.01 >= expected) {
     const { rowCount } = await pool.query(
       `UPDATE table_payments SET status = 'completed', transaction_id = $2, paid_at = NOW()
        WHERE id = $1 AND status = 'pending'`,
@@ -310,7 +336,12 @@ async function waiterTypeFor(src, settings, method) {
  * (кухня — остаток после онлайн-оплаты, бар — целиком) и закрываем их; стол — оплачен.
  * Если iiko что-то не принял — стол не закрываем, официант видит причину и закрывает счёт на кассе.
  */
-export async function acceptWaiterPayment(sessionId, { method, tipAmount = 0 } = {}) {
+export function acceptWaiterPayment(sessionId, opts = {}) {
+  // Двойное нажатие «Наличными/Картой» не проводит оплату в iiko дважды: второй запрос ждёт первый и видит «уже оплачен»
+  return withSessionMutex(sessionId, () => acceptWaiterPaymentNow(sessionId, opts));
+}
+
+async function acceptWaiterPaymentNow(sessionId, { method, tipAmount = 0 } = {}) {
   if (!KIND[method]) throw httpError(400, 'Выберите: наличными или картой');
   const st = await sessionState(sessionId);
   const { session } = st;
@@ -363,7 +394,7 @@ export async function acceptWaiterPayment(sessionId, { method, tipAmount = 0 } =
       throw httpError(502, `iiko не закрыл счёт ${where}: ${reason}. Закройте его на кассе, затем «Закрыть стол»`);
     }
   }
-  const tip = Math.max(0, Math.round(Number(tipAmount) || 0));
+  const tip = clampTip(tipAmount, total);
   await pool.query(
     `INSERT INTO table_payments (session_id, amount, tip_amount, method, status, paid_at)
      VALUES ($1, $2, $3, $4, 'completed', NOW())`,

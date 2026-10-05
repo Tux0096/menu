@@ -24,14 +24,13 @@ import {
 } from '../iiko-client.js';
 import { createWaiterNotification } from './waiter-notifications.js';
 import { getSource, productSourceMap } from './sources.js';
+import { menuIndex, priceLine } from './menu-pricing.js';
+import { withSessionMutex } from '../lib/session-mutex.js';
 import { withIikoCreds } from '../iiko-client.js';
 
-export function httpError(status, message, extra = {}) {
-  const err = new Error(message);
-  err.status = status;
-  Object.assign(err, extra);
-  return err;
-}
+import { httpError } from '../lib/http.js';
+
+export { httpError };
 
 const PAYABLE = [
   WORKFLOW.CART_READY, WORKFLOW.WAITER_REVIEW, WORKFLOW.IN_PRODUCTION,
@@ -412,8 +411,8 @@ function aggregateCart(cartItems) {
       map.set(key, {
         productId: item.productId ? String(item.productId) : null,
         iikoProductId: key,
+        // название — только для текста ошибки; цену и название в заказ ставит сервер по меню (priceLine)
         name: String(item.name || 'Позиция').slice(0, 300),
-        price: Math.max(0, Number(item.price) || 0),
         quantity: qty,
         // Курс подачи 1–3 (гость выбирает в корзине); undefined — не менять
         course: item.course === undefined ? undefined : (Number(item.course) >= 1 && Number(item.course) <= 3 ? Number(item.course) : null),
@@ -445,8 +444,10 @@ async function writeGuestCart(client, ctx, cartItems, guestId) {
   const items = ctx.items.filter((i) => (i.guest_id || null) === guestId);
   const me = tableGuests(ctx).find((g) => g.id === guestId);
   if (session.payment_status === 'paid') throw httpError(409, 'Счёт уже оплачен — отсканируйте QR, чтобы начать новый заказ');
+  assertOpen(session);
 
   const incoming = aggregateCart(cartItems);
+  const index = await menuIndex(ctx.restaurant);
   const lockedQty = new Map();
   for (const row of items.filter((i) => i.is_locked)) {
     const key = String(row.iiko_product_id);
@@ -468,17 +469,23 @@ async function writeGuestCart(client, ctx, cartItems, guestId) {
     const pendingQty = line.quantity - (lockedQty.get(key) || 0);
     if (pendingQty <= 0) continue;
     const prev = prevPending.get(key);
+    const priced = priceLine(index, key, { qty: pendingQty, prevQty: prev?.quantity || 0, clientName: line.name });
     await client.query(
       `INSERT INTO table_order_items
          (session_id, product_id, iiko_product_id, name, price, quantity, line_total, seat_number, course, batch_no, is_locked,
           guest_id, guest_name, source)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12,$13)`,
-      [session.id, line.productId, key, line.name, line.price, pendingQty, line.price * pendingQty,
+      [session.id, line.productId, key, priced.name, priced.price, pendingQty, priced.price * pendingQty,
         prev?.seat_number || me?.seat || null, line.course !== undefined ? line.course : (prev?.course || null), nextBatch,
         guestId, me?.name || null, sources.get(key) || 'main'],
     );
   }
   return recalcTotal(client, session.id);
+}
+
+/** Визит открыт: в закрытый (официант закрыл стол, 12 часов без активности) гость ничего не добавляет */
+export function assertOpen(session) {
+  if (session.status !== 'open') throw httpError(409, 'Визит закрыт — отсканируйте QR-код, чтобы начать новый заказ');
 }
 
 async function withTransaction(fn) {
@@ -505,7 +512,7 @@ async function lockSession(client, sessionId) {
 
 /** Автосохранение корзины (кейс 5). */
 export async function saveGuestCart(sessionId, cartItems, guestId) {
-  await withTransaction(async (client) => {
+  await withSessionMutex(sessionId, () => withTransaction(async (client) => {
     const ctx = await lockSession(client, sessionId);
     await writeGuestCart(client, ctx, cartItems, guestId);
     const wf = ctx.session.workflow_status;
@@ -514,15 +521,16 @@ export async function saveGuestCart(sessionId, cartItems, guestId) {
       `UPDATE table_sessions SET workflow_status = $2, last_guest_activity_at = NOW() WHERE id = $1`,
       [sessionId, next],
     );
-  });
+  }));
   return getSessionView(sessionId);
 }
 
 /** «Передать официанту» / «Передать дозаказ» (кейсы 6, 9). */
 export async function submitToWaiter(sessionId, cartItems, guestId) {
   let notify = null;
-  await withTransaction(async (client) => {
+  await withSessionMutex(sessionId, () => withTransaction(async (client) => {
     const ctx = await lockSession(client, sessionId);
+    assertOpen(ctx.session);
     if (Array.isArray(cartItems)) await writeGuestCart(client, ctx, cartItems, guestId);
     const fresh = await getSessionContext(sessionId, client);
     const pending = fresh.items.filter((i) => !i.is_locked);
@@ -547,7 +555,7 @@ export async function submitToWaiter(sessionId, cartItems, guestId) {
         + `${pending.map((i) => `${i.name} ×${i.quantity}${i.guest_name ? ` (${i.guest_name})` : ''}`).join(', ')} — ${Math.round(sum)} ₽`,
       payload: { sessionId, itemsCount: pending.length, sum, isReorder },
     };
-  });
+  }));
   await createWaiterNotification(notify);
   return getSessionView(sessionId);
 }
@@ -575,6 +583,7 @@ const BILL_METHODS = { card: 'картой', cash: 'наличными' };
 export async function requestBill(sessionId, { guest = null, guestIds = null, method = null, part = null } = {}) {
   const ctx = await requireContext(sessionId);
   if (ctx.session.payment_status === 'paid') throw httpError(409, 'Счёт уже оплачен');
+  assertOpen(ctx.session);
   if (!ctx.items.length) throw httpError(400, 'В заказе пока нет блюд');
   const guests = tableGuests(ctx);
   const ids = Array.isArray(guestIds) ? [...new Set(guestIds.map(String))].filter((id) => guests.some((g) => String(g.id) === id)) : [];
@@ -634,8 +643,14 @@ export async function callWaiter(sessionId, reason = 'general', comment = '') {
 
 const PAYMENT_METHODS = ['card', 'sbp', 'apple_pay', 'google_pay'];
 
+// Демо-оплата без платёжного провайдера (отмечает счёт оплаченным сразу) — только для локальной разработки.
+// На проде оплата идёт через CloudPayments (/pay/start → /pay/confirm) или официанту.
+const DEMO_PAYMENTS = process.env.DEMO_PAYMENTS === 'true' && process.env.NODE_ENV !== 'production';
+
 export async function payBill(sessionId, { method = 'card', tipAmount = 0 } = {}) {
-  if (!PAYMENTS_ENABLED) throw httpError(403, 'Оплата через меню пока недоступна — попросите счёт у официанта');
+  if (!PAYMENTS_ENABLED || !DEMO_PAYMENTS) {
+    throw httpError(403, 'Оплата через меню — онлайн-оплатой или официанту: нажмите «Попросить счёт»');
+  }
   if (!PAYMENT_METHODS.includes(method)) throw httpError(400, 'Неизвестный способ оплаты');
   const tip = Math.max(0, Math.round(Number(tipAmount) || 0));
 
