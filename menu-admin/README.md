@@ -1,0 +1,38 @@
+# Админка QR-меню Фуджи
+
+Nuxt 3 SPA (`ssr: false`) + @nuxt/ui v2 + Pinia. Каркас и стиль — админка «Мудрого Пекаря» (`aimukov-star/mobi_app`, `apps/admin`):
+сайдбар с группами, `PageHeader` с крошками и описанием «что здесь делать», пустые состояния, ошибки с «Повторить», скелетоны,
+подтверждения вместо `confirm`, тосты, повторный вход без потери формы. Цвета — из гостевого меню Фуджи (`tailwind.config.ts`).
+
+Официанты в админку не входят — у них приложение «Фуджи Официант» (`waiter-app`, Flutter, Android и iOS).
+
+## Где живёт
+
+- Прод: https://adm.menu.franchise-fuji.ru/ → `/admin/` (то же — https://menu.franchise-fuji.ru/admin/).
+- Отдаёт `menu-api` (`app.js`, каталог `ADMIN_WEB_DIR`); API — `/api/v1` того же домена, вход — `POST /api/v1/staff/login`.
+- Сборка — в GitHub Actions (`deploy.yml`, шаг «Build admin»), на сервер приходит архив статики, `deploy/update.sh` его раскладывает.
+  Сборки нет — `/admin/` открывает старый терминал `/staff/`.
+
+## Запуск локально
+
+```bash
+cd menu-api && npm run dev        # API на :3101 (локально: ALLOW_DEMO_MENU=true, IIKO_DEMO=true)
+cd menu-admin && npm install && npm run dev   # http://localhost:3000/admin/ — /api и /media проксируются на :3101
+```
+
+Проверка: `npx nuxi typecheck`, сборка: `npm run generate` → `.output/public`.
+
+## Разделы и роли
+
+Права — в `utils/navigation.ts` (из них же сайдбар, крошки и проверка в `middleware/auth.global.ts`). Сервер проверяет роль сам.
+
+| Группа | Раздел | admin | manager | marketing |
+|---|---|:-:|:-:|:-:|
+| — | Сводка (зал сейчас, цифры дня, «требует внимания») | ✓ | ✓ | |
+| Меню | Блюда и стоп-лист, карточка блюда | ✓ | | ✓ (без стоп-листа) |
+| Маркетинг | Баннеры, AI-подсказки | ✓ | | ✓ |
+| Гости | Отзывы | ✓ | ✓ | |
+| Ресторан | QR-коды столов, Оплата | ✓ | | |
+| Система | Сотрудники, Журнал изменений | ✓ | | |
+
+Ресторан выбирается в сайдбаре; все запросы уходят с `?restaurant=<slug>`.

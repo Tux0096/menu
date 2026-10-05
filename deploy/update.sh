@@ -109,6 +109,27 @@ timeout 60 node db/iiko-sections-probe.js || true
 # Меню из iiko сервер выгружает сам: после деплоя — полностью (сбрасываем отметку), дальше раз в сутки
 node --input-type=module -e "import pool from './db/pool.js'; await pool.query(\"DELETE FROM settings WHERE name = 'iiko_menu_synced_at'\"); await pool.end();" || true
 
+echo "=== 4б. Админка (adm.menu…/admin/) ==="
+# Сборку делает GitHub Actions и кладёт архив в ~/menu-admin-upload; здесь — распаковка с заменой целиком
+ADMIN_DIST="$HOME/menu-admin-dist"
+ADMIN_TGZ="$HOME/menu-admin-upload/menu-admin.tgz"
+if [ -f "$ADMIN_TGZ" ]; then
+  rm -rf "$ADMIN_DIST.new" && mkdir -p "$ADMIN_DIST.new"
+  if tar -xzf "$ADMIN_TGZ" -C "$ADMIN_DIST.new" && [ -f "$ADMIN_DIST.new/200.html" ]; then
+    rm -rf "$ADMIN_DIST.old"
+    [ -d "$ADMIN_DIST" ] && mv "$ADMIN_DIST" "$ADMIN_DIST.old"
+    mv "$ADMIN_DIST.new" "$ADMIN_DIST"
+    rm -f "$ADMIN_TGZ"
+    echo "  админка обновлена"
+  else
+    rm -rf "$ADMIN_DIST.new"
+    echo "  ! архив админки повреждён — остаётся прежняя"
+  fi
+else
+  echo "  новой сборки нет — остаётся прежняя"
+fi
+set_env ADMIN_WEB_DIR "$ADMIN_DIST"
+
 echo "=== 5. Сервис ==="
 sudo cp "$REPO_DIR/deploy/systemd/menu-api.service" /etc/systemd/system/menu-api.service
 sudo systemctl daemon-reload
@@ -180,5 +201,6 @@ sudo journalctl -u menu-api --since "3 min ago" --no-pager -o cat | grep -E "^ca
 echo ""
 echo "Готово:"
 echo "  Гость:    https://menu.franchise-fuji.ru/?table=5"
+echo "  Админка:  https://adm.menu.franchise-fuji.ru/ (то же — https://menu.franchise-fuji.ru/admin/)"
 echo "  Персонал: https://menu.franchise-fuji.ru/staff/"
 echo "  Пароли персонала: $ENV_FILE (ADMIN_PASSWORD / MANAGER_PASSWORD / WAITER_PASSWORD)"
