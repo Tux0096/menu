@@ -1,0 +1,42 @@
+/* Базовые стили админки. Цвета — только из палитр tailwind (brand / cta / accent / blush / cream). */
+
+html,
+body {
+  @apply bg-cream font-sans text-brand-500 antialiased;
+}
+
+html {
+  scrollbar-color: theme('colors.brand.200') transparent;
+  scrollbar-width: thin;
+}
+
+/* Каркас панели (как .panel / .panel-content в Fuji) */
+.panel {
+  @apply flex min-h-screen;
+}
+
+.panel-content {
+  @apply mx-auto w-full min-w-0 max-w-[1440px] flex-1 px-4 py-4 sm:px-5 lg:px-6 lg:py-5;
+}
+
+.panel-box {
+  @apply rounded-2xl bg-white shadow-sm ring-1 ring-brand-100;
+}
+
+.panel-section-title {
+  @apply text-base font-semibold text-brand-500;
+}
+
+.muted {
+  @apply text-slate-500;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Таблицы в карточке: горизонтальная прокрутка на телефоне вместо переполнения страницы */
+.panel-box > div > table,
+.panel-box table {
+  @apply min-w-full;
+}

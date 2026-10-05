@@ -28,6 +28,35 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      # Админка (menu-admin, Nuxt): собираем здесь, на сервер кладём готовую статику — Node-сборка на сервере не нужна.
+      # Сбой сборки не останавливает деплой меню: на сервере останется прежняя админка.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: menu-admin/package-lock.json
+      - name: Build admin
+        id: admin
+        continue-on-error: true
+        working-directory: menu-admin
+        run: |
+          npm ci --no-audit --no-fund
+          npm run generate
+          tar -czf "$GITHUB_WORKSPACE/menu-admin.tgz" -C .output/public .
+      - name: Upload admin
+        if: steps.admin.outcome == 'success'
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          source: menu-admin.tgz
+          target: /home/ubuntu/menu-admin-upload
+          overwrite: true
+
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.0
         env:

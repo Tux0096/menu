@@ -1,0 +1,26 @@
+# Nuxt
+.nuxt
+.output
+.data
+.nitro
+.cache
+dist
+
+# Зависимости
+node_modules
+
+# Логи
+logs
+*.log
+
+# Прочее
+.DS_Store
+.fleet
+.idea
+.vscode/*
+!.vscode/extensions.json
+
+# Локальные переменные окружения
+.env
+.env.*
+!.env.example

@@ -3,7 +3,7 @@ dotenv.config();
 import express from 'express';
 import cors from 'cors';
 import { dirname, join } from 'path';
-import { mkdirSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, writeFileSync } from 'fs';
 import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import pool from './db/pool.js';
@@ -46,6 +46,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const WEB_DIR = process.env.MENU_WEB_DIR || join(__dirname, '..', 'menu-web');
 // Фото блюд, загруженные в админке (вне git, переживают деплой)
 const MEDIA_DIR = process.env.MEDIA_DIR || join(__dirname, 'media');
+// Админка (Nuxt SPA, menu-admin): сборку кладёт деплой (вне git); локально — menu-admin/.output/public
+const ADMIN_WEB_DIR = process.env.ADMIN_WEB_DIR || join(__dirname, '..', 'menu-admin', '.output', 'public');
 const app = express();
 const PORT = process.env.PORT || 3101;
 
@@ -582,7 +584,21 @@ app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
 
 app.use('/media', express.static(MEDIA_DIR, { maxAge: '30d', immutable: true }));
 app.use('/staff', express.static(join(WEB_DIR, 'staff'), { index: 'index.html' }));
-app.get(['/waiter', '/admin'], (req, res) => res.redirect('/staff/'));
+// Админка: файлы сборки с хэшем в имени (/admin/_nuxt/…) кэшируются навсегда, страница — без кэша;
+// любой путь внутри /admin/ отдаёт SPA (роутинг делает Nuxt). Сборки ещё нет — старый терминал /staff/.
+app.use('/admin', express.static(ADMIN_WEB_DIR, {
+  index: false,
+  redirect: false,
+  setHeaders: (res, file) => res.set('Cache-Control', file.includes('/_nuxt/') ? 'public, max-age=31536000, immutable' : 'no-cache'),
+}));
+app.get(['/admin', '/admin/*'], (req, res) => {
+  const page = ['200.html', 'index.html'].find((f) => existsSync(join(ADMIN_WEB_DIR, f)));
+  if (!page) return res.redirect('/staff/');
+  if (req.path === '/admin') return res.redirect('/admin/');
+  res.set('Cache-Control', 'no-cache');
+  return res.sendFile(join(ADMIN_WEB_DIR, page));
+});
+app.get('/waiter', (req, res) => res.redirect('/staff/'));
 app.use(express.static(join(WEB_DIR, 'guest'), { index: 'index.html' }));
 app.get('*', (req, res) => res.sendFile(join(WEB_DIR, 'guest', 'index.html')));
 
