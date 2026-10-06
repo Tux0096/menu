@@ -115,7 +115,7 @@ async function staffDiag(headers, restaurants) {
   console.log(`  сотрудников зала: ${hallActive.length}, с телефоном: ${hallActive.filter((x) => String(x.phone || '').replace(/\D/g, '').length >= 10).length}`);
   for (const r of restaurants) {
     try {
-      const d = await post('/api/employees/v1/attendance/list', { organizationId: r.organization_id, isClosed: false, limit: 1000, offset: 0, startAt: new Date(Date.now() - 36 * 3600_000).toISOString() });
+      const d = await post('/api/employees/v1/attendance/list', { organizationId: r.organization_id, isClosed: false, limit: 1000, offset: 0, startAt: new Date(Date.now() - 36 * 3600_000).toISOString(), endAt: new Date(Date.now() + 3600_000).toISOString() });
       const open = (d.items || []).filter((a) => !a.isClosed && !a.endAt);
       const hall = open.filter((a) => hallIds.has(a.employeeId));
       console.log(`  ${r.name}: открытых явок ${open.length}, из них зал ${hall.length}`);
