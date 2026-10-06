@@ -4,7 +4,7 @@
  */
 import QRCode from 'qrcode';
 import pool from '../db/pool.js';
-import { PUBLIC_MENU_URL } from '../lib/qr-config.js';
+import { PUBLIC_MENU_URL, qrKey } from '../lib/qr-config.js';
 import { getRestaurantCatalog, invalidateCatalogCache } from './catalog.js';
 import { httpError } from './table-session.js';
 
@@ -193,12 +193,19 @@ export async function updateRestaurant(id, { tablesCount, isDisabled }) {
 
 // ── QR-коды столов ──────────────────────────────────────────────────────────
 
+/** Ссылка QR стола с подписью: подпись выпускает только админка, гость её не подберёт */
 export function tableUrl(restaurantSlug, table) {
+  return `${PUBLIC_MENU_URL}/?restaurant=${encodeURIComponent(restaurantSlug)}&table=${encodeURIComponent(table)}`
+    + `&k=${qrKey(restaurantSlug, table)}`;
+}
+
+/** Ссылка без подписи — для публичного /api/v1/qr.svg (демо и старые ссылки) */
+export function plainTableUrl(restaurantSlug, table) {
   return `${PUBLIC_MENU_URL}/?restaurant=${encodeURIComponent(restaurantSlug)}&table=${encodeURIComponent(table)}`;
 }
 
-export async function tableQrSvg(restaurantSlug, table) {
-  return QRCode.toString(tableUrl(restaurantSlug, table), {
+export async function tableQrSvg(restaurantSlug, table, { signed = false } = {}) {
+  return QRCode.toString(signed ? tableUrl(restaurantSlug, table) : plainTableUrl(restaurantSlug, table), {
     type: 'svg', margin: 1, width: 320, color: { dark: '#091027', light: '#ffffff' },
   });
 }

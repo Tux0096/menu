@@ -6,7 +6,7 @@
  *   is_locked = TRUE  — отправлено в iiko, гость не может убрать.
  */
 import pool from '../db/pool.js';
-import { QR_RESTAURANT_SLUG } from '../lib/qr-config.js';
+import { isValidQrKey, QR_RESTAURANT_SLUG, QR_SIGNED_REQUIRED } from '../lib/qr-config.js';
 import {
   IDLE_REMINDER_MS,
   NOTIFY_TYPES,
@@ -284,11 +284,19 @@ async function findOpenSession(restaurantId, tableNumber) {
  * Скан QR: найти открытый визит стола или начать новый, привязать гостя.
  * Если прошлый визит оплачен — он закрывается, начинается новый (кейс 15).
  */
-export async function enterTable({ restaurantSlug, tableNumber, guest, previousSessionId = null, join = false, name = '' }) {
+export async function enterTable({
+  restaurantSlug, tableNumber, guest, previousSessionId = null, join = false, name = '', qrKey = null,
+}) {
   const restaurant = await resolveRestaurant(restaurantSlug);
   const table = normalizeTable(tableNumber, restaurant);
 
   let session = await findOpenSession(restaurant.id, table);
+  // ТЗ: гость не видит чужой стол без QR. С QR_SIGNED_REQUIRED за стол садятся только по подписанному QR;
+  // гость, который уже сидит за этим столом (перезагрузил страницу), входит без подписи.
+  const seated = Boolean(guest && session && (session.guest_ids || []).includes(guest.id) && session.payment_status !== 'paid');
+  if (QR_SIGNED_REQUIRED && !seated && !isValidQrKey(restaurant.slug, table, qrKey)) {
+    throw httpError(403, 'Отсканируйте QR-код на столе, чтобы открыть заказ', { code: 'QR_REQUIRED' });
+  }
   if (session && session.payment_status === 'paid') {
     await pool.query(
       `UPDATE table_sessions SET status = 'closed', closed_at = NOW(), updated_at = NOW() WHERE id = $1`,

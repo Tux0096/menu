@@ -59,6 +59,7 @@ router.post('/api/v1/table/enter', guestAuth(), h(async (req) => {
     previousSessionId: req.body.previousSessionId,
     join: req.body.join === true,
     name: req.body.name,
+    qrKey: req.body.qrKey ? String(req.body.qrKey).slice(0, 64) : null,
   });
 }));
 

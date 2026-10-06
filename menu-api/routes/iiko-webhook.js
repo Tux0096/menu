@@ -19,7 +19,8 @@ router.post('/api/v1/iiko/webhook', (req, res) => {
     const stopOrgs = new Set();
     for (const ev of events) {
       if (ev?.eventType === 'StopListUpdate' && ev.organizationId) stopOrgs.add(ev.organizationId);
-      if (ev?.eventType === 'TableOrderUpdate' && ev.eventInfo?.id) {
+      // TableOrderError — ошибка создания заказа на стол: обновляем визит сразу, не дожидаясь фонового опроса
+      if (['TableOrderUpdate', 'TableOrderError'].includes(ev?.eventType) && ev.eventInfo?.id) {
         // Заказ кухни или доп. источника (бар) — ищем по всем заказам визита
         const { rows } = await pool.query(
           `SELECT id FROM table_sessions WHERE iiko_order_id::text = $1

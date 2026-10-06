@@ -15,7 +15,7 @@ import { invalidateCatalogCache } from '../services/catalog.js';
 import { audit, listStaff, saveStaff, staffAuth } from '../services/staff-auth.js';
 import {
   deleteOverride, deleteRow, getAdminMenu, listAudit, listFeedback, listRestaurants, listRows, saveOverride, saveRow,
-  tableUrl, updateRestaurant,
+  tableQrSvg, tableUrl, updateRestaurant,
 } from '../services/admin.js';
 import { staffRestaurant } from '../lib/staff-scope.js';
 import { syncIikoMenu } from '../services/background-jobs.js';
@@ -186,12 +186,13 @@ admin.patch('/restaurants/:id', h(async (req) => {
   audit(req.staff, 'restaurant.update', 'restaurant', req.params.id, req.body);
   return row;
 }));
+// QR столов с подписью — картинка сразу в ответе (data URI): подписанный QR выпускает только админка
 admin.get('/tables', h(async (req) => {
   const r = await staffRestaurant(req);
-  return Array.from({ length: r.tables_count || 20 }, (_, i) => ({
+  return Promise.all(Array.from({ length: r.tables_count || 20 }, async (_, i) => ({
     table: String(i + 1),
     url: tableUrl(r.slug, i + 1),
-    qr: `/api/v1/qr.svg?restaurant=${r.slug}&table=${i + 1}`,
-  }));
+    qr: `data:image/svg+xml;base64,${Buffer.from(await tableQrSvg(r.slug, i + 1, { signed: true })).toString('base64')}`,
+  })));
 }));
 router.use('/api/v1/admin', admin);

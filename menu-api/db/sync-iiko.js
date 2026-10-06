@@ -247,7 +247,10 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
       if (!size) continue;
       const price = priceForOrg(size.prices, organizationId);
       if (!(price > 0)) continue; // блюдо не продаётся в этом ресторане
-      const n = size.nutritionPerHundredGrams || size.nutritions?.[0] || {};
+      // КБЖУ на 100 г — массив по организациям (NutritionInfoDto.organizations); берём запись этого ресторана
+      const nutr = [].concat(size.nutritionPerHundredGrams || [], size.nutritions || []).filter((x) => x && typeof x === 'object');
+      const n = nutr.find((x) => (x.organizations || []).includes(organizationId))
+        || nutr.find((x) => !(x.organizations || []).length) || nutr[0] || {};
       rows.push({
         category: { id: cat.id, name: cat.name, order: ci },
         id: item.itemId || item.id,
