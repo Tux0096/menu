@@ -21,6 +21,8 @@ export const iikoStaffLoginEnabled = () => process.env.IIKO_STAFF_LOGIN === 'on'
 // Зальные должности (по названию должности в iiko) и кто из них — управляющий зала
 const hallRe = () => new RegExp(process.env.IIKO_HALL_ROLES
   || 'официант|менеджер|администратор|хостес|бармен|раннер|сомелье|кассир|управляющ', 'i');
+// «Системный администратор» — не зал
+const NOT_HALL_RE = /системн/i;
 const MANAGER_RE = /менеджер|администратор|управляющ|директор/i;
 
 const byClient = createLimiter({ windowMs: 60_000, max: 5, message: 'Слишком много попыток — подождите минуту' });
@@ -64,7 +66,7 @@ const employeeName = (e) => String(e.name || [e.lastName, e.firstName].filter(Bo
 export function hallRole(e, positions) {
   const names = [e.mainRoleId, ...(e.roleIds || [])].filter(Boolean)
     .map((id) => positions.get(String(id))?.name).filter(Boolean);
-  const hall = names.filter((n) => hallRe().test(n));
+  const hall = names.filter((n) => hallRe().test(n) && !NOT_HALL_RE.test(n));
   if (!hall.length) return { role: null, names };
   return { role: hall.some((n) => MANAGER_RE.test(n)) ? 'manager' : 'waiter', names };
 }
@@ -106,6 +108,7 @@ export async function openShiftRestaurants(employeeId) {
       try {
         const d = await iikoRequest('/api/employees/v1/attendance/list', {
           organizationId: r.organization_id, employeeIds: [employeeId], isClosed: false, limit: 10, offset: 0,
+          startAt: new Date(Date.now() - 36 * 3600_000).toISOString(), // обязательное поле: смены за последние сутки с запасом
         });
         if ((d?.items || []).some((a) => !a.isClosed && !a.endAt)) found.set(r.id, r);
       } catch { /* нет доступа к явкам — только личные смены */ }
