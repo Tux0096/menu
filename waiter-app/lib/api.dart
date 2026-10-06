@@ -109,12 +109,30 @@ class Api {
   Map<String, dynamic>? _catalog;
   DateTime? _catalogAt;
   Future<Map<String, dynamic>> catalog({bool force = false}) async {
-    if (!force && _catalog != null && DateTime.now().difference(_catalogAt!) < const Duration(minutes: 3)) {
+    if (!force && _catalog != null && DateTime.now().difference(_catalogAt!) < const Duration(minutes: 1)) {
       return _catalog!;
     }
     _catalog = Map<String, dynamic>.from(await get('/api/v1/restaurants/$restaurantSlug/catalog') as Map);
     _catalogAt = DateTime.now();
     return _catalog!;
+  }
+
+  // ── Стоп-лист iiko: что закончилось и что осталось в ограниченном количестве ──
+  /// Свежий стоп-лист; заодно обновляет отметки в кэше меню, чтобы плитки показывали актуальное.
+  Future<Map<String, dynamic>> stopList() async {
+    final d = Map<String, dynamic>.from(await get('/api/v1/waiter/stop-list') as Map);
+    final byId = <String, Map>{for (final it in (d['items'] as List? ?? const [])) it['id'].toString(): it as Map};
+    for (final raw in (_catalog?['products'] as List? ?? const [])) {
+      final p = raw as Map;
+      final st = byId[p['id'].toString()];
+      p['isInStopList'] = st?['stopped'] == true;
+      if (st != null && st['stopped'] != true && ((st['balance'] as num?) ?? 0) > 0) {
+        p['stopBalance'] = st['balance'];
+      } else {
+        p.remove('stopBalance');
+      }
+    }
+    return d;
   }
 
   static String? imageUrl(dynamic image) {

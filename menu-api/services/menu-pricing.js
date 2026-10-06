@@ -8,7 +8,7 @@ import { getRestaurantCatalog } from './catalog.js';
 /** Сколько штук одной позиции можно заказать за раз (защита от опечаток и переполнения сумм) */
 export const MAX_LINE_QTY = 50;
 
-/** Индекс меню ресторана: id и iikoId блюда → { name, price, isInStopList } */
+/** Индекс меню ресторана: id и iikoId блюда → { name, price, isInStopList, balance } */
 export async function menuIndex(restaurant) {
   const catalog = await getRestaurantCatalog(restaurant);
   const index = new Map();
@@ -17,6 +17,7 @@ export async function menuIndex(restaurant) {
       name: String(p.name || 'Позиция').slice(0, 300),
       price: Math.round((Number(p.price) || 0) * 100) / 100,
       isInStopList: Boolean(p.isInStopList),
+      balance: Number(p.stopBalance) > 0 ? Number(p.stopBalance) : null, // ограниченный остаток в iiko
     };
     if (p.id) index.set(String(p.id), entry);
     if (p.iikoId) index.set(String(p.iikoId), entry);
@@ -37,5 +38,25 @@ export function priceLine(index, key, { qty, prevQty = 0, totalQty = qty, client
   if (!(p.price > 0)) throw httpError(400, `«${p.name.slice(0, 60)}» нельзя заказать через меню — позовите официанта`);
   if (qty > MAX_LINE_QTY) throw httpError(400, `«${p.name.slice(0, 60)}»: не больше ${MAX_LINE_QTY} шт. за раз`);
   if (p.isInStopList && totalQty > prevQty) throw httpError(409, `«${p.name.slice(0, 60)}» закончилось — уберите из корзины`);
+  if (p.balance && totalQty > p.balance && totalQty > prevQty) {
+    throw httpError(409, `«${p.name.slice(0, 60)}»: осталось только ${p.balance} шт.`);
+  }
   return { name: p.name, price: p.price };
+}
+
+/**
+ * Позиции, которые нельзя отправить на кухню: на стопе или больше остатка. items — [{ key, name, quantity }].
+ * Возвращает строки для ответа официанту; пусто — всё можно.
+ */
+export function stopProblems(index, items) {
+  const qty = new Map();
+  for (const i of items) qty.set(String(i.key), (qty.get(String(i.key)) || 0) + (Number(i.quantity) || 0));
+  const out = [];
+  for (const [key, n] of qty) {
+    const p = index.get(key);
+    if (!p) continue;
+    if (p.isInStopList) out.push(`«${p.name.slice(0, 60)}» — на стопе`);
+    else if (p.balance && n > p.balance) out.push(`«${p.name.slice(0, 60)}» — осталось ${p.balance} шт., в заказе ${n}`);
+  }
+  return out;
 }

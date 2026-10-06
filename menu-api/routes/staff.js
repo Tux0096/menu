@@ -11,6 +11,8 @@ import {
 import { listWaiterNotifications, markAllNotificationsRead, markNotificationRead } from '../services/waiter-notifications.js';
 import { listFeedback, listRestaurants } from '../services/admin.js';
 import { assertStaffSession, staffRestaurant } from '../lib/staff-scope.js';
+import { getRestaurantCatalog } from '../services/catalog.js';
+import { stopListLoadedAt } from '../services/stoplist.js';
 
 const router = express.Router();
 export default router;
@@ -57,6 +59,18 @@ waiter.post('/notifications/read-all', h(async (req) => {
   await markAllNotificationsRead(r.id);
 }));
 waiter.post('/notifications/:id/read', h(async (req) => { await markNotificationRead(req.params.id, (await staffRestaurant(req)).id); }));
+// Стоп-лист для приёма заказа: что закончилось и что осталось в ограниченном количестве (только блюда меню)
+waiter.get('/stop-list', h(async (req) => {
+  const catalog = await getRestaurantCatalog(await staffRestaurant(req));
+  const items = (catalog.products || [])
+    .filter((p) => Number(p.price) > 0 && (p.isInStopList || p.stopBalance))
+    .map((p) => ({
+      id: String(p.id), iikoId: p.iikoId ? String(p.iikoId) : null, name: p.name, group: p.parentGroupName || null,
+      stopped: Boolean(p.isInStopList), balance: p.isInStopList ? 0 : Number(p.stopBalance),
+    }))
+    .sort((a, b) => Number(b.stopped) - Number(a.stopped) || a.name.localeCompare(b.name, 'ru'));
+  return { updatedAt: stopListLoadedAt(), items };
+}));
 waiter.get('/sessions', h(async (req) => listActiveSessions((await staffRestaurant(req)).id)));
 // Схема зала: все столы ресторана — свободные и занятые, со статусом, суммой и таймерами
 waiter.get('/hall', h(async (req) => {

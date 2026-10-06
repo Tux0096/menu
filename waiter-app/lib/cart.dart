@@ -47,6 +47,11 @@ class TableCart extends ChangeNotifier {
       .where((i) => i['isLocked'] != true && i['productId']?.toString() == productId && seatOf(i) == seat)
       .fold(0, (s, i) => s + ((i['quantity'] as num?)?.toInt() ?? 0));
 
+  /// Сколько этой позиции в неотправленной части на всех местах (для остатка «осталось N»)
+  int pendingFor(String productId) => items
+      .where((i) => i['isLocked'] != true && i['productId']?.toString() == productId)
+      .fold(0, (s, i) => s + ((i['quantity'] as num?)?.toInt() ?? 0));
+
   int get pendingQty =>
       items.where((i) => i['isLocked'] != true).fold(0, (s, i) => s + ((i['quantity'] as num?)?.toInt() ?? 0));
 

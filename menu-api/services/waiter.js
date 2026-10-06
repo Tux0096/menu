@@ -8,7 +8,7 @@ import {
 } from '../iiko-client.js';
 import { createWaiterNotification } from './waiter-notifications.js';
 import { getSource, MAIN, productSourceMap } from './sources.js';
-import { menuIndex, priceLine } from './menu-pricing.js';
+import { menuIndex, priceLine, stopProblems } from './menu-pricing.js';
 import { withSessionMutex } from '../lib/session-mutex.js';
 import {
   getSessionContext,
@@ -184,6 +184,13 @@ async function sendToKitchenNow(sessionId, staff) {
   if (session.status !== 'open') throw httpError(409, 'Стол уже закрыт');
   const pending = ctx.items.filter((i) => !i.is_locked);
   if (!pending.length) throw httpError(400, 'Нет новых позиций для отправки');
+  // Стоп-лист проверяем в момент отправки: блюдо могло закончиться, пока гость собирал корзину
+  const problems = stopProblems(await menuIndex(restaurant), pending.map((i) => ({
+    key: i.iiko_product_id || i.product_id, quantity: i.quantity,
+  })));
+  if (problems.length) {
+    throw httpError(409, `Нельзя отправить: ${problems.join('; ')}. Уберите или уменьшите и предложите гостю замену.`, { code: 'STOP_LIST' });
+  }
 
   const demo = isIikoDemo();
   const orders = { ...(session.iiko_orders || {}) };
