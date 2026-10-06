@@ -74,7 +74,7 @@ async function staffDiag(headers, restaurants) {
   try {
     for (let offset = 0; offset < 20000; offset += 500) {
       const d = await post('/api/employees/v1/employee/list', {
-        fields: ['id', 'cardNumber', 'mainRoleId', 'roleIds', 'isFired', 'isSystem', 'organizationIds'], limit: 500, offset,
+        fields: ['id', 'cardNumber', 'phone', 'mainRoleId', 'roleIds', 'isFired', 'isSystem', 'organizationIds'], limit: 500, offset,
       });
       employees.push(...(d.items || []));
       if (!d.items?.length || employees.length >= (d.totalCount ?? 0)) break;
@@ -95,7 +95,8 @@ async function staffDiag(headers, restaurants) {
   for (const x of withCard) { const n = String(x.cardNumber).trim().length; lens[n] = (lens[n] || 0) + 1; }
   console.log(`  сотрудников в iiko: ${employees.length}, работают: ${active.length}, с кодом (картой): ${withCard.length}`
     + `${withCard.length ? ` · длина кода: ${Object.entries(lens).map(([k, v]) => `${k} цифр — ${v}`).join(', ')}` : ''}`);
-  const hallRe = new RegExp(process.env.IIKO_HALL_ROLES || 'официант|менеджер|администратор|хостес|бармен|раннер|сомелье|кассир|управляющ', 'i');
+  const hallBase = new RegExp(process.env.IIKO_HALL_ROLES || 'официант|менеджер|администратор|хостес|бармен|раннер|сомелье|кассир|управляющ', 'i');
+  const hallRe = { test: (n) => hallBase.test(n) && !/системн/i.test(n) };
   const byPos = new Map();
   for (const x of active) {
     for (const id of new Set([x.mainRoleId, ...(x.roleIds || [])].filter(Boolean))) {
@@ -110,9 +111,11 @@ async function staffDiag(headers, restaurants) {
   console.log(`  зальные должности: ${all.filter(([n]) => hallRe.test(n)).map(fmt).join('; ') || 'не найдены'}`);
   console.log(`  остальные: ${all.filter(([n]) => !hallRe.test(n)).map(fmt).join('; ') || '—'}`);
   const hallIds = new Set(active.filter((x) => [x.mainRoleId, ...(x.roleIds || [])].some((id) => hallRe.test(positions.get(String(id))?.name || ''))).map((x) => x.id));
+  const hallActive = active.filter((x) => hallIds.has(x.id));
+  console.log(`  сотрудников зала: ${hallActive.length}, с телефоном: ${hallActive.filter((x) => String(x.phone || '').replace(/\D/g, '').length >= 10).length}`);
   for (const r of restaurants) {
     try {
-      const d = await post('/api/employees/v1/attendance/list', { organizationId: r.organization_id, isClosed: false, limit: 1000, offset: 0 });
+      const d = await post('/api/employees/v1/attendance/list', { organizationId: r.organization_id, isClosed: false, limit: 1000, offset: 0, startAt: new Date(Date.now() - 36 * 3600_000).toISOString() });
       const open = (d.items || []).filter((a) => !a.isClosed && !a.endAt);
       const hall = open.filter((a) => hallIds.has(a.employeeId));
       console.log(`  ${r.name}: открытых явок ${open.length}, из них зал ${hall.length}`);
