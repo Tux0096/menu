@@ -313,6 +313,20 @@ const SCHEMA = `
     PRIMARY KEY (restaurant_id, product_id)
   );
   ALTER TABLE stop_lists ADD COLUMN IF NOT EXISTS source VARCHAR(30) NOT NULL DEFAULT 'main';
+  -- Стоп-лист iiko как есть: артикул, размер, когда добавлено (StopListItem: sku, sizeId, dateAdd)
+  ALTER TABLE stop_lists ADD COLUMN IF NOT EXISTS sku VARCHAR(100);
+  ALTER TABLE stop_lists ADD COLUMN IF NOT EXISTS size_id VARCHAR(100);
+  ALTER TABLE stop_lists ADD COLUMN IF NOT EXISTS date_add TIMESTAMPTZ;
+  -- Названия позиций номенклатуры iiko (в стоп-листе бывают ингредиенты и модификаторы, которых нет в меню)
+  CREATE TABLE IF NOT EXISTS iiko_product_names (
+    organization_id VARCHAR(100) NOT NULL,
+    product_id VARCHAR(100) NOT NULL,
+    name VARCHAR(300) NOT NULL,
+    sku VARCHAR(100),
+    type VARCHAR(30),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (organization_id, product_id)
+  );
 
   -- Дополнительные источники iiko ресторана (например, бар с алкоголем в отдельной организации iiko).
   -- Основной источник — сама организация ресторана (restaurants.organization_id), код 'main'.

@@ -197,3 +197,63 @@ export interface PublicCatalog {
   groups: { id: string; name: string }[];
   products: { id: string; name: string; price: number; parentGroup: string }[];
 }
+
+/** Точка сети: подключение к iiko, меню и стоп-лист */
+export interface NetworkPoint {
+  id: string;
+  slug: string;
+  name: string;
+  isDisabled: boolean;
+  /** Подключена к API-ключу iiko — меню и стоп-лист обновляются; иначе показана последняя выгрузка */
+  connected: boolean;
+  menuSource: string;
+  menuUpdatedAt: string | null;
+  products: number;
+  stopCount: number;
+  stopListRows: number;
+  stopUpdatedAt: string | null;
+}
+
+/** Позиция на точке: есть в iiko точки; hidden — скрыта в админке; stop — в стоп-листе iiko */
+export interface NetworkCell {
+  productId: string;
+  price: number;
+  stop: boolean;
+  hidden: boolean;
+  hiddenEverywhere?: boolean;
+  source?: string;
+}
+
+export interface NetworkItem {
+  key: string;
+  name: string;
+  group: string | null;
+  image: string | null;
+  description: string | null;
+  badge: string | null;
+  points: Record<string, NetworkCell>;
+}
+
+export interface NetworkMenu {
+  points: NetworkPoint[];
+  items: NetworkItem[];
+}
+
+export interface StopListItem {
+  restaurantId: string;
+  productId: string;
+  name: string | null;
+  type: string | null;
+  inMenu: boolean;
+  price: number | null;
+  balance: number;
+  stopped: boolean;
+  source: string;
+  sku: string | null;
+  dateAdd: string | null;
+  updatedAt: string | null;
+}
+
+export interface StopListPoint extends NetworkPoint {
+  items: StopListItem[];
+}

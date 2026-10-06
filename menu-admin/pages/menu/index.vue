@@ -4,7 +4,7 @@ import { useAuthStore } from '~/stores/auth';
 import { useMenuStore } from '~/stores/menu';
 import { useRestaurantStore } from '~/stores/restaurant';
 
-useHead({ title: 'Блюда и стоп-лист — Фуджи' });
+useHead({ title: 'Меню точки — Фуджи' });
 
 const auth = useAuthStore();
 const menu = useMenuStore();
@@ -177,9 +177,9 @@ function open(row: AdminProduct) {
 <template>
   <div>
     <PageHeader
-      title="Блюда и стоп-лист"
+      :title="`Меню точки${restaurants.current ? ` — ${restaurants.current.name}` : ''}`"
       icon="i-heroicons-book-open"
-      description="То, что гость видит в QR-меню, а официант — в приложении. Блюда и цены приходят из iiko сами; здесь — фото, описание, метки, порядок и стоп-лист. Нажмите на блюдо, чтобы открыть карточку."
+      description="Меню выбранной точки, как его видит гость и официант: фото, описание, метки, порядок и стоп-лист. Блюда и цены приходят из iiko. Где какая позиция есть по всей сети — в «Меню сети»."
     >
       <UButton v-if="isAdmin" icon="i-heroicons-arrow-down-tray" color="white" :loading="syncing" @click="syncFromIiko">Перевыгрузить из iiko</UButton>
       <UButton icon="i-heroicons-arrow-path" color="white" :loading="menu.loading && !syncing" aria-label="Обновить" @click="load({ force: true })" />

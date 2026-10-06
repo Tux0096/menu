@@ -10,14 +10,15 @@ import { isIikoDemo, accessibleOrgs, iikoRequest, withIikoCreds } from '../iiko-
 import { iikoCredsList, iikoApiLogin, maskIikoKey } from '../lib/iiko-token.js';
 import { listSources } from '../services/sources.js';
 import { paySettingsForAdmin, savePaySettings } from '../services/payments.js';
-import { refreshStopLists } from '../services/stoplist.js';
-import { invalidateCatalogCache } from '../services/catalog.js';
+import { listStopLists, refreshStopLists } from '../services/stoplist.js';
+import { getRestaurantCatalog, invalidateCatalogCache } from '../services/catalog.js';
 import { audit, listStaff, saveStaff, staffAuth } from '../services/staff-auth.js';
 import {
   deleteOverride, deleteRow, getAdminMenu, listAudit, listFeedback, listRestaurants, listRows, saveOverride, saveRow,
   tableQrSvg, tableUrl, updateRestaurant,
 } from '../services/admin.js';
 import { staffRestaurant } from '../lib/staff-scope.js';
+import { getNetworkMenu, getNetworkMenuPoints } from '../services/network-menu.js';
 import { syncIikoMenu } from '../services/background-jobs.js';
 
 const router = express.Router();
@@ -28,13 +29,66 @@ export default router;
 const admin = express.Router();
 // Роли админки: администратор — всё (сотрудники и доступы, iiko, QR); маркетинг — только контент меню:
 // карточки блюд, фото, метки, баннеры, подсказки AI; управляющий — статистика (/api/v1/manager/*)
-const CONTENT_ROUTES = [['GET', /^\/menu$/], ['POST', /^\/upload$/], ['*', /^\/menu\/override/], ['*', /^\/chips/],
+const CONTENT_ROUTES = [['GET', /^\/menu$/], ['*', /^\/network-menu/], ['GET', /^\/stop-lists$/], ['POST', /^\/upload$/], ['*', /^\/menu\/override/], ['*', /^\/chips/],
   ['*', /^\/promos/], ['GET', /^\/restaurants$/]];
 admin.use((req, res, next) => {
   const content = CONTENT_ROUTES.some(([m, re]) => (m === '*' || m === req.method) && re.test(req.path));
   return staffAuth('admin', content ? ['marketing'] : [])(req, res, next);
 });
 admin.get('/menu', h(async (req) => getAdminMenu(await staffRestaurant(req), { force: req.query.refresh === '1' })));
+
+// ── Меню сети: позиции всех точек и где каждая есть ─────────────────────────
+/** Рестораны, доступные сотруднику: привязанному — только свой */
+async function staffRestaurants(req) {
+  const list = await listRestaurants();
+  return req.staff.restaurantId ? list.filter((r) => r.id === req.staff.restaurantId) : list;
+}
+async function staffRestaurantBySlug(req, slug) {
+  const r = (await staffRestaurants(req)).find((x) => x.slug === slug || x.id === slug);
+  if (!r) throw httpError(403, 'Нет доступа к этому ресторану');
+  return r;
+}
+admin.get('/network-menu', h(async (req) => getNetworkMenu(await staffRestaurants(req))));
+// Есть ли позиция на точке: скрыть / вернуть (только среди блюд, которые есть в iiko этой точки)
+admin.post('/network-menu/availability', h(async (req) => {
+  requireBody(req.body, 'restaurant', 'productId');
+  const r = await staffRestaurantBySlug(req, req.body.restaurant);
+  const available = req.body.available !== false;
+  await saveOverride(r.id, String(req.body.productId), { is_hidden: !available, product_name: req.body.productName });
+  audit(req.staff, 'menu.availability', 'product', req.body.productId, { restaurant: r.slug, available, name: req.body.productName });
+  return { ok: true };
+}));
+// Карточка позиции сразу на нескольких точках: у каждой точки свой ID блюда в iiko
+admin.post('/network-menu/card', h(async (req) => {
+  requireBody(req.body, 'targets');
+  const targets = Array.isArray(req.body.targets) ? req.body.targets.slice(0, 50) : [];
+  if (!targets.length) throw httpError(400, 'Выберите точки');
+  const fields = { ...(req.body.fields || {}) };
+  delete fields.is_stopped; // стоп-лист — в iiko и в меню точки, не из карточки сети
+  delete fields.is_hidden; // где есть позиция — переключателем по точкам
+  for (const t of targets) {
+    const r = await staffRestaurantBySlug(req, t.restaurant);
+    await saveOverride(r.id, String(t.productId), { ...fields, product_name: req.body.productName });
+  }
+  audit(req.staff, 'menu.card.network', 'product', req.body.productName || '', { points: targets.map((t) => t.restaurant), fields });
+  return { ok: true, updated: targets.length };
+}));
+// Стоп-листы iiko как есть, по точкам (только чтение)
+admin.get('/stop-lists', h(async (req) => {
+  const restaurants = await staffRestaurants(req);
+  const { points } = await getNetworkMenuPoints(restaurants);
+  const rows = await listStopLists(restaurants.map((r) => r.id));
+  return Promise.all(points.map(async (p) => {
+    // Позиция из меню точки — название и цена как у гостя (каталог: выгрузка iiko + правки админки)
+    const catalog = await getRestaurantCatalog(restaurants.find((r) => r.id === p.id));
+    const byId = new Map((catalog.products || []).flatMap((x) => [[String(x.id), x], [String(x.iikoId || x.id), x]]));
+    const items = rows.filter((x) => x.restaurantId === p.id).map((x) => {
+      const m = byId.get(x.productId);
+      return m ? { ...x, name: m.name, price: Number(m.price) || x.price, inMenu: true } : x;
+    });
+    return { ...p, items };
+  }));
+}));
 // Загрузка фото блюда: тело запроса — сам файл (image/jpeg|png|webp), до 8 МБ
 // Фото (в том числе анимированные WebP/GIF) и короткие видео для «живого» меню
 const IMAGE_TYPES = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif' };

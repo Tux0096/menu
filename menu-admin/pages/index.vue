@@ -159,7 +159,9 @@ const actions = computed(() => {
   if (isAdmin.value) {
     list.push(
       { to: '/menu?stop=1', icon: 'i-heroicons-no-symbol', title: 'Стоп-лист', text: 'Что сейчас нельзя заказать', count: menu.stopCount || null, tone: menu.stopCount ? 'red' : undefined },
-      { to: '/menu', icon: 'i-heroicons-book-open', title: 'Карточки блюд', text: 'Фото, видео, описание, метки «Хит» и «Новинка»' },
+      { to: '/network-menu', icon: 'i-heroicons-table-cells', title: 'Меню сети', text: 'Где какая позиция есть, цены по точкам' },
+      { to: '/stop-lists', icon: 'i-heroicons-no-symbol', title: 'Стоп-листы iiko', text: 'Что на стопе на каждой точке' },
+      { to: '/menu', icon: 'i-heroicons-book-open', title: 'Меню точки', text: 'Фото, видео, описание, метки «Хит» и «Новинка»' },
       { to: '/banners', icon: 'i-heroicons-photo', title: 'Баннеры', text: 'Акции и новинки над меню' },
       { to: '/qr', icon: 'i-heroicons-qr-code', title: 'QR-коды столов', text: 'Распечатать наклейки на столы' },
     );
