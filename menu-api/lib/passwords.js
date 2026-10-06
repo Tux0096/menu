@@ -14,7 +14,13 @@ export function verifyPassword(password, stored) {
   return expected.length === check.length && timingSafeEqual(expected, check);
 }
 
+// Секрет подписи токенов персонала. В проде обязателен (deploy/update.sh задаёт случайный):
+// с известным значением по умолчанию любой мог бы выпустить себе токен администратора.
+const WEAK_SECRETS = new Set(['', 'change-me-long-random-string', 'fuji-menu-dev-secret-change-me']);
 const SECRET = process.env.AUTH_SECRET || 'fuji-menu-dev-secret-change-me';
+if (process.env.NODE_ENV === 'production' && (WEAK_SECRETS.has(process.env.AUTH_SECRET || '') || SECRET.length < 32)) {
+  throw new Error('AUTH_SECRET не задан или слабый — задайте случайную строку от 32 символов в menu-api/.env');
+}
 
 /** Подписанный токен персонала: base64url(payload).hmac */
 export function signToken(payload, ttlMs = 12 * 60 * 60 * 1000) {

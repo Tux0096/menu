@@ -434,13 +434,17 @@ const SOFT_INDEXES = [
   // Старые данные: оставить по одному отзыву на визит и одну успешную оплату, иначе индекс не создастся
   `DELETE FROM visit_feedback a USING visit_feedback b
      WHERE a.session_id = b.session_id AND (a.created_at, a.id::text) > (b.created_at, b.id::text)`,
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_visit_feedback_session ON visit_feedback(session_id)',
+  // Онлайн-оплат на визит может быть несколько (гости платят каждый за себя) — двойную запись одного
+  // платежа исключает уникальный invoice_id. Прежний индекс «одна успешная оплата на визит» ломал оплату
+  // второго гостя: деньги списаны, а платёж не засчитан. Оплата официанту (закрытие счёта) — одна на визит.
+  'DROP INDEX IF EXISTS idx_table_payments_one_completed',
   `UPDATE table_payments a SET status = 'duplicate' FROM table_payments b
      WHERE a.session_id = b.session_id AND a.status = 'completed' AND b.status = 'completed'
+       AND a.method <> 'cloudpayments' AND b.method <> 'cloudpayments'
        AND (a.created_at, a.id::text) > (b.created_at, b.id::text)`,
-  'CREATE UNIQUE INDEX IF NOT EXISTS idx_visit_feedback_session ON visit_feedback(session_id)',
-  // Защита от двойной оплаты: одна успешная оплата на визит
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_table_payments_one_completed
-     ON table_payments(session_id) WHERE status = 'completed'`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_table_payments_one_waiter
+     ON table_payments(session_id) WHERE status = 'completed' AND method <> 'cloudpayments'`,
 ];
 
 async function seedDefaults(pool) {

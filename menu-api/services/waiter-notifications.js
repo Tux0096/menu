@@ -34,10 +34,11 @@ export async function listWaiterNotifications(restaurantId, { unreadOnly = false
   return rows;
 }
 
-export async function markNotificationRead(notificationId) {
+/** Отметить уведомление прочитанным — только уведомление своего ресторана */
+export async function markNotificationRead(notificationId, restaurantId) {
   await pool.query(
-    `UPDATE waiter_notifications SET is_read = TRUE WHERE id = $1`,
-    [notificationId],
+    'UPDATE waiter_notifications SET is_read = TRUE WHERE id::text = $1 AND restaurant_id = $2',
+    [String(notificationId), restaurantId],
   );
 }
 

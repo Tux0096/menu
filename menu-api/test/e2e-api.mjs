@@ -51,8 +51,20 @@ assert.equal(r.status, 400); step('пустую корзину нельзя пе
 
 const [p1, p2, p3] = catalog.products;
 const line = (p, q) => ({ productId: p.id, iikoProductId: p.iikoId || p.id, name: p.name, price: p.price, quantity: q });
-s = ok(await api('POST', '/api/v1/table-order/cart', { sessionId: s.sessionId, items: [line(p1, 2), line(p2, 1)] }, G), 'cart');
-assert.equal(s.total, p1.price * 2 + p2.price); step(`корзина сохранена на сервере: ${s.total} ₽`);
+// Безопасность: цену и название ставит сервер по меню, а не клиент
+s = ok(await api('POST', '/api/v1/table-order/cart', {
+  sessionId: s.sessionId, items: [{ ...line(p1, 2), price: 1, name: 'Подделка' }, line(p2, 1)],
+}, G), 'cart');
+assert.equal(s.total, p1.price * 2 + p2.price, 'цена из меню, а не из запроса');
+assert.ok(!s.items.some((i) => i.name === 'Подделка'), 'название из меню');
+step(`корзина сохранена на сервере по ценам меню: ${s.total} ₽ (подменённая цена отброшена)`);
+r = await api('POST', '/api/v1/table-order/cart', {
+  sessionId: s.sessionId, items: [{ productId: '00000000-0000-4000-8000-000000000000', iikoProductId: '00000000-0000-4000-8000-000000000000', name: 'Нет такого', price: 1, quantity: 1 }],
+}, G);
+assert.equal(r.status, 400); step('блюдо не из меню не принимается (400)');
+r = await api('POST', '/api/v1/table-order/cart', { sessionId: s.sessionId, items: [line(p1, 500)] }, G);
+assert.equal(r.status, 400); step('500 штук одной позиции не принимается (400)');
+s = ok(await api('POST', '/api/v1/table-order/cart', { sessionId: s.sessionId, items: [line(p1, 2), line(p2, 1)] }, G), 'cart again');
 
 // 6. Передать официанту
 s = ok(await api('POST', '/api/v1/table/submit-to-waiter', { sessionId: s.sessionId, items: [line(p1, 2), line(p2, 1)] }, G), 'submit');
@@ -103,14 +115,12 @@ step('дозаказ отправлен на кухню без дублей');
 // 10. Счёт и оплата
 s = ok(await api('POST', '/api/v1/table/request-bill', { sessionId: s.sessionId }, G), 'bill');
 assert.equal(s.workflowStatus, 'bill_requested'); step(`«${s.workflowLabel}»`);
-// 10. Оплата через меню выключена (PAYMENTS_ENABLED=false): заказ не помечается оплаченным
+// 10. Демо-оплата без платёжного провайдера не отмечает счёт оплаченным (только DEMO_PAYMENTS локально)
 r = await api('POST', '/api/v1/table/guest-pay', { sessionId: s.sessionId, method: 'sbp', tipAmount: 0 }, G);
-if (process.env.PAYMENTS_ENABLED === 'true') {
-  assert.equal(r.status, 200); step('оплата через меню');
+if (process.env.DEMO_PAYMENTS === 'true') {
+  assert.equal(r.status, 200); step('демо-оплата через меню');
 } else {
-  assert.equal(r.status, 403); step('оплата через меню выключена (403), заказ не отмечается оплаченным');
-  r = await api('POST', `/api/v1/waiter/session/${s.sessionId}/close`, {}, W);
-  assert.equal(r.status, 403); step('закрытие заказа из терминала выключено (403)');
+  assert.equal(r.status, 403); step('оплата «без денег» через меню запрещена (403), заказ не отмечается оплаченным');
 }
 
 // 11. Отзыв
@@ -134,5 +144,22 @@ assert.ok(cat2.stopList.includes(p1.id));
 assert.ok(cat2.products.find((p) => p.id === p1.id).isInStopList);
 ok(await api('POST', '/api/v1/admin/menu/override?restaurant=novo-sadovaya', { productId: p1.id, is_stopped: false }, A), 'unstop');
 step('стоп-лист из админки: позиция видна, но недоступна');
+
+// Безопасность: AI-отзыв — только от гостя, заголовки безопасности, внутренние адреса в /img
+r = await api('POST', '/api/v1/ai/feedback', { query: 'x', productId: p1.id });
+assert.equal(r.status, 401); step('отзыв о подсказке AI без входа гостя не принимается (401)');
+const head = await fetch(`${BASE}/health`);
+assert.equal(head.headers.get('x-content-type-options'), 'nosniff');
+assert.match(head.headers.get('content-security-policy') || '', /frame-ancestors 'none'/);
+step('заголовки безопасности на месте');
+r = await fetch(`${BASE}/img?u=${encodeURIComponent('http://127.0.0.1:3101/health')}&w=160`);
+assert.equal(r.status, 404); step('/img не ходит по внутренним адресам (404)');
+r = await api('GET', `/api/v1/waiter/session/${s.sessionId}?token=${staff.token}`);
+assert.equal(r.status, 401); step('токен персонала в адресе не принимается (401)');
+
+// Официант закрывает стол; в закрытый визит гость больше ничего не добавляет
+ok(await api('POST', `/api/v1/waiter/session/${s.sessionId}/close`, {}, W), 'close');
+r = await api('POST', '/api/v1/table-order/cart', { sessionId: s.sessionId, items: [line(p1, 4)] }, G);
+assert.equal(r.status, 409); step('стол закрыт — гость не может дозаказать в закрытый визит (409)');
 
 console.log('\nВсе проверки пройдены');

@@ -8,6 +8,8 @@ import {
 } from '../iiko-client.js';
 import { createWaiterNotification } from './waiter-notifications.js';
 import { getSource, MAIN, productSourceMap } from './sources.js';
+import { menuIndex, priceLine } from './menu-pricing.js';
+import { withSessionMutex } from '../lib/session-mutex.js';
 import {
   getSessionContext,
   getSessionView,
@@ -85,7 +87,8 @@ function cleanSeatNames(current, patch) {
 }
 
 export async function updateOrder(sessionId, staff, { items = [], guestCount, seatNames } = {}) {
-  await withTransaction(async (client) => {
+  if (!Array.isArray(items)) throw httpError(400, 'Нет списка позиций');
+  await withSessionMutex(sessionId, () => withTransaction(async (client) => {
     const ctx = await lockSession(client, sessionId);
     assertEditable(ctx, staff);
     const lockedIds = new Set(ctx.items.filter((i) => i.is_locked).map((i) => i.id));
@@ -103,20 +106,32 @@ export async function updateOrder(sessionId, staff, { items = [], guestCount, se
       );
     }
 
+    // Сколько каждой позиции было в неотправленной корзине — блюдо из стоп-листа можно оставить, но не добавить
+    const prevQty = new Map();
+    for (const i of ctx.items.filter((x) => !x.is_locked)) {
+      const k = String(i.iiko_product_id);
+      prevQty.set(k, (prevQty.get(k) || 0) + i.quantity);
+    }
+    const index = await menuIndex(ctx.restaurant);
+    const newQty = new Map();
+
     await client.query('DELETE FROM table_order_items WHERE session_id = $1 AND is_locked = FALSE', [sessionId]);
     const nextBatch = Math.max(0, ...ctx.items.filter((i) => i.is_locked).map((i) => i.batch_no)) + 1;
     const sources = await productSourceMap(ctx.restaurant.id, items.map((i) => i.iikoProductId).filter(Boolean));
     for (const it of items.filter((i) => !(i.id && lockedIds.has(i.id)))) {
       const qty = Math.floor(Number(it.quantity) || 0);
       if (qty <= 0 || !it.iikoProductId) continue;
-      if (!/^[0-9a-f-]{36}$/i.test(String(it.iikoProductId))) throw httpError(400, `«${it.name}»: нет ID блюда в iiko`);
-      const price = Math.max(0, Number(it.price) || 0);
+      if (!/^[0-9a-f-]{36}$/i.test(String(it.iikoProductId))) throw httpError(400, `«${String(it.name || '').slice(0, 60)}»: нет ID блюда в iiko`);
+      const key = String(it.iikoProductId);
+      newQty.set(key, (newQty.get(key) || 0) + qty);
+      // Цена и название — из меню ресторана, не из запроса
+      const { price, name } = priceLine(index, key, { qty, totalQty: newQty.get(key), prevQty: prevQty.get(key) || 0, clientName: it.name });
       await client.query(
         `INSERT INTO table_order_items
            (session_id, product_id, iiko_product_id, name, price, quantity, line_total, seat_number, course, batch_no, is_locked,
             guest_id, guest_name, source)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12,$13)`,
-        [sessionId, it.productId || null, it.iikoProductId, String(it.name || 'Позиция').slice(0, 300),
+        [sessionId, it.productId || null, it.iikoProductId, name,
           price, qty, price * qty, it.seatNumber || null, it.course || null, nextBatch,
           guestOf(it.seatNumber)?.id || null, guestOf(it.seatNumber)?.name || null,
           sources.get(String(it.iikoProductId)) || 'main'],
@@ -135,7 +150,7 @@ export async function updateOrder(sessionId, staff, { items = [], guestCount, se
        WHERE id = $1`,
       [sessionId, gc, staff.id, String(EDIT_LOCK_MS), JSON.stringify(names)],
     );
-  });
+  }));
   return getSessionView(sessionId);
 }
 
@@ -156,11 +171,17 @@ async function saveTerminalGroup(restaurantId, code, terminalGroupId) {
  * (свой заказ на тот же стол). При ошибке одного iiko остальное уходит, не отправленное остаётся
  * в корзине, официант видит причину и может повторить.
  */
-export async function sendToKitchen(sessionId, staff) {
+export function sendToKitchen(sessionId, staff) {
+  // По одной отправке на визит: повторное нажатие ждёт первую и видит «нет новых позиций» вместо второго заказа в iiko
+  return withSessionMutex(sessionId, () => sendToKitchenNow(sessionId, staff));
+}
+
+async function sendToKitchenNow(sessionId, staff) {
   const ctx = await getSessionContext(sessionId);
   if (!ctx) throw httpError(404, 'Визит не найден');
   assertEditable(ctx, staff);
   const { session, restaurant } = ctx;
+  if (session.status !== 'open') throw httpError(409, 'Стол уже закрыт');
   const pending = ctx.items.filter((i) => !i.is_locked);
   if (!pending.length) throw httpError(400, 'Нет новых позиций для отправки');
 

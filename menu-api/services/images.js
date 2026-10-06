@@ -5,6 +5,8 @@
  */
 import axios from 'axios';
 import { createHash } from 'crypto';
+import { lookup as dnsLookup } from 'dns';
+import { isIP } from 'net';
 import { mkdir, readFile, rename, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
@@ -30,10 +32,54 @@ async function allowedUrls() {
   return allowed;
 }
 
+let missReloadAt = 0;
 async function isAllowed(url) {
   if ((await allowedUrls()).has(url)) return true;
-  allowedAt = 0; // меню могло только что обновиться
+  // Меню могло только что обновиться — перечитываем список, но не чаще раза в 30 секунд
+  // (иначе каждый запрос с выдуманным адресом гонял бы тяжёлый запрос к базе)
+  if (Date.now() - missReloadAt < 30_000) return false;
+  missReloadAt = Date.now();
+  allowedAt = 0;
   return (await allowedUrls()).has(url);
+}
+
+// ── Защита от SSRF: картинки качаем только с публичных адресов ─────────────
+// Адрес картинки задаёт админка, поэтому сервер не должен ходить по нему во внутреннюю сеть
+// (127.0.0.1, 10.x, 192.168.x, метаданные облака 169.254.169.254 и т. п.) — ни напрямую, ни через редирект.
+function isPrivateIp(ip) {
+  const v = isIP(ip);
+  if (v === 4) {
+    const [a, b] = ip.split('.').map(Number);
+    return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254)
+      || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 198 && (b === 18 || b === 19)) || a >= 224;
+  }
+  if (v === 6) {
+    const x = ip.toLowerCase();
+    if (x.startsWith('::ffff:')) return isPrivateIp(x.slice(7));
+    return x === '::' || x === '::1' || x.startsWith('fc') || x.startsWith('fd') || x.startsWith('fe8') || x.startsWith('fe9')
+      || x.startsWith('fea') || x.startsWith('feb') || x.startsWith('ff');
+  }
+  return true;
+}
+
+/** DNS-резолвер для запросов картинок: отказ, если имя указывает на внутренний адрес (и при DNS rebinding) */
+function publicLookup(hostname, options, callback) {
+  dnsLookup(hostname, { ...options, all: true }, (err, addresses) => {
+    if (err) return callback(err);
+    const list = Array.isArray(addresses) ? addresses : [{ address: addresses, family: options?.family || 4 }];
+    if (!list.length || list.some((a) => isPrivateIp(a.address))) {
+      return callback(Object.assign(new Error(`запрещённый адрес картинки: ${hostname}`), { code: 'EPRIVATE' }));
+    }
+    if (options?.all) return callback(null, list);
+    return callback(null, list[0].address, list[0].family);
+  });
+}
+
+function assertPublicUrl(raw) {
+  const u = new URL(raw);
+  if (!/^https?:$/.test(u.protocol)) throw new Error('картинка только по http(s)');
+  const host = u.hostname.replace(/^\[|\]$/g, '');
+  if (isIP(host) && isPrivateIp(host)) throw new Error(`запрещённый адрес картинки: ${host}`);
 }
 
 export const pickWidth = (w) => IMG_WIDTHS.find((x) => x >= Number(w)) || IMG_WIDTHS[IMG_WIDTHS.length - 1];
@@ -50,11 +96,15 @@ export async function resizedImage(url, width) {
   const key = file;
   if (inflight.has(key)) return inflight.get(key);
   const job = (async () => {
+    assertPublicUrl(url);
     const { data } = await axios.get(url, {
       responseType: 'arraybuffer',
       timeout: 20000,
       maxContentLength: MAX_SOURCE_BYTES,
       maxRedirects: 3,
+      lookup: publicLookup,
+      // Редирект на IP-адрес минует DNS — проверяем каждый шаг
+      beforeRedirect: (opts) => assertPublicUrl(`${opts.protocol}//${opts.hostname}${opts.path || ''}`),
     });
     const out = await sharp(Buffer.from(data), { failOn: 'none' })
       .rotate()
