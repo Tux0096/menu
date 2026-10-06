@@ -1,5 +1,5 @@
-import dotenv from 'dotenv';
-dotenv.config();
+// .env загружается первым импортом: модули читают настройки при загрузке (импорты в ESM выполняются раньше кода файла)
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { join } from 'path';
