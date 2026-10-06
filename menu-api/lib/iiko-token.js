@@ -50,13 +50,14 @@ export async function requestIikoTokenFor(creds = '') {
 export async function requestIikoToken(apiLogin = iikoApiLogin(), clientSecret = iikoClientSecret(), appId = iikoAppId()) {
   if (!apiLogin) throw new Error('IIKO_API_LOGIN не задан');
   const errors = [];
-  const v2 = { apiLogin };
+  // По спецификации iiko Cloud API (v2/access_token): apiKey + appId + clientSecret; v1 устарел, но старые ключи работают только им
+  const v2 = { apiKey: apiLogin };
   if (appId) v2.appId = appId;
   if (clientSecret) v2.clientSecret = clientSecret;
   const attempts = [
     ['/api/v2/access_token', v2],
     // ID приложения и секрет могли остаться от прежнего ключа — пробуем и без них
-    ...(appId || clientSecret ? [['/api/v2/access_token (без ID приложения)', { apiLogin }]] : []),
+    ...(appId || clientSecret ? [['/api/v2/access_token (без ID приложения)', { apiKey: apiLogin }]] : []),
     ['/api/1/access_token', { apiLogin }],
   ];
   for (const [path, body] of attempts) {

@@ -22,7 +22,8 @@ import { httpError } from '../lib/http.js';
 import { withSessionMutex } from '../lib/session-mutex.js';
 
 const CP_API = 'https://api.cloudpayments.ru';
-const PAID_STATUSES = new Set(['Completed', 'Authorized']);
+// Виджет платит одностадийно (pay('charge')) — оплачено только Completed; Authorized — деньги лишь заблокированы
+const PAID_STATUSES = new Set(['Completed']);
 const FAILED_STATUSES = new Set(['Declined', 'Cancelled', 'Voided']);
 
 /** Чаевые: целые рубли, не больше суммы счёта и не больше 50 000 ₽ (защита от опечатки «лишний ноль») */
@@ -202,7 +203,8 @@ export async function confirmOnlinePayment(invoiceId) {
     return { status: 'pending', sessionId: pay.session_id };
   }
   const m = data?.Model;
-  if (!data?.Success || !m) return { status: 'pending', sessionId: pay.session_id };
+  // Success в ответе CloudPayments — не статус платежа: отклонённый платёж приходит с Success:false и Model.Status
+  if (!m) return { status: 'pending', sessionId: pay.session_id };
   const expected = parseFloat(pay.amount) + parseFloat(pay.tip_amount || 0);
   // Платёж должен быть именно по этому счёту, в рублях и на полную сумму
   const sameInvoice = !m.InvoiceId || String(m.InvoiceId) === String(pay.invoice_id);
@@ -261,13 +263,17 @@ async function settleKitchen(sessionId, lastPayment) {
         await withIikoCreds(src.creds, async () => {
           const paymentTypeId = await paymentTypeFor(src, settings);
           if (!paymentTypeId) throw new Error('в iiko нет типа оплаты «Онлайн» — создайте его или укажите ID в админке «Оплата»');
-          await changeOrderPayments(src.organization_id, orderId, [{
-            paymentTypeKind: 'Card',
-            paymentTypeId,
-            sum: kitchenSum,
-            isProcessedExternally: true,
-            isFiscalizedExternally: process.env.IIKO_PAYMENT_FISCALIZED_EXTERNALLY === 'true',
-          }]);
+          // Оплата уже внесена прошлой попыткой (упало только закрытие) — повторный change_payments iiko отклонит
+          if (!orders[MAIN]?.paid) {
+            await changeOrderPayments(src.organization_id, orderId, [{
+              paymentTypeKind: 'Card',
+              paymentTypeId,
+              sum: kitchenSum,
+              isProcessedExternally: true,
+              isFiscalizedExternally: process.env.IIKO_PAYMENT_FISCALIZED_EXTERNALLY === 'true',
+            }]);
+            await markOrder(session.id, MAIN, { paid: true });
+          }
           await closeTableOrder(src.organization_id, orderId);
         });
         await markOrderClosed(session.id, MAIN);
@@ -302,13 +308,15 @@ async function settleKitchen(sessionId, lastPayment) {
 const ONLINE_RE = /онлайн|online|qr|cloud|интернет/i;
 const KIND = { cash: 'Cash', card: 'Card' };
 
-async function markOrderClosed(sessionId, code) {
+/** Отметка по заказу источника в iiko_orders: paid — оплата внесена в iiko, closed — счёт закрыт */
+async function markOrder(sessionId, code, flags) {
   await pool.query(
     `UPDATE table_sessions SET iiko_orders = jsonb_set(COALESCE(iiko_orders, '{}'::jsonb), $2::text[],
-       COALESCE(iiko_orders->$3, '{}'::jsonb) || '{"closed": true}'::jsonb) WHERE id = $1`,
-    [sessionId, [code], code],
+       COALESCE(iiko_orders->$3, '{}'::jsonb) || $4::jsonb) WHERE id = $1`,
+    [sessionId, [code], code, JSON.stringify(flags)],
   );
 }
+const markOrderClosed = (sessionId, code) => markOrder(sessionId, code, { closed: true });
 
 /** Тип оплаты iiko для наличных / карты официанту: из админки, секрета или по названию в iiko. */
 async function waiterTypeFor(src, settings, method) {
@@ -382,7 +390,10 @@ async function acceptWaiterPaymentNow(sessionId, { method, tipAmount = 0 } = {})
           if (!typeId) throw new Error(`в iiko нет типа оплаты «${method === 'cash' ? 'Наличные' : 'Банковские карты'}»`);
           payments.push({ paymentTypeKind: KIND[method], paymentTypeId: typeId, sum: rest, isProcessedExternally: method === 'card' });
         }
-        await changeOrderPayments(src.organization_id, o.orderId, payments);
+        if (!o.paid) {
+          await changeOrderPayments(src.organization_id, o.orderId, payments);
+          await markOrder(session.id, code, { paid: true });
+        }
         await closeTableOrder(src.organization_id, o.orderId);
       });
       await markOrderClosed(session.id, code);

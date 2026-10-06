@@ -31,14 +31,49 @@ export async function getIikoToken(creds = currentCreds()) {
   return token;
 }
 
-async function iikoPost(path, body) {
+async function iikoPost(path, body, { retried = false } = {}) {
   if (isIikoDemo()) return demoResponse(path, body);
   const token = await getIikoToken();
-  const res = await axios.post(`${IIKO_URL}${path}`, body, {
-    headers: { Authorization: `Bearer ${token}` },
-    timeout: 30000,
-  });
-  return res.data;
+  try {
+    const res = await axios.post(`${IIKO_URL}${path}`, body, {
+      headers: { Authorization: `Bearer ${token}` },
+      timeout: 30000,
+    });
+    return res.data;
+  } catch (e) {
+    // Токен отозван раньше срока (перевыпуск ключа) — берём новый и повторяем один раз
+    if (e.response?.status === 401 && !retried) {
+      tokens.delete(currentCreds());
+      return iikoPost(path, body, { retried: true });
+    }
+    throw e;
+  }
+}
+
+/**
+ * Команды iiko (order/add_items, change_payments, close…) выполняются асинхронно: ответ 200 означает
+ * «принято в очередь», результат — по correlationId в /api/1/commands/status (InProgress → Success | Error).
+ * Возвращает 'Success'; при Error бросает ошибку с причиной; если iiko не ответил за timeoutMs — 'Timeout'.
+ */
+export async function waitForCommand(organizationId, correlationId, { timeoutMs = 30000, intervalMs = 1000 } = {}) {
+  if (isIikoDemo() || !correlationId) return 'Success';
+  const until = Date.now() + timeoutMs;
+  for (;;) {
+    let st = null;
+    try {
+      st = await iikoPost('/api/1/commands/status', { organizationId, correlationId });
+    } catch (e) {
+      // команда ещё не зарегистрирована — подождём; прочие ошибки статуса не означают провал команды
+      if (Date.now() > until) return 'Timeout';
+    }
+    if (st?.state === 'Success') return 'Success';
+    if (st?.state === 'Error') {
+      const reason = st.errorReason || st.exception?.message || st.exception?.description || 'iiko не выполнил операцию';
+      throw Object.assign(new Error(reason), { iikoCommand: true });
+    }
+    if (Date.now() > until) return 'Timeout';
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
 }
 
 function demoResponse(path, body) {
@@ -112,8 +147,9 @@ export function isTerminalGroupError(e) {
 }
 
 export async function getRestaurantSections(organizationId, terminalGroupId) {
+  // По спецификации запрос — только terminalGroupIds (+returnSchema, revision); organizationId в нём лишний
+  void organizationId;
   return iikoPost('/api/1/reserve/available_restaurant_sections', {
-    organizationId,
     terminalGroupIds: [terminalGroupId],
   });
 }
@@ -146,7 +182,7 @@ export async function addItemsToOrder({
   orderId,
   items,
 }) {
-  return iikoPost('/api/1/order/add_items', {
+  const res = await iikoPost('/api/1/order/add_items', {
     organizationId,
     orderId,
     items: items.map((item) => ({
@@ -156,6 +192,11 @@ export async function addItemsToOrder({
       ...(item.comment ? { comment: item.comment } : {}),
     })),
   });
+  // Ошибка добавления (заказ закрыт, позиция в стоп-листе) — позиции не помечаем отправленными, официант повторит.
+  // Нет ответа за 30 с — считаем принятым: повторная отправка задвоила бы блюда на кухне.
+  const state = await waitForCommand(organizationId, res?.correlationId);
+  if (state === 'Timeout') console.warn(`iiko add_items ${orderId}: статус команды не получен за 30 с`);
+  return res;
 }
 
 export async function getOrdersByTable(organizationIds, tableIds) {
@@ -179,19 +220,29 @@ export async function initOrderByTable(organizationId, terminalGroupId, tableIds
   });
 }
 
+/** Оплаты заказа; ждём результат команды — иначе close может уйти раньше, чем iiko применил оплату */
 export async function changeOrderPayments(organizationId, orderId, payments) {
-  return iikoPost('/api/1/order/change_payments', {
+  const res = await iikoPost('/api/1/order/change_payments', {
     organizationId,
     orderId,
     payments,
   });
+  if (await waitForCommand(organizationId, res?.correlationId) === 'Timeout') {
+    throw new Error('iiko не подтвердил внесение оплаты за 30 секунд — проверьте заказ на кассе');
+  }
+  return res;
 }
 
+/** Закрыть заказ; счёт считается закрытым только после Success команды */
 export async function closeTableOrder(organizationId, orderId) {
-  return iikoPost('/api/1/order/close', {
+  const res = await iikoPost('/api/1/order/close', {
     organizationId,
     orderId,
   });
+  if (await waitForCommand(organizationId, res?.correlationId) === 'Timeout') {
+    throw new Error('iiko не подтвердил закрытие счёта за 30 секунд — проверьте заказ на кассе');
+  }
+  return res;
 }
 
 /** Найти UUID стола iiko по номеру (из секций или кэша). */
@@ -206,7 +257,7 @@ export function matchTableIdFromSections(sectionsResponse, tableNumber) {
     for (const table of tables) {
       const name = String(table.name || table.number || '').trim();
       const id = table.id;
-      if (!id) continue;
+      if (!id || table.isDeleted) continue;
       if (name === num || name === `Стол ${num}` || name === `стол ${num}`) {
         return id;
       }
