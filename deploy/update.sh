@@ -88,6 +88,8 @@ ensure_env AUTH_SECRET "$(rand 32)"
 # Короткий секрет подписи токенов небезопасен — сервер с ним не запустится; меняем (персонал войдёт заново)
 CUR_SECRET=$(get_env AUTH_SECRET)
 if [ "${#CUR_SECRET}" -lt 32 ]; then set_env AUTH_SECRET "$(rand 32)"; echo "  AUTH_SECRET был короче 32 символов — заменён"; fi
+# Секрет подписи QR столов — задаётся один раз и не меняется (иначе напечатанные QR перестанут работать)
+ensure_env QR_SECRET "$(rand 24)"
 ensure_env QR_RESTAURANT_SLUG "novo-sadovaya"
 ensure_env PUBLIC_MENU_URL "https://menu.franchise-fuji.ru"
 ensure_env LEGACY_API_URL "https://apiv2.infra-fuji.ru"

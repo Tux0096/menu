@@ -92,6 +92,8 @@
     guest: store.get('guest'),
     restaurant: params.get('restaurant') || params.get('r') || store.get('restaurant') || null,
     table: params.get('table') || params.get('tbl') || store.get('table') || null,
+    // Подпись стола из QR (k): без неё за чужой стол не сесть, когда ресторан включил подписанные QR
+    qrKey: params.get('table') ? params.get('k') : store.get('qrKey'),
     session: null,
     sessionId: store.get('sessionId'),
     config: null,
@@ -107,6 +109,7 @@
   const qrChanged = (params.get('table') && params.get('table') !== store.get('table'))
     || (params.get('restaurant') && params.get('restaurant') !== store.get('restaurant'));
   if (S.table) store.set('table', S.table);
+  if (S.qrKey) store.set('qrKey', S.qrKey); else store.del('qrKey');
   if (S.restaurant) store.set('restaurant', S.restaurant);
   if (qrChanged) { S.sessionId = null; S.cart = {}; store.del('sessionId'); store.del('cart'); store.del('aiResults'); S.ai.results = null; }
   if (params.has('table') || params.has('restaurant')) {
@@ -241,7 +244,7 @@
   /** Вход за стол. false — за столом уже сидят: показан вопрос «присоединиться?». */
   async function enterTable({ join = false, name = '', then = null } = {}) {
     const session = await api('POST', '/api/v1/table/enter', {
-      restaurantSlug: S.restaurant, tableNumber: S.table, previousSessionId: S.sessionId, join, name,
+      restaurantSlug: S.restaurant, tableNumber: S.table, previousSessionId: S.sessionId, join, name, qrKey: S.qrKey || undefined,
     });
     if (session.joinRequired) { openJoinSheet({ ...session, guestName: session.guestName || name }, then); return false; }
     if (name && S.guest) { S.guest = { ...S.guest, name }; store.set('guest', S.guest); }
@@ -543,8 +546,9 @@
     if (oldSession && Object.keys(carry).length) {
       await api('POST', '/api/v1/table-order/cart', { sessionId: oldSession, items: [] }).catch(() => {});
     }
-    S.table = table; S.sessionId = null; S.session = null; S.cart = {};
-    store.del('sessionId'); store.set('table', table);
+    const oldKey = S.qrKey;
+    S.table = table; S.sessionId = null; S.session = null; S.cart = {}; S.qrKey = null;
+    store.del('sessionId'); store.set('table', table); store.del('qrKey');
     try {
       const ok = await enterTable({
         then: () => { if (Object.keys(carry).length) { S.cart = carry; persistCart(); scheduleCartSave(); render(); } },
@@ -553,6 +557,7 @@
     } catch (e) {
       // Стол не найден — возвращаемся за прежний
       S.table = oldTable; store.set('table', oldTable);
+      S.qrKey = oldKey; if (oldKey) store.set('qrKey', oldKey);
       if (oldSession) { S.sessionId = oldSession; store.set('sessionId', oldSession); await enterTable().catch(() => {}); }
       if (Object.keys(carry).length) { S.cart = { ...S.cart, ...carry }; persistCart(); scheduleCartSave(); }
       throw e;
@@ -579,7 +584,7 @@
         if (!b) return;
         if (b.dataset.rest === S.restaurant) { closeSheet(); return; }
         // Новый ресторан — чистый старт: без стола, визита и корзины прошлого ресторана
-        ['table', 'sessionId', 'cart', 'aiResults'].forEach((k) => store.del(k));
+        ['table', 'sessionId', 'cart', 'aiResults', 'qrKey'].forEach((k) => store.del(k));
         store.set('restaurant', b.dataset.rest);
         location.href = `${location.pathname}?restaurant=${encodeURIComponent(b.dataset.rest)}`;
       });
