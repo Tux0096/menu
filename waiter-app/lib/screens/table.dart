@@ -123,6 +123,9 @@ class _TableScreenState extends State<TableScreen> {
     }
   }
 
+  /// В неотправленной части есть блюда, ушедшие в стоп (сервер помечает их при каждом обновлении стола)
+  bool get _hasStopped => cart.items.any((i) => i['isLocked'] != true && i['isStopped'] == true);
+
   Future<void> _send() async {
     if (_sending) return;
     HapticFeedback.mediumImpact();
@@ -305,6 +308,12 @@ class _TableScreenState extends State<TableScreen> {
         children: [
           if (_readOnly) _banner(Icons.lock_outline, 'Стол редактирует другой официант — только просмотр', C.warn),
           if (s['iikoLastError'] != null) _banner(Icons.error_outline, s['iikoLastError'].toString(), C.danger),
+          if ((s['stoppedPending'] as List? ?? const []).isNotEmpty)
+            _banner(
+              Icons.block,
+              'На стопе: ${(s['stoppedPending'] as List).join(', ')}. Уберите из заказа и предложите гостю замену — иначе заказ не уйдёт.',
+              C.danger,
+            ),
           for (final r in (s['billRequests'] as List? ?? const []))
             _banner(
               Icons.receipt_long_outlined,
@@ -472,7 +481,13 @@ class _TableScreenState extends State<TableScreen> {
     final course = (it['course'] as num?)?.toInt();
     final String status;
     final Color statusColor;
-    if (!locked) {
+    if (!locked && it['isStopped'] == true) {
+      status = 'СТОП — уберите, предложите замену';
+      statusColor = C.danger;
+    } else if (!locked && it['stopBalance'] != null) {
+      status = 'новое · осталось ${it['stopBalance']} шт.';
+      statusColor = C.warn;
+    } else if (!locked) {
       status = 'новое · не отправлено';
       statusColor = C.warn;
     } else if (served) {
@@ -597,7 +612,12 @@ class _TableScreenState extends State<TableScreen> {
             const SizedBox(width: 10),
             Expanded(
               child: FilledButton(
-                onPressed: n == 0 || _sending ? null : _send,
+                onPressed: n == 0 || _sending
+                    ? null
+                    : _hasStopped
+                        ? () => toast(context, 'Сначала уберите блюда со стопа')
+                        : _send,
+                style: _hasStopped ? FilledButton.styleFrom(backgroundColor: C.danger) : null,
                 child: _sending
                     ? const SizedBox(
                         width: 22,
@@ -605,7 +625,11 @@ class _TableScreenState extends State<TableScreen> {
                         child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white),
                       )
                     : Text(
-                        n == 0 ? 'Всё отправлено' : 'В работу · $n · ${rub(cart.pendingSum)}',
+                        n == 0
+                            ? 'Всё отправлено'
+                            : _hasStopped
+                                ? 'Есть блюда на стопе'
+                                : 'В работу · $n · ${rub(cart.pendingSum)}',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),

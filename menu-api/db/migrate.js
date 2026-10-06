@@ -361,6 +361,9 @@ const SCHEMA = `
   );
 
   ALTER TABLE staff_users ADD COLUMN IF NOT EXISTS pin_hash TEXT;
+  -- Сотрудник зала, вошедший через iiko (код сотрудника + открытая смена): ID сотрудника в iiko
+  ALTER TABLE staff_users ADD COLUMN IF NOT EXISTS iiko_employee_id VARCHAR(64);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_users_iiko ON staff_users (iiko_employee_id);
   -- Роль «Маркетинг»: только контент меню (баннеры, подсказки AI, карточки блюд)
   ALTER TABLE staff_users DROP CONSTRAINT IF EXISTS staff_users_role_check;
   ALTER TABLE staff_users ADD CONSTRAINT staff_users_role_check CHECK (role IN ('admin', 'manager', 'waiter', 'marketing'));

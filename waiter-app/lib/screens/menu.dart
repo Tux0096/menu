@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -30,19 +32,51 @@ class _MenuScreenState extends State<MenuScreen> {
   String? _error;
   bool _loading = true;
   final _search = TextEditingController();
+  // Стоп-лист iiko обновляется, пока меню открыто: блюдо могло закончиться прямо во время приёма заказа
+  Timer? _stopTimer;
+  List<Map<String, dynamic>> _stops = [];
+  DateTime? _stopsAt;
 
   @override
   void initState() {
     super.initState();
     widget.cart.addListener(_changed);
     _load();
+    _stopTimer = Timer.periodic(const Duration(seconds: 30), (_) => _refreshStops());
   }
 
   @override
   void dispose() {
+    _stopTimer?.cancel();
     widget.cart.removeListener(_changed);
     _search.dispose();
     super.dispose();
+  }
+
+  Future<void> _refreshStops() async {
+    try {
+      final d = await Api.I.stopList();
+      final list = [for (final it in (d['items'] as List? ?? const [])) Map<String, dynamic>.from(it as Map)];
+      final byId = {for (final it in list) it['id'].toString(): it};
+      for (final g in _groups) {
+        for (final p in g.products) {
+          final st = byId[p['id'].toString()];
+          p['isInStopList'] = st?['stopped'] == true;
+          if (st != null && st['stopped'] != true) {
+            p['stopBalance'] = st['balance'];
+          } else {
+            p.remove('stopBalance');
+          }
+        }
+      }
+      if (!mounted) return;
+      setState(() {
+        _stops = list;
+        _stopsAt = DateTime.tryParse((d['updatedAt'] ?? '').toString())?.toLocal();
+      });
+    } catch (_) {
+      // Нет связи — остаются отметки из последнего меню
+    }
   }
 
   void _changed() {
@@ -79,6 +113,7 @@ class _MenuScreenState extends State<MenuScreen> {
         _loading = false;
         _error = null;
       });
+      _refreshStops();
     } on ApiError catch (e) {
       if (mounted) {
         setState(() {
@@ -105,6 +140,12 @@ class _MenuScreenState extends State<MenuScreen> {
       toast(context, '«${p['name']}» в стоп-листе');
       return;
     }
+    final left = (p['stopBalance'] as num?)?.toInt();
+    if (left != null && widget.cart.pendingFor(p['id'].toString()) >= left) {
+      HapticFeedback.heavyImpact();
+      toast(context, '«${p['name']}»: осталось только $left шт.');
+      return;
+    }
     HapticFeedback.lightImpact();
     widget.cart.add(p, _seat);
   }
@@ -125,6 +166,20 @@ class _MenuScreenState extends State<MenuScreen> {
       },
       child: Scaffold(
         appBar: AppBar(
+          actions: [
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: ActionChip(
+                onPressed: _showStops,
+                avatar: Icon(Icons.block, size: 18, color: _stopped.isEmpty ? C.muted : Colors.white),
+                label: Text(_stopped.isEmpty ? 'Стопа нет' : 'Стоп ${_stopped.length}'),
+                labelStyle: TextStyle(color: _stopped.isEmpty ? C.ink : Colors.white, fontWeight: FontWeight.w700),
+                backgroundColor: _stopped.isEmpty ? Colors.white : C.danger,
+                side: BorderSide.none,
+                shape: const StadiumBorder(),
+              ),
+            ),
+          ],
           title: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -167,6 +222,68 @@ class _MenuScreenState extends State<MenuScreen> {
       ),
     );
   }
+
+  List<Map<String, dynamic>> get _stopped => _stops.where((i) => i['stopped'] == true).toList();
+
+  /// Список стопа для официанта: что не предлагать и что заканчивается
+  void _showStops() {
+    HapticFeedback.selectionClick();
+    final limited = _stops.where((i) => i['stopped'] != true).toList();
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      isScrollControlled: true,
+      builder: (ctx) => SafeArea(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(maxHeight: MediaQuery.of(ctx).size.height * .75),
+          child: ListView(
+            shrinkWrap: true,
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            children: [
+              const Text('Стоп-лист iiko', style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+              Text(
+                _stopsAt == null
+                    ? 'Не удалось обновить — показано из меню'
+                    : 'Обновлено в ${_stopsAt!.hour.toString().padLeft(2, '0')}:${_stopsAt!.minute.toString().padLeft(2, '0')} · обновляется каждые 30 с',
+                style: const TextStyle(color: C.muted, fontSize: 13),
+              ),
+              const SizedBox(height: 14),
+              if (_stops.isEmpty) const Text('Всё есть — можно предлагать любое блюдо.'),
+              if (_stopped.isNotEmpty) ...[
+                const Text('Закончилось — не предлагать', style: TextStyle(fontWeight: FontWeight.w700, color: C.danger)),
+                const SizedBox(height: 6),
+                for (final i in _stopped) _stopRow(i, 'стоп', C.danger),
+                const SizedBox(height: 14),
+              ],
+              if (limited.isNotEmpty) ...[
+                const Text('Заканчивается', style: TextStyle(fontWeight: FontWeight.w700, color: C.warn)),
+                const SizedBox(height: 6),
+                for (final i in limited) _stopRow(i, 'осталось ${i['balance']}', C.warn),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _stopRow(Map<String, dynamic> i, String tag, Color color) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 6),
+    child: Row(
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(i['name'].toString(), style: const TextStyle(fontWeight: FontWeight.w600)),
+              if (i['group'] != null) Text(i['group'].toString(), style: const TextStyle(color: C.muted, fontSize: 12)),
+            ],
+          ),
+        ),
+        _Tag(tag, color),
+      ],
+    ),
+  );
 
   Widget _seatBar() {
     final seats = <int?>[null, ...widget.cart.seats];
@@ -357,6 +474,8 @@ class _DishTile extends StatelessWidget {
                         ? Image.network(img, fit: BoxFit.cover, errorBuilder: (_, _, _) => _placeholder())
                         : _placeholder(),
                     if (stop) const Positioned(left: 8, top: 8, child: _Tag('Стоп', C.danger)),
+                    if (!stop && p['stopBalance'] != null)
+                      Positioned(left: 8, top: 8, child: _Tag('Осталось ${p['stopBalance']}', C.warn)),
                     if (count > 0)
                       Positioned(
                         right: 6,

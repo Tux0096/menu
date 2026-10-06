@@ -8,18 +8,36 @@ import { accessibleOrgIds, iikoRequest, isIikoDemo, withIikoCreds } from '../iik
 import { allOrgTargets } from './sources.js';
 import { PUBLIC_MENU_URL } from '../lib/qr-config.js';
 
-const memory = new Map(); // restaurantId -> Set(productId)
+const memory = new Map(); // restaurantId -> Set(productId) — закончилось
+const limited = new Map(); // restaurantId -> Map(productId -> остаток) — ограниченный остаток
 let loaded = false;
+let loadedAt = null;
 
 async function loadFromDb() {
-  const { rows } = await pool.query('SELECT restaurant_id, product_id FROM stop_lists WHERE balance <= 0');
+  const { rows } = await pool.query('SELECT restaurant_id, product_id, balance::float AS balance FROM stop_lists');
   memory.clear();
+  limited.clear();
   for (const r of rows) {
-    if (!memory.has(r.restaurant_id)) memory.set(r.restaurant_id, new Set());
-    memory.get(r.restaurant_id).add(r.product_id);
+    if (r.balance <= 0) {
+      if (!memory.has(r.restaurant_id)) memory.set(r.restaurant_id, new Set());
+      memory.get(r.restaurant_id).add(r.product_id);
+    } else {
+      if (!limited.has(r.restaurant_id)) limited.set(r.restaurant_id, new Map());
+      limited.get(r.restaurant_id).set(r.product_id, r.balance);
+    }
   }
   loaded = true;
+  loadedAt = new Date().toISOString();
 }
+
+/** Остатки блюд с ограниченным количеством (iiko: стоп-лист с остатком > 0). */
+export async function getStopBalances(restaurantId) {
+  if (!loaded) await loadFromDb();
+  return limited.get(restaurantId) || new Map();
+}
+
+/** Когда стоп-лист последний раз сверялся с iiko (для подписи «обновлено» у официанта). */
+export const stopListLoadedAt = () => loadedAt;
 
 /** ID блюд в стоп-листе ресторана — из памяти (мгновенно). */
 export async function getStopListIds(restaurantId) {

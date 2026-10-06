@@ -6,7 +6,7 @@
  */
 import pool from '../db/pool.js';
 import { orderGroups } from './menu-order.js';
-import { getStopListIds } from './stoplist.js';
+import { getStopBalances, getStopListIds } from './stoplist.js';
 
 const TTL_MS = parseInt(process.env.CATALOG_TTL_MS || '300000', 10);
 const rawCache = new Map(); // restaurantId -> { at, source, data }
@@ -240,9 +240,10 @@ function applyOverride(product, o) {
  */
 export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
   const raw = await loadRawCatalog(restaurant, { force });
-  const [overrides, iikoStop] = await Promise.all([
+  const [overrides, iikoStop, balances] = await Promise.all([
     getOverrides(restaurant.id),
     loadIikoStopList(restaurant),
+    getStopBalances(restaurant.id).catch(() => new Map()),
   ]);
 
   const stop = normalizeLegacyStopList(raw.data.stopList, restaurant.terminal_id);
@@ -257,6 +258,9 @@ export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
     const p = o ? applyOverride(product, o) : { ...product };
     if (!p.parentGroupName) p.parentGroupName = groupName.get(p.parentGroup) || null;
     p.isInStopList = stop.has(String(p.id)) || stop.has(String(p.iikoId));
+    // Ограниченный остаток в iiko («осталось N») — официант видит, сколько ещё можно предложить
+    const left = p.isInStopList ? null : balances.get(String(p.id)) ?? balances.get(String(p.iikoId));
+    if (left) p.stopBalance = left;
     products.push(p);
   }
 

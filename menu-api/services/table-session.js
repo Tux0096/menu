@@ -25,6 +25,7 @@ import {
 import { createWaiterNotification } from './waiter-notifications.js';
 import { getSource, productSourceMap } from './sources.js';
 import { menuIndex, priceLine } from './menu-pricing.js';
+import { stopListLoadedAt } from './stoplist.js';
 import { withSessionMutex } from '../lib/session-mutex.js';
 import { withIikoCreds } from '../iiko-client.js';
 
@@ -255,7 +256,20 @@ export async function getSessionView(sessionId) {
     guestIds: [...new Set(paid.flatMap((p) => (p.guest_ids || []).map(String)))],
     amount: paid.reduce((n, p) => n + parseFloat(p.amount || 0), 0),
   };
-  return mapSession(ctx, { feedbackLeft: Boolean(rows[0]), feedbackRating: rows[0]?.rating || null, onlinePaid });
+  const view = mapSession(ctx, { feedbackLeft: Boolean(rows[0]), feedbackRating: rows[0]?.rating || null, onlinePaid });
+  // Стоп-лист по неотправленным позициям: официант видит до отправки на кухню, что заказать нельзя
+  const index = await menuIndex(ctx.restaurant).catch(() => null);
+  if (index) {
+    for (const i of view.items) {
+      if (i.isLocked) continue;
+      const p = index.get(String(i.iikoProductId)) || index.get(String(i.productId));
+      if (p?.isInStopList) i.isStopped = true;
+      else if (p?.balance) i.stopBalance = p.balance;
+    }
+  }
+  view.stoppedPending = view.items.filter((i) => i.isStopped).map((i) => i.name);
+  view.stopListUpdatedAt = stopListLoadedAt();
+  return view;
 }
 
 // ── Вход по QR ──────────────────────────────────────────────────────────────

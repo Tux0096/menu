@@ -1,6 +1,7 @@
 import pool from '../db/pool.js';
 import { createLimiter, httpError, sendError } from '../lib/http.js';
 import { hashPassword, signToken, verifyPassword, verifyToken } from '../lib/passwords.js';
+import { iikoShiftStillOpen, iikoStaffLogin } from './iiko-staff.js';
 
 // Маркетинг — не ступень иерархии: доступ только к контенту меню (баннеры, подсказки, карточки блюд)
 const ROLE_LEVEL = { marketing: 0, waiter: 1, manager: 2, admin: 3 };
@@ -57,6 +58,15 @@ export async function pinLogin(restaurantId, pin, clientKey = '') {
   return { token: issueToken(staff), staff };
 }
 
+/** Вход сотрудника зала по коду из iiko: точка — та, где у него открыта смена (services/iiko-staff.js). */
+export async function iikoPinLogin(code, clientKey = '', restaurant = null) {
+  const { row, restaurant: r } = await iikoStaffLogin(code, clientKey, restaurant);
+  staffCache.delete(row.id);
+  const staff = mapStaff(row);
+  await audit(staff, 'login.iiko', 'staff', staff.id, { restaurant: r.slug });
+  return { token: issueToken(staff), staff, restaurant: { slug: r.slug, name: r.name } };
+}
+
 async function assertPinFree(pin, restaurantId, exceptId) {
   const { rows } = await pool.query(
     `SELECT id, pin_hash FROM staff_users WHERE pin_hash IS NOT NULL AND id IS DISTINCT FROM $1
@@ -92,7 +102,7 @@ const staffCache = new Map();
 async function currentStaff(id) {
   const hit = staffCache.get(id);
   if (hit && Date.now() - hit.at < STAFF_CACHE_MS) return hit.row;
-  const { rows } = await pool.query('SELECT id, role, name, restaurant_id, is_active FROM staff_users WHERE id = $1', [id]);
+  const { rows } = await pool.query('SELECT id, role, name, restaurant_id, is_active, iiko_employee_id FROM staff_users WHERE id = $1', [id]);
   const row = rows[0] || null;
   staffCache.set(id, { row, at: Date.now() });
   return row;
@@ -107,6 +117,10 @@ export function staffAuth(minRole = 'waiter', alsoRoles = []) {
       const row = payload?.sid ? await currentStaff(payload.sid) : null;
       if (!payload || !row || !row.is_active) {
         return res.status(401).json({ error: 'Требуется вход персонала', code: 'STAFF_AUTH_REQUIRED' });
+      }
+      // Вошёл через iiko — работает, пока открыта его смена на кассе точки
+      if (row.iiko_employee_id && !(await iikoShiftStillOpen(row))) {
+        return res.status(401).json({ error: 'Смена в iiko закрыта — откройте смену на кассе и войдите снова', code: 'SHIFT_CLOSED' });
       }
       const role = row.role;
       if (!ROLES.has(role) || ((ROLE_LEVEL[role] ?? -1) < ROLE_LEVEL[minRole] && !alsoRoles.includes(role))) {
