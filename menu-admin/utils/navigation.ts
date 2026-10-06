@@ -35,7 +35,9 @@ const CONTENT: StaffRole[] = ['admin', 'marketing'];
 export const NAV_ITEMS: NavItem[] = [
   { to: '/', label: 'Сводка', icon: 'i-heroicons-home', roles: HALL, group: 'main', hint: 'Зал сейчас и цифры дня' },
 
-  { to: '/menu', label: 'Блюда и стоп-лист', icon: 'i-heroicons-book-open', roles: CONTENT, group: 'menu', badge: 'stopList' },
+  { to: '/network-menu', label: 'Меню сети', icon: 'i-heroicons-table-cells', roles: CONTENT, group: 'menu', hint: 'Все позиции всех точек: где есть, цены, стоп' },
+  { to: '/menu', label: 'Меню точки', icon: 'i-heroicons-book-open', roles: CONTENT, group: 'menu', badge: 'stopList', hint: 'Карточки и стоп-лист выбранной точки' },
+  { to: '/stop-lists', label: 'Стоп-листы iiko', icon: 'i-heroicons-no-symbol', roles: CONTENT, group: 'menu', hint: 'Что сейчас на стопе в iiko по каждой точке' },
 
   { to: '/banners', label: 'Баннеры', icon: 'i-heroicons-photo', roles: CONTENT, group: 'marketing', hint: 'Карусель над меню, экран AI и заказа' },
   { to: '/ai-chips', label: 'AI-подсказки', icon: 'i-heroicons-sparkles', roles: CONTENT, group: 'marketing', hint: 'Чипы на экране AI-помощника' },

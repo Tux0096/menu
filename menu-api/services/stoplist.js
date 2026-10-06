@@ -54,7 +54,15 @@ export async function refreshStopLists(orgIds = null) {
         const items = [];
         for (const g of byOrg.get(t.organization_id) || []) {
           if (t.terminal_group_id && g.terminalGroupId && g.terminalGroupId !== t.terminal_group_id) continue;
-          for (const it of g.items || []) items.push({ productId: String(it.productId), balance: Number(it.balance) || 0 });
+          for (const it of g.items || []) {
+            items.push({
+              productId: String(it.productId),
+              balance: Number(it.balance) || 0,
+              sku: it.sku ? String(it.sku).slice(0, 100) : null,
+              sizeId: it.sizeId ? String(it.sizeId) : null,
+              dateAdd: it.dateAdd || null,
+            });
+          }
         }
         const client = await pool.connect();
         try {
@@ -62,9 +70,12 @@ export async function refreshStopLists(orgIds = null) {
           await client.query('DELETE FROM stop_lists WHERE restaurant_id = $1 AND source = $2', [t.restaurant_id, t.source]);
           for (const it of items) {
             await client.query(
-              `INSERT INTO stop_lists (restaurant_id, product_id, balance, source) VALUES ($1, $2, $3, $4)
-               ON CONFLICT (restaurant_id, product_id) DO UPDATE SET balance = EXCLUDED.balance, source = EXCLUDED.source, updated_at = NOW()`,
-              [t.restaurant_id, it.productId, it.balance, t.source],
+              `INSERT INTO stop_lists (restaurant_id, product_id, balance, source, sku, size_id, date_add)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)
+               ON CONFLICT (restaurant_id, product_id) DO UPDATE SET balance = LEAST(stop_lists.balance, EXCLUDED.balance),
+                 source = EXCLUDED.source, sku = EXCLUDED.sku, size_id = EXCLUDED.size_id, date_add = EXCLUDED.date_add,
+                 updated_at = NOW()`,
+              [t.restaurant_id, it.productId, it.balance, t.source, it.sku, it.sizeId, it.dateAdd],
             );
           }
           await client.query('COMMIT');
@@ -76,10 +87,81 @@ export async function refreshStopLists(orgIds = null) {
         }
         updated++;
       }
+      // Названия позиций стоп-листа, которых нет в меню (ингредиенты, модификаторы) — из номенклатуры iiko
+      for (const orgId of orgs) await refreshProductNames(orgId).catch((e) => console.warn('названия номенклатуры:', e.message));
     });
   }
   await loadFromDb();
   return updated;
+}
+
+// Номенклатура iiko большая — запрашиваем не чаще раза в сутки на организацию и только если есть безымянные позиции
+const namesFetchedAt = new Map();
+async function refreshProductNames(organizationId) {
+  const last = namesFetchedAt.get(organizationId) || 0;
+  if (Date.now() - last < 24 * 60 * 60 * 1000) return;
+  const { rows } = await pool.query(
+    `SELECT 1 FROM stop_lists s JOIN restaurants r ON r.id = s.restaurant_id
+     WHERE r.organization_id = $1
+       AND NOT EXISTS (SELECT 1 FROM products p WHERE p.restaurant_id = s.restaurant_id AND p.iiko_id::text = s.product_id)
+       AND NOT EXISTS (SELECT 1 FROM iiko_product_names n WHERE n.organization_id = $1 AND n.product_id = s.product_id)
+     LIMIT 1`,
+    [organizationId],
+  );
+  namesFetchedAt.set(organizationId, Date.now());
+  if (!rows.length) return;
+  const nom = await iikoRequest('/api/1/nomenclature', { organizationId });
+  const list = (nom?.products || []).filter((p) => p.id && p.name);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const p of list) {
+      await client.query(
+        `INSERT INTO iiko_product_names (organization_id, product_id, name, sku, type, updated_at) VALUES ($1,$2,$3,$4,$5,NOW())
+         ON CONFLICT (organization_id, product_id) DO UPDATE SET name = EXCLUDED.name, sku = EXCLUDED.sku, type = EXCLUDED.type, updated_at = NOW()`,
+        [organizationId, String(p.id), String(p.name).slice(0, 300), p.code ? String(p.code).slice(0, 100) : null, p.type ? String(p.type).slice(0, 30) : null],
+      );
+    }
+    await client.query('COMMIT');
+    console.log(`номенклатура ${organizationId}: названий ${list.length}`);
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+/**
+ * Стоп-листы iiko по ресторанам — как в iiko, с названиями. Только чтение: в iiko ничего не пишем.
+ * Позиция «в меню» — если она есть в QR-меню точки (иначе это ингредиент, модификатор или блюдо не из меню).
+ */
+export async function listStopLists(restaurantIds) {
+  const { rows } = await pool.query(
+    `SELECT s.restaurant_id, s.product_id, s.balance::float AS balance, s.source, s.sku, s.size_id, s.date_add, s.updated_at,
+            p.name AS menu_name, p.price::float AS price, n.name AS iiko_name, n.type AS iiko_type
+     FROM stop_lists s
+     JOIN restaurants r ON r.id = s.restaurant_id
+     LEFT JOIN products p ON p.restaurant_id = s.restaurant_id AND p.iiko_id::text = s.product_id
+     LEFT JOIN iiko_product_names n ON n.organization_id = r.organization_id AND n.product_id = s.product_id
+     WHERE s.restaurant_id = ANY($1::uuid[])
+     ORDER BY s.date_add DESC NULLS LAST, COALESCE(p.name, n.name)`,
+    [restaurantIds],
+  );
+  return rows.map((r) => ({
+    restaurantId: r.restaurant_id,
+    productId: r.product_id,
+    name: r.menu_name || r.iiko_name || null,
+    type: r.iiko_type || null,
+    inMenu: Boolean(r.menu_name),
+    price: r.price ?? null,
+    balance: r.balance,
+    stopped: r.balance <= 0,
+    source: r.source,
+    sku: r.sku,
+    dateAdd: r.date_add,
+    updatedAt: r.updated_at,
+  }));
 }
 
 // ── Вебхуки iiko ────────────────────────────────────────────────────────────
