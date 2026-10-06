@@ -20,6 +20,7 @@ import {
 import { staffRestaurant } from '../lib/staff-scope.js';
 import { getNetworkMenu, getNetworkMenuPoints } from '../services/network-menu.js';
 import { syncIikoMenu } from '../services/background-jobs.js';
+import { getCashdesks, setCashdesk, setSectionRoute } from '../services/cashdesks.js';
 
 const router = express.Router();
 export default router;
@@ -107,6 +108,25 @@ function matchesSignature(buf, ext) {
     default: return false;
   }
 }
+// ── Кассы точки: кухня (ИП) и бар (ООО, крепкий алкоголь) — какой раздел на какую кассу ─────────
+admin.get('/cashdesks', h(async (req) => getCashdesks(await staffRestaurant(req))));
+admin.post('/cashdesks/terminal', h(async (req) => {
+  const r = await staffRestaurant(req);
+  const role = String(req.body?.role || '');
+  const terminalGroupId = req.body?.terminalGroupId ? String(req.body.terminalGroupId) : null;
+  await setCashdesk(r, { role, terminalGroupId });
+  audit(req.staff, 'cashdesk.terminal', 'restaurant', r.slug, { role, terminalGroupId });
+  return getCashdesks(await staffRestaurant(req));
+}));
+admin.post('/cashdesks/route', h(async (req) => {
+  const r = await staffRestaurant(req);
+  const categoryId = String(req.body?.categoryId || '');
+  const target = req.body?.target ? String(req.body.target) : null;
+  await setSectionRoute(r, { categoryId, target }, req.staff);
+  audit(req.staff, 'cashdesk.route', 'category', categoryId, { restaurant: r.slug, target });
+  return getCashdesks(r);
+}));
+
 admin.post('/upload', express.raw({ type: Object.keys(MEDIA_TYPES), limit: '25mb' }), h(async (req) => {
   const type = String(req.headers['content-type'] || '').split(';')[0];
   const ext = MEDIA_TYPES[type];

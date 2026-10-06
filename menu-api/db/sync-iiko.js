@@ -15,6 +15,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import axios from 'axios';
 import { default as pool } from './pool.js';
+import { autoRoute } from '../lib/alco.js';
 import { iikoApiLogin, maskIikoKey, requestIikoToken, requestIikoTokenFor } from '../lib/iiko-token.js';
 
 const IIKO_URL = process.env.IIKO_URL || 'https://api-ru.iiko.services';
@@ -288,13 +289,16 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
     'SELECT code, name, split_regex FROM restaurant_sources WHERE restaurant_id = $1 AND is_enabled AND split_regex IS NOT NULL',
     [restaurant.id],
   )).rows : [];
+  // Раздел, для которого касса выбрана в админке («Кассы»), идёт туда; остальные — по названию раздела
+  const manual = splits.length ? new Map((await pool.query(
+    'SELECT category_id::text AS id, source FROM category_routes WHERE restaurant_id = $1', [restaurant.id],
+  )).rows.map((x) => [x.id, x.source])) : new Map();
+  const codes = new Set(['main', ...splits.map((x) => x.code)]);
   for (const r of rows) {
     r.source = source;
-    for (const sp of splits) {
-      let re;
-      try { re = new RegExp(sp.split_regex, 'i'); } catch { continue; }
-      if (re.test(r.category.name || '') && !/безалког|молочн|детск/i.test(r.category.name || '')) { r.source = sp.code; break; }
-    }
+    if (!splits.length) continue;
+    const picked = manual.get(String(r.category.id));
+    r.source = picked && codes.has(picked) ? picked : autoRoute(r.category.name, splits) || source;
   }
   if (splits.length) {
     for (const sp of splits) {

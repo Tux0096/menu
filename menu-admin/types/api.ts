@@ -257,3 +257,32 @@ export interface StopListItem {
 export interface StopListPoint extends NetworkPoint {
   items: StopListItem[];
 }
+
+/** Кассы точки: кухня (ИП) и бар (ООО, крепкий алкоголь) — /admin/cashdesks */
+export interface CashTerminal {
+  id: string;
+  name: string;
+  alive: boolean | null;
+  /** Открыта для облака iiko (иначе заказы через API на неё не пройдут) */
+  enabled: boolean;
+  role: string | null;
+}
+export interface CashSection {
+  id: string;
+  name: string;
+  products: number;
+  /** Сколько позиций раздела сейчас уходит на каждую кассу */
+  current: Record<string, number>;
+  auto: string;
+  manual: string | null;
+  target: string;
+}
+export interface Cashdesks {
+  restaurant: { id: string; slug: string; name: string };
+  connected: boolean;
+  error: string | null;
+  terminals: CashTerminal[];
+  kitchen: { terminalGroupId: string | null };
+  bars: { code: string; name: string; terminalGroupId: string | null; enabled: boolean; manual: boolean }[];
+  sections: CashSection[];
+}

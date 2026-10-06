@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 import axios from 'axios';
 import pool from './pool.js';
+import { alcoRegex } from '../lib/alco.js';
 import {
   iikoApiLogin, iikoAppId, iikoClientSecret, iikoCredsList, maskIikoKey, requestIikoToken, requestIikoTokenFor,
 } from '../lib/iiko-token.js';
@@ -58,10 +59,6 @@ async function main() {
   await menuSplit();
 }
 
-const ALCO_REGEX = process.env.IIKO_ALCO_CATEGORIES
-  // Ром — только отдельным словом (не «ромашковый чай»); вино — «вино», «вина», «винная карта», но не «винегрет»
-  || '(^|\\s)(вин[оаеы]?($|\\s)|вина|винн|крепк|алкогол|коктейл|настойк|наливк|виски|водк|коньяк|бренди|кальвадос|граппа|текил|мескал'
-  + '|ром($|\\s)|джин|вермут|ликер|ликёр|самбук|абсент|биттер|аперитив|дижестив|игрист|шампан|просекко|портвейн|херес|саке|шот|глинтвейн)';
 
 /**
  * Бар Ново-Садовой: крепкий алкоголь продаёт ООО на своей кассе в той же iiko («… Бар»).
@@ -79,8 +76,9 @@ async function configureBarFromMain(headers, r) {
        VALUES ($1, 'bar', 'Бар', $2, $3, '', NULL, TRUE, 10, $4)
        ON CONFLICT (restaurant_id, code) DO UPDATE SET organization_id = EXCLUDED.organization_id, terminal_group_id = EXCLUDED.terminal_group_id,
          creds = '', external_menu_id = NULL, is_enabled = TRUE, split_regex = EXCLUDED.split_regex,
-         order_creds = NULL, order_organization_id = NULL, order_terminal_group_id = NULL`,
-      [r.id, bar.org, bar.id, ALCO_REGEX],
+         order_creds = NULL, order_organization_id = NULL, order_terminal_group_id = NULL
+       WHERE NOT restaurant_sources.manual`,
+      [r.id, bar.org, bar.id, alcoRegex()],
     );
     await pool.query("DELETE FROM restaurant_table_cache WHERE restaurant_id = $1 AND table_number LIKE 'bar:%'", [r.id]);
     console.log(`${r.name}: крепкий алкоголь → касса «${bar.name}» [${bar.id}]${enabled.has(bar.id) ? '' : ' — ОТКЛЮЧЕНА для облака iiko: включите её, иначе заказы алкоголя не пройдут'}`);
