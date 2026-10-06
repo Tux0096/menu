@@ -293,7 +293,7 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
     for (const sp of splits) {
       let re;
       try { re = new RegExp(sp.split_regex, 'i'); } catch { continue; }
-      if (re.test(r.category.name || '') && !/безалког/i.test(r.category.name || '')) { r.source = sp.code; break; }
+      if (re.test(r.category.name || '') && !/безалког|молочн|детск/i.test(r.category.name || '')) { r.source = sp.code; break; }
     }
   }
   if (splits.length) {
