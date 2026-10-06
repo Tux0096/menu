@@ -108,7 +108,8 @@ export async function openShiftRestaurants(employeeId) {
       try {
         const d = await iikoRequest('/api/employees/v1/attendance/list', {
           organizationId: r.organization_id, employeeIds: [employeeId], isClosed: false, limit: 10, offset: 0,
-          startAt: new Date(Date.now() - 36 * 3600_000).toISOString(), // обязательное поле: смены за последние сутки с запасом
+          // окно обязательно (startAt и endAt): смены, начатые за последние 36 часов
+          startAt: new Date(Date.now() - 36 * 3600_000).toISOString(), endAt: new Date(Date.now() + 3600_000).toISOString(),
         });
         if ((d?.items || []).some((a) => !a.isClosed && !a.endAt)) found.set(r.id, r);
       } catch { /* нет доступа к явкам — только личные смены */ }
