@@ -2,7 +2,8 @@
 import express from 'express';
 import { h, requireBody, sendError } from '../lib/http.js';
 import { acceptWaiterPayment } from '../services/payments.js';
-import { audit, pinLogin, staffAuth, staffLogin } from '../services/staff-auth.js';
+import { audit, iikoPinLogin, pinLogin, staffAuth, staffLogin } from '../services/staff-auth.js';
+import { iikoStaffLoginEnabled } from '../services/iiko-staff.js';
 import { isPushEnabled, registerDevice, unregisterDevice } from '../services/push.js';
 import { enterTable, getSessionView, markServed, resolveRestaurant } from '../services/table-session.js';
 import {
@@ -28,7 +29,13 @@ router.get('/api/v1/staff/me', staffAuth('waiter', ['marketing']), h(async (req)
   restaurantId: req.staff.restaurantId || req.staff.loginRestaurantId || null,
 })));
 // Приложение официанта: вход по PIN в выбранном ресторане
+// С IIKO_STAFF_LOGIN=on — код сотрудника из iiko, точка определяется по открытой смене (как в iikoWaiter)
+router.get('/api/v1/staff/login-mode', (req, res) => res.json({ mode: iikoStaffLoginEnabled() ? 'iiko' : 'pin' }));
 router.post('/api/v1/staff/pin-login', h(async (req) => {
+  if (iikoStaffLoginEnabled()) {
+    requireBody(req.body, 'pin');
+    return iikoPinLogin(req.body.pin, req.ip, req.body.restaurant || null);
+  }
   requireBody(req.body, 'restaurant', 'pin');
   const r = await resolveRestaurant(req.body.restaurant);
   return pinLogin(r.id, req.body.pin, req.ip);

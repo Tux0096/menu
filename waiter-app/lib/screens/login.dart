@@ -87,7 +87,9 @@ class _RestaurantScreenState extends State<RestaurantScreen> {
   }
 }
 
-/// Вход по PIN-коду сотрудника (задаётся в админке, раздел «Сотрудники»).
+/// Вход сотрудника зала. Режим iiko — код сотрудника из iiko (как в iikoWaiter): сервер проверяет, что сотрудник
+/// есть в iiko, должность зальная и открыта смена на кассе, и открывает ту точку, где смена открыта.
+/// Режим pin — PIN из админки (раздел «Сотрудники») в выбранном ресторане.
 class PinScreen extends StatefulWidget {
   const PinScreen({super.key});
   @override
@@ -96,7 +98,9 @@ class PinScreen extends StatefulWidget {
 
 class _PinScreenState extends State<PinScreen> with SingleTickerProviderStateMixin {
   String _pin = '';
-  String? _error;
+  late String? _error = Api.I.authLostReason;
+  final bool _iiko = Api.I.iikoLogin;
+  int get _maxLen => _iiko ? 16 : 6;
   bool _busy = false;
   late final AnimationController _shake = AnimationController(vsync: this, duration: const Duration(milliseconds: 380));
 
@@ -113,22 +117,51 @@ class _PinScreenState extends State<PinScreen> with SingleTickerProviderStateMix
       _error = null;
       if (d == '<') {
         if (_pin.isNotEmpty) _pin = _pin.substring(0, _pin.length - 1);
-      } else if (_pin.length < 6) {
+      } else if (_pin.length < _maxLen) {
         _pin += d;
       }
     });
   }
 
-  Future<void> _submit() async {
+  Future<void> _submit({String? restaurant}) async {
     if (_pin.length < 4 || _busy) return;
     setState(() => _busy = true);
     try {
-      await Api.I.pinLogin(_pin);
+      await Api.I.pinLogin(_pin, restaurant: restaurant);
+      Api.I.authLostReason = null;
       await Push.I.registerDevice();
       if (!mounted) return;
       HapticFeedback.mediumImpact();
       Navigator.of(context).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const HallScreen()), (_) => false);
     } on ApiError catch (e) {
+      // Смена открыта сразу на нескольких точках — официант выбирает, где работает
+      if (e.code == 'CHOOSE_RESTAURANT' && mounted) {
+        final list = (e.details?['restaurants'] as List? ?? const []).cast<Map>();
+        setState(() => _busy = false);
+        final slug = await showModalBottomSheet<String>(
+          context: context,
+          showDragHandle: true,
+          builder: (ctx) => SafeArea(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 0, 20, 8),
+                  child: Text('Где вы сейчас работаете?', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w700)),
+                ),
+                for (final r in list)
+                  ListTile(
+                    title: Text(r['name'].toString()),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => Navigator.of(ctx).pop(r['slug'].toString()),
+                  ),
+              ],
+            ),
+          ),
+        );
+        if (slug != null) return _submit(restaurant: slug);
+        return;
+      }
       HapticFeedback.heavyImpact();
       _shake.forward(from: 0);
       setState(() {
@@ -150,23 +183,34 @@ class _PinScreenState extends State<PinScreen> with SingleTickerProviderStateMix
             final keySize = key.clamp(56.0, 84.0);
             return Column(
               children: [
-                Align(
-                  alignment: Alignment.centerLeft,
-                  child: TextButton.icon(
-                    onPressed: () => Navigator.of(context)
-                        .pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const RestaurantScreen()), (_) => false),
-                    icon: const Icon(Icons.storefront_outlined, size: 20),
-                    label: Text(Api.I.restaurantName ?? 'Ресторан', overflow: TextOverflow.ellipsis),
-                    style: TextButton.styleFrom(foregroundColor: C.muted),
+                if (!_iiko)
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: () => Navigator.of(
+                        context,
+                      ).pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const RestaurantScreen()), (_) => false),
+                      icon: const Icon(Icons.storefront_outlined, size: 20),
+                      label: Text(Api.I.restaurantName ?? 'Ресторан', overflow: TextOverflow.ellipsis),
+                      style: TextButton.styleFrom(foregroundColor: C.muted),
+                    ),
                   ),
-                ),
                 const Spacer(),
                 const _Logo(),
                 const SizedBox(height: 20),
-                const Text(
-                  'Введите PIN',
-                  style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: C.ink),
+                Text(
+                  _iiko ? 'Код сотрудника iiko' : 'Введите PIN',
+                  style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700, color: C.ink),
                 ),
+                if (_iiko)
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(32, 6, 32, 0),
+                    child: Text(
+                      'Как на кассе. Смена должна быть открыта в iiko — приложение откроет вашу точку',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: C.muted, fontSize: 14),
+                    ),
+                  ),
                 const SizedBox(height: 18),
                 AnimatedBuilder(
                   animation: _shake,
@@ -181,9 +225,9 @@ class _PinScreenState extends State<PinScreen> with SingleTickerProviderStateMix
                       _pin.length > 4 ? _pin.length : 4,
                       (i) => AnimatedContainer(
                         duration: const Duration(milliseconds: 120),
-                        margin: const EdgeInsets.symmetric(horizontal: 8),
-                        width: 16,
-                        height: 16,
+                        margin: EdgeInsets.symmetric(horizontal: _pin.length > 8 ? 4 : 8),
+                        width: _pin.length > 8 ? 12 : 16,
+                        height: _pin.length > 8 ? 12 : 16,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           color: i < _pin.length ? (_error != null ? C.danger : C.ink) : Colors.transparent,
@@ -193,12 +237,19 @@ class _PinScreenState extends State<PinScreen> with SingleTickerProviderStateMix
                     ),
                   ),
                 ),
-                SizedBox(
-                  height: 36,
-                  child: Center(
-                    child: _busy
-                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                        : Text(_error ?? '', style: const TextStyle(color: C.danger)),
+                ConstrainedBox(
+                  constraints: const BoxConstraints(minHeight: 36),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                    child: Center(
+                      child: _busy
+                          ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                          : Text(
+                              _error ?? '',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(color: C.danger),
+                            ),
+                    ),
                   ),
                 ),
                 const Spacer(),

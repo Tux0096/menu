@@ -57,6 +57,73 @@ async function main() {
   if (barFromMain) for (const r of rows.filter((x) => visible.has(x.organization_id))) await configureBarFromMain(headers, r);
   await pool.query('UPDATE restaurant_sources SET order_creds = NULL, order_organization_id = NULL, order_terminal_group_id = NULL WHERE order_organization_id IS NOT NULL');
   await menuSplit();
+  await staffDiag(headers, rows.filter((x) => visible.has(x.organization_id)));
+}
+
+/**
+ * Вход сотрудников зала через iiko: что отдаёт iikoCloud (только счётчики — без имён и номеров карт).
+ * Код сотрудника — номер карты в iiko; смена — личная смена на кассе или открытая явка.
+ */
+async function staffDiag(headers, restaurants) {
+  const post = (path, body) => axios.post(`${IIKO_URL}${path}`, body, { headers, timeout: 30000 }).then((x) => x.data);
+  const why = (e) => `${e.response?.status || ''} ${e.response?.data?.errorDescription || e.response?.data?.message || e.message}`.trim();
+  const mode = process.env.IIKO_STAFF_LOGIN === 'on' ? 'включён' : 'выключен (IIKO_STAFF_LOGIN=on — включить)';
+  console.log(`Вход официантов через iiko: ${mode}`);
+  let employees = [];
+  let positions = new Map();
+  try {
+    for (let offset = 0; offset < 20000; offset += 500) {
+      const d = await post('/api/employees/v1/employee/list', {
+        fields: ['id', 'cardNumber', 'mainRoleId', 'roleIds', 'isFired', 'isSystem', 'organizationIds'], limit: 500, offset,
+      });
+      employees.push(...(d.items || []));
+      if (!d.items?.length || employees.length >= (d.totalCount ?? 0)) break;
+    }
+  } catch (e) {
+    console.log(`  сотрудники iiko: нет доступа — ${why(e)}. Нужно право ключа API на «Сотрудники» в iikoWeb`);
+    return;
+  }
+  try {
+    const d = await post('/api/employees/v1/positions/list', { limit: 1000, offset: 0 });
+    positions = new Map((d.items || []).map((x) => [String(x.id), x]));
+  } catch (e) {
+    console.log(`  должности iiko: нет доступа — ${why(e)}`);
+  }
+  const active = employees.filter((x) => !x.isFired && !x.isSystem);
+  const withCard = active.filter((x) => String(x.cardNumber || '').trim());
+  const lens = {};
+  for (const x of withCard) { const n = String(x.cardNumber).trim().length; lens[n] = (lens[n] || 0) + 1; }
+  console.log(`  сотрудников в iiko: ${employees.length}, работают: ${active.length}, с кодом (картой): ${withCard.length}`
+    + `${withCard.length ? ` · длина кода: ${Object.entries(lens).map(([k, v]) => `${k} цифр — ${v}`).join(', ')}` : ''}`);
+  const hallRe = new RegExp(process.env.IIKO_HALL_ROLES || 'официант|менеджер|администратор|хостес|бармен|раннер|сомелье|кассир|управляющ', 'i');
+  const byPos = new Map();
+  for (const x of active) {
+    for (const id of new Set([x.mainRoleId, ...(x.roleIds || [])].filter(Boolean))) {
+      const name = positions.get(String(id))?.name || 'без названия';
+      const v = byPos.get(name) || { n: 0, card: 0 };
+      v.n++; if (String(x.cardNumber || '').trim()) v.card++;
+      byPos.set(name, v);
+    }
+  }
+  const fmt = ([n, v]) => `${n} (${v.n}, с кодом ${v.card})`;
+  const all = [...byPos.entries()].sort((a, b) => b[1].n - a[1].n);
+  console.log(`  зальные должности: ${all.filter(([n]) => hallRe.test(n)).map(fmt).join('; ') || 'не найдены'}`);
+  console.log(`  остальные: ${all.filter(([n]) => !hallRe.test(n)).map(fmt).join('; ') || '—'}`);
+  const hallIds = new Set(active.filter((x) => [x.mainRoleId, ...(x.roleIds || [])].some((id) => hallRe.test(positions.get(String(id))?.name || ''))).map((x) => x.id));
+  for (const r of restaurants) {
+    try {
+      const d = await post('/api/employees/v1/attendance/list', { organizationId: r.organization_id, isClosed: false, limit: 1000, offset: 0 });
+      const open = (d.items || []).filter((a) => !a.isClosed && !a.endAt);
+      const hall = open.filter((a) => hallIds.has(a.employeeId));
+      console.log(`  ${r.name}: открытых явок ${open.length}, из них зал ${hall.length}`);
+      if (hall[0]) {
+        const t = await post('/api/1/employees/shifts/by_courier', { employeeId: hall[0].employeeId }).catch((e) => ({ err: why(e) }));
+        console.log(`    личная смена на кассе (пример сотрудника зала): ${t.err ? `ошибка — ${t.err}` : `касс с открытой сменой: ${(t.terminalGroupIds || []).length}`}`);
+      }
+    } catch (e) {
+      console.log(`  ${r.name}: явки — нет доступа: ${why(e)}`);
+    }
+  }
 }
 
 

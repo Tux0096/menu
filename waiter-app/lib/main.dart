@@ -23,6 +23,7 @@ Future<void> main() async {
     ),
   );
   await Api.I.load();
+  await Api.I.fetchLoginMode();
   await Push.I.init();
   runApp(const WaiterApp());
 }
@@ -41,7 +42,14 @@ class _WaiterAppState extends State<WaiterApp> {
     super.initState();
     _authSub = Api.I.onAuthLost.listen((_) {
       navigatorKey.currentState?.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const PinScreen()), (_) => false);
-      messengerKey.currentState?.showSnackBar(const SnackBar(content: Text('Сессия закончилась — войдите по PIN')));
+      final reason = Api.I.authLostReason;
+      messengerKey.currentState?.showSnackBar(
+        SnackBar(
+          content: Text(
+            reason ?? (Api.I.iikoLogin ? 'Сессия закончилась — войдите снова' : 'Сессия закончилась — войдите по PIN'),
+          ),
+        ),
+      );
     });
   }
 
@@ -53,11 +61,12 @@ class _WaiterAppState extends State<WaiterApp> {
 
   @override
   Widget build(BuildContext context) {
-    final Widget home = Api.I.restaurantSlug == null
-        ? const RestaurantScreen()
-        : Api.I.token == null
+    // Вход через iiko: ресторан не выбирают — его определяет открытая смена
+    final Widget home = Api.I.token != null && Api.I.restaurantSlug != null
+        ? const HallScreen()
+        : Api.I.iikoLogin || Api.I.restaurantSlug != null
         ? const PinScreen()
-        : const HallScreen();
+        : const RestaurantScreen();
     return MaterialApp(
       title: 'Фуджи Официант',
       debugShowCheckedModeBanner: false,
