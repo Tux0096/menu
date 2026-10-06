@@ -408,6 +408,17 @@ const SCHEMA = `
   ALTER TABLE restaurant_sources ADD COLUMN IF NOT EXISTS order_creds VARCHAR(30);
   ALTER TABLE restaurant_sources ADD COLUMN IF NOT EXISTS order_organization_id UUID;
   ALTER TABLE restaurant_sources ADD COLUMN IF NOT EXISTS order_terminal_group_id UUID;
+  -- Касса бара выбрана в админке («Кассы») — проверка ключа при деплое её не перезаписывает
+  ALTER TABLE restaurant_sources ADD COLUMN IF NOT EXISTS manual BOOLEAN DEFAULT FALSE;
+  -- Раздел меню → касса, выбранная вручную (иначе — по названию раздела, lib/alco.js)
+  CREATE TABLE IF NOT EXISTS category_routes (
+    restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+    category_id UUID NOT NULL,
+    source VARCHAR(30) NOT NULL,
+    updated_by VARCHAR(100),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (restaurant_id, category_id)
+  );
   ALTER TABLE restaurant_payment_settings ADD COLUMN IF NOT EXISTS iiko_cash_type_id VARCHAR(64);
   ALTER TABLE restaurant_payment_settings ADD COLUMN IF NOT EXISTS iiko_card_type_id VARCHAR(64);
   -- Телефоны официантов для push-уведомлений (Firebase Cloud Messaging)

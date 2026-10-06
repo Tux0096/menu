@@ -155,7 +155,7 @@ export async function updateOrder(sessionId, staff, { items = [], guestCount, se
 }
 
 /** Запомнить рабочую терминальную группу источника и сбросить кэш столов (у другой группы свои ID столов). */
-async function saveTerminalGroup(restaurantId, code, terminalGroupId) {
+export async function saveTerminalGroup(restaurantId, code, terminalGroupId) {
   if (code === MAIN) await pool.query('UPDATE restaurants SET terminal_group_id = $2 WHERE id = $1', [restaurantId, terminalGroupId]);
   else await pool.query('UPDATE restaurant_sources SET terminal_group_id = $3 WHERE restaurant_id = $1 AND code = $2', [restaurantId, code, terminalGroupId]);
   await pool.query(
@@ -188,9 +188,11 @@ async function sendToKitchenNow(sessionId, staff) {
   const demo = isIikoDemo();
   const orders = { ...(session.iiko_orders || {}) };
   if (session.iiko_order_id && !orders[MAIN]) orders[MAIN] = { orderId: session.iiko_order_id, tableId: session.iiko_table_id };
+  // Касса — по текущей настройке раздела («Кассы» в админке), а не по той, что была при добавлении в корзину
+  const fresh = await productSourceMap(restaurant.id, pending.map((i) => i.iiko_product_id).filter(Boolean));
   const groups = new Map();
   for (const i of pending) {
-    const code = i.source || MAIN;
+    const code = fresh.get(String(i.iiko_product_id)) || i.source || MAIN;
     if (!groups.has(code)) groups.set(code, []);
     groups.get(code).push(i);
   }
@@ -198,6 +200,9 @@ async function sendToKitchenNow(sessionId, staff) {
   const sentIds = [];
   const errors = [];
   for (const [code, items] of groups) {
+    // Запоминаем кассу позиции: по ней считается «бар — принять оплату» и статусы
+    await pool.query('UPDATE table_order_items SET source = $2 WHERE id = ANY($1::uuid[]) AND source IS DISTINCT FROM $2',
+      [items.map((i) => i.id), code]);
     const src = await getSource(restaurant, code);
     try {
       await withIikoCreds(src.creds, async () => {
