@@ -223,6 +223,20 @@ async function sendToKitchenNow(sessionId, staff) {
               .filter(Boolean).join(', ') || undefined,
           }));
         let orderId = orders[code]?.orderId;
+        if (orderId) {
+          try {
+            await addItemsToOrder({ organizationId: src.organization_id, orderId, items: delta });
+          } catch (e) {
+            // Заказ стола на кассе удалили или закрыли — создаём новый на тот же стол
+            const text = `${e.response?.data?.errorDescription || ''} ${e.message || ''}`;
+            if (!/Deleted|Closed|status|not found|не найден/i.test(text)) throw e;
+            console.warn(`iiko: заказ ${orderId} (${code}) удалён или закрыт на кассе — создаём новый`);
+            const tableId = orders[code]?.tableId;
+            orders[code] = { orderId: null, tableId };
+            if (code === MAIN) session.iiko_order_id = null;
+            orderId = null;
+          }
+        }
         if (!orderId) {
           let tableId = orders[code]?.tableId || (code === MAIN ? session.iiko_table_id : null);
           let terminalGroupId = src.terminal_group_id;
@@ -304,8 +318,6 @@ async function sendToKitchenNow(sessionId, staff) {
           orderId = created?.orderInfo?.id || created?.order?.id || created?.id || null;
           if (!orderId) throw new Error('iiko не вернул номер заказа');
           orders[code] = { orderId, tableId: tableId || null };
-        } else {
-          await addItemsToOrder({ organizationId: src.organization_id, orderId, items: delta });
         }
       });
       sentIds.push(...items.map((i) => i.id));
