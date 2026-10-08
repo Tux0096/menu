@@ -154,6 +154,13 @@ export async function getRestaurantSections(organizationId, terminalGroupId) {
   });
 }
 
+/**
+ * Сервисная печать («В работу» = бегунки на кухню и в бар): iiko печатает заказ на принтерах той кассы,
+ * куда он ушёл. Работает, если в iikoWeb (Cloud API → организация → Настройки → «Автоматическая сервисная
+ * печать заказов на стол») выбрано «Доверять параметрам из API». IIKO_SERVICE_PRINT=false — не просить печать.
+ */
+const servicePrint = () => process.env.IIKO_SERVICE_PRINT !== 'false';
+
 export async function createTableOrder({
   organizationId,
   terminalGroupId,
@@ -174,6 +181,7 @@ export async function createTableOrder({
       })),
       guests: { count: guestCount },
     },
+    createOrderSettings: { servicePrint: servicePrint() },
   });
 }
 
@@ -191,6 +199,7 @@ export async function addItemsToOrder({
       amount: item.amount,
       ...(item.comment ? { comment: item.comment } : {}),
     })),
+    addOrderItemsSettings: { servicePrint: servicePrint() },
   });
   // Ошибка добавления (заказ закрыт, позиция в стоп-листе) — позиции не помечаем отправленными, официант повторит.
   // Нет ответа за 30 с — считаем принятым: повторная отправка задвоила бы блюда на кухне.
