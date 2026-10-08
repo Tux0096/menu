@@ -59,6 +59,14 @@ class TableCart extends ChangeNotifier {
       .where((i) => i['isLocked'] != true)
       .fold<num>(0, (s, i) => s + ((i['price'] as num?) ?? 0) * ((i['quantity'] as num?) ?? 0));
 
+  static bool isBar(Map<String, dynamic> it) => (it['source'] ?? 'main') != 'main';
+
+  /// На столе есть позиции и кухни, и бара — тогда в приложении показываем, что на какой кассе
+  bool get mixedCashes => items.any(isBar) && items.any((i) => !isBar(i));
+
+  num sumWhere(bool Function(Map<String, dynamic>) test) =>
+      items.where(test).fold<num>(0, (s, i) => s + ((i['price'] as num?) ?? 0) * ((i['quantity'] as num?) ?? 0));
+
   num get total => items.fold<num>(0, (s, i) => s + ((i['price'] as num?) ?? 0) * ((i['quantity'] as num?) ?? 0));
 
   void _changed() {
@@ -83,6 +91,8 @@ class TableCart extends ChangeNotifier {
         'isLocked': false,
         'seatNumber': seat,
         'course': null,
+        // Касса iiko: main — кухня, иначе бар (сервер уточнит при сохранении)
+        'source': p['source'] ?? 'main',
       });
     }
     _changed();
