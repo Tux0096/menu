@@ -853,6 +853,87 @@ async function failIikoOrder(ctx, code, src, reason) {
   }).catch(() => {});
 }
 
+/**
+ * Позиции удалили на кассе iiko (или удалили весь заказ) — убираем их и из стола в меню.
+ * Сверка по блюду: живое количество в заказе iiko (строки без deleted) против наших отправленных строк.
+ * Строки, отправленные только что, не трогаем: add_items мог ещё не дойти до кассы.
+ * Возвращает удалённое [{ name, quantity }].
+ */
+const SYNC_GRACE_MS = 2 * 60_000;
+async function syncRemovedItems(ctx, code, order, orderId) {
+  const { session } = ctx;
+  const orderDeleted = order.status === 'Deleted';
+  if (orderDeleted) {
+    // Заказ удалён на кассе — следующая отправка создаст новый (только если это всё ещё наш заказ)
+    await pool.query(
+      `UPDATE table_sessions SET iiko_orders = iiko_orders - $2::text,
+         iiko_order_id = CASE WHEN $2 = 'main' THEN NULL ELSE iiko_order_id END, updated_at = NOW()
+       WHERE id = $1 AND (iiko_orders -> $2::text ->> 'orderId' = $3 OR ($2 = 'main' AND iiko_order_id::text = $3))`,
+      [session.id, code, String(orderId)],
+    );
+  }
+  if (session.payment_status === 'paid') return [];
+  const mine = ctx.items.filter((i) => i.is_locked && (i.source || 'main') === code);
+  if (!mine.length) return [];
+  const alive = new Map();
+  if (!orderDeleted) {
+    for (const it of order.items || []) {
+      if ((it.type || 'Product') !== 'Product' || it.deleted) continue;
+      const pid = String(it.product?.id || it.productId || '');
+      if (pid) alive.set(pid, (alive.get(pid) || 0) + Number(it.amount || 0));
+    }
+  }
+  // Живые позиции есть, но ни одна не совпала с нашими по id — это не удаление, а расхождение id: не трогаем
+  if (alive.size && !mine.some((r) => alive.has(String(r.iiko_product_id)))) {
+    console.warn(`iiko: стол ${session.table_number} (${code}) — позиции заказа не совпали с меню по id, сверку удалений пропускаем`);
+    return [];
+  }
+  const old = (row) => Date.now() - new Date(row.sent_at || row.updated_at || 0).getTime() > SYNC_GRACE_MS;
+  const byProduct = new Map();
+  for (const row of mine) {
+    if (!orderDeleted && !old(row)) continue;
+    const pid = String(row.iiko_product_id);
+    if (!byProduct.has(pid)) byProduct.set(pid, []);
+    byProduct.get(pid).push(row);
+  }
+  const removed = [];
+  for (const [pid, rows] of byProduct) {
+    let excess = rows.reduce((n, r) => n + Number(r.quantity || 0), 0) - (alive.get(pid) || 0);
+    if (excess <= 0) continue;
+    // Сначала — ещё не поданные и самые свежие
+    rows.sort((a, b) => Number(Boolean(a.served_at)) - Number(Boolean(b.served_at))
+      || new Date(b.sent_at || 0) - new Date(a.sent_at || 0));
+    for (const row of rows) {
+      if (excess <= 0) break;
+      const q = Number(row.quantity || 0);
+      const cut = Math.min(q, Math.ceil(excess));
+      if (cut >= q) {
+        await pool.query('DELETE FROM table_order_items WHERE id = $1', [row.id]);
+      } else {
+        await pool.query(
+          `UPDATE table_order_items SET quantity = $2::int, line_total = ROUND(line_total * $2::int / quantity, 2), updated_at = NOW() WHERE id = $1`,
+          [row.id, q - cut],
+        );
+      }
+      removed.push({ name: row.name, quantity: cut });
+      excess -= cut;
+    }
+  }
+  if (removed.length) {
+    await withTransaction((client) => recalcTotal(client, session.id));
+    const where = code === 'main' ? '' : ' (бар)';
+    console.log(`iiko: стол ${session.table_number}${where} — на кассе удалено ${removed.length} поз.${orderDeleted ? ', заказ удалён' : ''}`);
+    await createWaiterNotification({
+      restaurantId: ctx.restaurant.id, sessionId: session.id, tableNumber: session.table_number,
+      type: NOTIFY_TYPES.IIKO_ERROR || 'iiko_error',
+      title: `Стол №${session.table_number} — ${orderDeleted ? 'заказ удалён' : 'позиции удалены'} на кассе${where}`,
+      body: removed.map((r) => `${r.name} ×${r.quantity}`).join('; '),
+      payload: { sessionId: session.id, source: code, removed },
+    }).catch(() => {});
+  }
+  return removed;
+}
+
 export async function refreshFromIiko(sessionId) {
   const demo = isIikoDemo();
   const ctx = await getSessionContext(sessionId);
@@ -881,8 +962,11 @@ export async function refreshFromIiko(sessionId) {
         }
         const order = info?.order || info;
         if (!order) continue;
+        // Удалили позиции или весь заказ на кассе — убираем и у нас
+        await syncRemovedItems(ctx, code, order, o.orderId);
+        if (order.status === 'Deleted') continue;
         if (code === 'main' || !orderStatus) orderStatus = order.status || info?.creationStatus || null;
-        const items = (order.items || []).filter((i) => (i.type || 'Product') === 'Product');
+        const items = (order.items || []).filter((i) => (i.type || 'Product') === 'Product' && !i.deleted);
         // Для каждого блюда — наименее продвинутый статус среди строк iiko с этим блюдом
         const byProduct = new Map();
         for (const it of items) {
@@ -894,6 +978,8 @@ export async function refreshFromIiko(sessionId) {
         maps.set(code, byProduct);
       }
       if (!maps.size) return;
+      const gone = new Set((await pool.query('SELECT id FROM table_order_items WHERE session_id = $1', [sessionId])).rows.map((r) => r.id));
+      for (let i = locked.length - 1; i >= 0; i--) if (!gone.has(locked[i].id)) locked.splice(i, 1);
       statusOf = (row) => maps.get(row.source || 'main')?.get(String(row.iiko_product_id)) || null;
     }
 
