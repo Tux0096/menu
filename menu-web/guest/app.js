@@ -101,7 +101,7 @@
     cart: store.get('cart', {}), // productId -> { qty, product }
     tab: 'menu',
     ai: { query: '', results: store.get('aiResults', null), loading: false, error: null, engine: null },
-    menu: { search: '', cat: null },
+    menu: { search: '', cat: null, section: 'kitchen' },
     cartDirty: false,
     changedSinceSubmit: store.get('changedSinceSubmit', true),
     aiFresh: false,
@@ -728,9 +728,25 @@
       byGroup.get(g).push(p);
     }
     const order = new Map(groups.map((g, i) => [g.id, g.order ?? i]));
+    const bar = barGroupIds();
     return [...byGroup.entries()]
       .map(([id, items]) => ({ id, name: groups.find((g) => g.id === id)?.name || items[0].parentGroupName || 'Другое', items, order: order.get(id) ?? 999 }))
+      // Вкладки «Кухня / Бар»; поиск ищет по всему меню
+      .filter((sec) => q || !bar.size || bar.has(String(sec.id)) === (S.menu.section === 'bar'))
       .sort((a, b) => a.order - b.order);
+  }
+
+  /** Разделы бара (сервер помечает isBar: касса бара и напитки), только те, где есть позиции. */
+  function barGroupIds() {
+    const ids = new Set((S.catalog?.groups || []).filter((g) => g.isBar).map((g) => String(g.id)));
+    const used = new Set((S.catalog?.products || []).map((p) => String(p.parentGroup || 'other')));
+    return new Set([...ids].filter((id) => used.has(id)));
+  }
+
+  function sectionTabs() {
+    if (S.menu.search || !barGroupIds().size) return '';
+    const tab = (key, label) => `<button role="tab" data-section="${key}" aria-selected="${S.menu.section === key}" class="${S.menu.section === key ? 'is-active' : ''}">${label}</button>`;
+    return `<div class="seg" role="tablist" aria-label="Кухня или бар">${tab('kitchen', 'Кухня')}${tab('bar', 'Бар')}</div>`;
   }
 
   function renderMenu() {
@@ -741,6 +757,7 @@
         ${ICONS.search}<input id="search" type="search" placeholder="Поиск по меню" value="${esc(S.menu.search)}" aria-label="Поиск">
       </form>
       ${S.menu.search ? '' : bannersHtml('menu')}
+      ${sectionTabs()}
       ${S.menu.search ? '' : `<div class="cats" id="cats"><button class="cats__all" data-action="all-cats" aria-label="Все разделы меню">${ICONS.grid}</button>${sections.map((s) => `<button data-cat="${esc(s.id)}" class="${String(S.activeCat) === String(s.id) ? 'is-active' : ''}">${esc(s.name)}</button>`).join('')}</div>`}
       ${sections.length ? sections.map((s, i) => `<h2 class="section-title" id="cat-${esc(s.id)}">${esc(s.name)}</h2>
         <div class="list ${i === sections.length - 1 && !S.menu.search ? 'list--last' : ''}">${s.items.map((p) => dishCard(p)).join('')}</div>`).join('')
@@ -1272,7 +1289,13 @@
   // Пока меню едет к выбранному разделу, подсветка не перескакивает на промежуточные
   let spyLockUntil = 0;
   function scrollToCategory(id) {
-    const el = document.getElementById(`cat-${id}`);
+    let el = document.getElementById(`cat-${id}`);
+    // Раздел на другой вкладке (переход из баннера или AI) — сначала переключаем «Кухня / Бар»
+    const bar = barGroupIds();
+    if (!el && bar.size && S.tab === 'menu') {
+      const want = bar.has(String(id)) ? 'bar' : 'kitchen';
+      if (want !== S.menu.section) { S.menu.section = want; render(); el = document.getElementById(`cat-${id}`); }
+    }
     if (!el) return;
     setTopbarHeight();
     markCategory(id);
@@ -1466,6 +1489,16 @@
     const chip = t.closest('[data-chip]');
     if (chip) { askAi(chip.dataset.chip, true); return; }
     if (t.closest('[data-retry]')) { askAi(S.ai.query); return; }
+    const sec = t.closest('[data-section]');
+    if (sec) {
+      if (S.menu.section !== sec.dataset.section) {
+        S.menu.section = sec.dataset.section;
+        S.activeCat = null;
+        render();
+        window.scrollTo({ top: 0 });
+      }
+      return;
+    }
     const cat = t.closest('[data-cat]');
     if (cat) {
       scrollToCategory(cat.dataset.cat);

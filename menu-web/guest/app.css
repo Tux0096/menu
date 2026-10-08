@@ -245,6 +245,10 @@ img { display: block; }
   box-shadow: var(--shadow); font-size: 14px; font-weight: 500; white-space: nowrap;
 }
 .cats button.is-active { background: var(--ink); color: #fff; }
+/* Вкладки «Кухня / Бар» */
+.seg { display: flex; gap: 4px; padding: 4px; margin: 0 0 8px; border-radius: var(--r-pill); background: var(--card); box-shadow: var(--shadow); }
+.seg button { flex: 1; padding: 10px 0; border-radius: var(--r-pill); font-size: 15px; font-weight: 600; color: var(--muted); }
+.seg button.is-active { background: var(--ink); color: #fff; }
 .section-title { font-weight: 500; font-size: 22px; margin: 24px 4px 12px; scroll-margin-top: 130px; }
 .list { display: flex; flex-direction: column; gap: 12px; }
 .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
