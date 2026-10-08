@@ -272,8 +272,12 @@ async function checkTerminalGroups(headers, r) {
     }
     const mark = (id) => (alive.get(id) === true ? 'на связи' : alive.get(id) === false ? 'НЕ на связи' : 'статус неизвестен');
     console.log(`${r.name}: кассы iiko — ${list.map((t) => `${t.name} [${t.id}] ${mark(t.id)}${t.id === r.terminal_group_id ? ' ← выбрана' : ''}`).join('; ') || 'нет'}`);
+    await tablesDiag(post, r, list);
     if (!list.some((t) => t.id === r.terminal_group_id) || alive.get(r.terminal_group_id) === false) {
-      const live = list.find((t) => alive.get(t.id) === true);
+      // Кухню не переключаем на кассу бара (другое юрлицо и своё меню)
+      const { rows: barTg } = await pool.query('SELECT terminal_group_id FROM restaurant_sources WHERE restaurant_id = $1', [r.id]);
+      const bars = new Set(barTg.map((x) => String(x.terminal_group_id)));
+      const live = list.find((t) => alive.get(t.id) === true && !bars.has(String(t.id)) && !/бар|bar/i.test(t.name || ''));
       if (live) {
         await pool.query('UPDATE restaurants SET terminal_group_id = $2 WHERE id = $1', [r.id, live.id]);
         await pool.query("DELETE FROM restaurant_table_cache WHERE restaurant_id = $1 AND table_number NOT LIKE '%:%'", [r.id]);
@@ -285,6 +289,38 @@ async function checkTerminalGroups(headers, r) {
   } catch (e) {
     console.log(`${r.name}: кассы iiko не получены —`, e.response?.status || '', e.response?.data?.errorDescription || e.message);
   }
+}
+
+/**
+ * Залы и столы каждой кассы: номера столов, повторяющиеся в разных залах, и куда сопоставлены столы
+ * из кэша (заказ на «не тот» зал iiko отклоняет: ProductExludedFromMenu).
+ */
+async function tablesDiag(post, r, terminals) {
+  const where = new Map(); // tableId → «касса / зал / стол»
+  for (const t of terminals) {
+    try {
+      const d = await post('/api/1/reserve/available_restaurant_sections', { terminalGroupIds: [t.id] });
+      const byNum = new Map();
+      for (const sec of d.restaurantSections || []) {
+        const tables = (sec.tables || []).filter((x) => !x.isDeleted);
+        const nums = tables.map((x) => Number(x.number)).filter(Number.isFinite);
+        console.log(`  ${t.name} · зал «${sec.name}»: столов ${tables.length}${nums.length ? `, номера ${Math.min(...nums)}–${Math.max(...nums)}` : ''}`);
+        for (const x of tables) {
+          where.set(String(x.id), `${t.name} / ${sec.name} / ${x.name || x.number}`);
+          const k = String(x.number);
+          byNum.set(k, [...(byNum.get(k) || []), sec.name]);
+        }
+      }
+      const dup = [...byNum].filter(([, v]) => v.length > 1);
+      if (dup.length) console.log(`  ${t.name}: номера в нескольких залах — ${dup.slice(0, 15).map(([n, v]) => `${n} (${v.join(', ')})`).join('; ')}`);
+    } catch (e) {
+      console.log(`  ${t.name}: залы не получены —`, e.response?.status || '', e.response?.data?.errorDescription || e.message);
+    }
+  }
+  const { rows } = await pool.query(
+    'SELECT table_number, iiko_table_id FROM restaurant_table_cache WHERE restaurant_id = $1 ORDER BY table_number', [r.id],
+  );
+  if (rows.length) console.log(`  кэш столов: ${rows.map((x) => `${x.table_number} → ${where.get(String(x.iiko_table_id)) || 'нет в схеме'}`).join('; ')}`);
 }
 
 /** Типы оплат организаций — какой взять для онлайн-оплаты (IIKO_PAYMENT_TYPE_ID или название «Онлайн»). */
