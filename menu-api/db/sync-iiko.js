@@ -553,8 +553,45 @@ export async function syncAllRestaurants(slugArg = null) {
   const extra = await syncExtraSources(restaurants);
   totalProducts += extra.products;
   failed += extra.failed;
+  const barMenu = await syncBarMenus(restaurants.filter((r) => !visibleOrgs.size || visibleOrgs.has(r.organization_id)));
+  totalProducts += barMenu.products;
+  failed += barMenu.failed;
   console.log(`✓ Готово. Ресторанов: ${restaurants.length}, всего продуктов: ${totalProducts}, ошибок: ${failed}`);
   return { restaurants: restaurants.length, products: totalProducts, failed };
+}
+
+/**
+ * Отдельное внешнее меню бара в той же iiko («Бар»: позиции ООО с ценами прайс-листа ООО). Если оно
+ * подключено к ключу, все его позиции уходят на кассу бара и заменяют барные разделы основного меню.
+ */
+const BAR_MENU_RE = /(^|\s)бар(\s|$)|барн|алкогол/i;
+async function syncBarMenus(restaurants) {
+  const ids = restaurants.map((r) => r.id);
+  const { rows: sources } = await pool.query(
+    `SELECT * FROM restaurant_sources WHERE is_enabled AND split_regex IS NOT NULL AND restaurant_id = ANY($1::uuid[])`,
+    [ids],
+  );
+  if (!sources.length) return { products: 0, failed: 0 };
+  let products = 0;
+  let failed = 0;
+  try {
+    const token = await requestIikoToken();
+    const menus = (await iikoPostRaw(token, '/api/2/menu', {})).externalMenus || [];
+    const menu = menus.find((m) => BAR_MENU_RE.test(String(m.name || '')));
+    if (!menu) return { products: 0, failed: 0 };
+    for (const src of sources) {
+      const r = restaurants.find((x) => x.id === src.restaurant_id);
+      console.log(`→ ${r.name} · меню бара «${menu.name}» [${menu.id}] → касса «${src.name}»`);
+      const data = await requestExternalMenu(token, menu, [src.organization_id]);
+      const n = await syncFromExternalMenu(r, token, menu, src.organization_id, data, src.code);
+      if (!n) console.log('  ! в меню бара нет позиций с ценой для этой точки — барные разделы основного меню остаются');
+      products += n || 0;
+    }
+  } catch (e) {
+    failed++;
+    console.log(`  ! меню бара: ${e.response?.status || ''} ${JSON.stringify(e.response?.data?.errorDescription || e.message).slice(0, 300)}`);
+  }
+  return { products, failed };
 }
 
 /** Дополнительные источники (например, бар с алкоголем в другой организации/аккаунте iiko). */

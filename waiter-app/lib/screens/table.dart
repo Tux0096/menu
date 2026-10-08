@@ -378,6 +378,12 @@ class _TableScreenState extends State<TableScreen> {
             children: [
               const Text('Итого', style: TextStyle(color: C.muted, fontSize: 13)),
               Text(rub(cart.total), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w800)),
+              // Один стол — два заказа в iiko: кухня (касса ИП) и бар (касса ООО)
+              if (cart.mixedCashes)
+                Text(
+                  'Кухня ${rub(cart.sumWhere((i) => !TableCart.isBar(i)))} · Бар ${rub(cart.sumWhere(TableCart.isBar))}',
+                  style: const TextStyle(color: C.muted, fontSize: 13),
+                ),
             ],
           ),
           const Spacer(),
@@ -512,14 +518,26 @@ class _TableScreenState extends State<TableScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      it['name'].toString(),
-                      style: TextStyle(
-                        fontSize: 15,
-                        fontWeight: FontWeight.w600,
-                        color: served ? C.muted : C.ink,
-                        decoration: served ? TextDecoration.lineThrough : null,
-                      ),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            it['name'].toString(),
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                              color: served ? C.muted : C.ink,
+                              decoration: served ? TextDecoration.lineThrough : null,
+                            ),
+                          ),
+                        ),
+                        // Касса, куда уходит позиция (видно, когда на столе и кухня, и бар)
+                        if (cart.mixedCashes || TableCart.isBar(it)) ...[
+                          const SizedBox(width: 6),
+                          _CashTag(bar: TableCart.isBar(it)),
+                        ],
+                      ],
                     ),
                     const SizedBox(height: 2),
                     Text.rich(
@@ -747,4 +765,23 @@ class _SeatButton extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Метка кассы позиции: «Бар» (касса ООО, алкоголь) или «Кухня» (касса ИП).
+class _CashTag extends StatelessWidget {
+  const _CashTag({required this.bar});
+  final bool bar;
+  @override
+  Widget build(BuildContext context) => Container(
+    margin: const EdgeInsets.only(top: 2),
+    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+    decoration: BoxDecoration(
+      color: bar ? const Color(0xFFFFF1DC) : const Color(0xFFEEEDFF),
+      borderRadius: BorderRadius.circular(8),
+    ),
+    child: Text(
+      bar ? 'Бар' : 'Кухня',
+      style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: bar ? C.warn : C.violet),
+    ),
+  );
 }
