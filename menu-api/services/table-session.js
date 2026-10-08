@@ -860,6 +860,7 @@ async function failIikoOrder(ctx, code, src, reason) {
  * Возвращает удалённое [{ name, quantity }].
  */
 const SYNC_GRACE_MS = 2 * 60_000;
+const isServedOrReady = (row) => Boolean(row.served_at) || ['CookingCompleted', 'Served'].includes(row.kitchen_status);
 async function syncRemovedItems(ctx, code, order, orderId) {
   const { session } = ctx;
   const orderDeleted = order.status === 'Deleted';
@@ -900,10 +901,10 @@ async function syncRemovedItems(ctx, code, order, orderId) {
   for (const [pid, rows] of byProduct) {
     let excess = rows.reduce((n, r) => n + Number(r.quantity || 0), 0) - (alive.get(pid) || 0);
     if (excess <= 0) continue;
-    // Сначала — ещё не поданные и самые свежие
-    rows.sort((a, b) => Number(Boolean(a.served_at)) - Number(Boolean(b.served_at))
-      || new Date(b.sent_at || 0) - new Date(a.sent_at || 0));
-    for (const row of rows) {
+    // Вынесенное и готовое не удаляется (на кассе его тоже не удалить) — убираем только из остального, свежее первым
+    const removable = rows.filter((r) => !isServedOrReady(r))
+      .sort((a, b) => new Date(b.sent_at || 0) - new Date(a.sent_at || 0));
+    for (const row of removable) {
       if (excess <= 0) break;
       const q = Number(row.quantity || 0);
       const cut = Math.min(q, Math.ceil(excess));
