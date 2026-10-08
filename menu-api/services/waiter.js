@@ -7,7 +7,7 @@ import {
   addItemsToOrder, createTableOrder, isIikoDemo, isTerminalGroupError, pickAliveTerminalGroup, withIikoCreds,
 } from '../iiko-client.js';
 import { createWaiterNotification } from './waiter-notifications.js';
-import { getSource, MAIN, productSourceMap } from './sources.js';
+import { getSource, listSources, MAIN, productSourceMap } from './sources.js';
 import { menuIndex, priceLine, stopProblems } from './menu-pricing.js';
 import { withSessionMutex } from '../lib/session-mutex.js';
 import {
@@ -246,6 +246,10 @@ async function sendToKitchenNow(sessionId, staff) {
             const picked = await pickAliveTerminalGroup(src.organization_id, terminalGroupId).catch(() => null);
             const current = picked?.list.find((t) => t.id === terminalGroupId);
             // Переключаемся, только если выбранная касса точно не на связи (у бара на отдельной кассе — не трогаем)
+            // Кухню не уводим на кассу бара: там другое юрлицо и своё меню (iiko отклонит блюда кухни)
+            const barTgs = code === MAIN ? new Set((await listSources(restaurant)).filter((x) => !x.isMain).map((x) => String(x.terminal_group_id))) : new Set();
+            const alt = picked?.list.find((t) => t.isAlive && t.id !== terminalGroupId && !barTgs.has(String(t.id)) && !/бар|bar/i.test(t.name || ''));
+            if (picked && code === MAIN) picked.id = alt?.id || null;
             if (picked && picked.id && picked.id !== terminalGroupId && current?.isAlive === false && !src.orderOverride) {
               terminalGroupId = picked.id;
               await saveTerminalGroup(restaurant.id, code, terminalGroupId);
