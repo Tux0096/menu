@@ -43,7 +43,7 @@ const SITE_ORDER = [
   [], // нераспознанные разделы
   ['десерт', 'сладост'],
   ['соус', 'добав'],
-  ['напит', ' бар ', ' чай', 'кофе', 'лимонад', ' соки', ' вино', ' вина', 'пиво', 'коктейл'],
+  ['напит', ' бар ', ' чай', 'кофе', 'лимонад', ' соки', ' вино', ' вина', 'пиво', 'коктейл', 'алкогол', 'крепк', 'виски', 'водк'],
 ];
 const UNKNOWN = SITE_ORDER.findIndex((k) => !k.length);
 
@@ -63,8 +63,13 @@ const DRINKS = SITE_ORDER.length - 1;
  * Разделы бара (второй iiko) для гостя — просто напитки: встают в конец, рядом с напитками.
  */
 export function orderGroups(groups, barGroupIds = new Set()) {
-  return (groups || []).map((g, i) => ({
-    ...g,
-    order: (barGroupIds.has(g.id) ? DRINKS : siteRank(g.name)) * 10000 + (Number(g.order) || i),
-  }));
+  return (groups || []).map((g, i) => {
+    const bar = barGroupIds.has(g.id);
+    return {
+      ...g,
+      order: (bar ? DRINKS : siteRank(g.name)) * 10000 + (Number(g.order) || i),
+      // Вкладка «Бар» у гостя: разделы кассы бара и напитки (пиво, вино, коктейли, кофе, лимонады)
+      isBar: bar || siteRank(g.name) === DRINKS,
+    };
+  });
 }
