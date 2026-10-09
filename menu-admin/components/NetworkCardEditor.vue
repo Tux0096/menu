@@ -95,6 +95,44 @@ function onVideo(url: string, file: File) {
 }
 const shortName = (p: NetworkPoint) => p.name.replace(/^Фуджи\s+/i, '');
 
+// ---------- превью карточки: гостевое меню (?preview=1) получает блюдо из формы
+const previewFrame = ref<HTMLIFrameElement | null>(null);
+const previewSrc = '/index.html?preview=1';
+const previewPoint = computed(() => available.value.find((p) => targets.value.includes(p.slug)) ?? available.value[0] ?? null);
+const numOrNull = (v: string) => (v === '' || v == null ? null : Number(String(v).replace(',', '.')) || null);
+function previewProduct() {
+  const it = props.item;
+  if (!it) return null;
+  const cell = previewPoint.value ? it.points[previewPoint.value.slug] : null;
+  const video = form.video_url || null;
+  return {
+    id: cell?.productId || it.key,
+    name: form.name.trim() || it.iikoName || it.name,
+    price: cell?.price ?? 0,
+    description: form.description.trim() || null,
+    image: form.image_url || null,
+    video,
+    weight: form.weight.trim() || null,
+    badge: form.badge || null,
+    energyAmount: numOrNull(form.energy),
+    fiberAmount: numOrNull(form.proteins),
+    fatAmount: numOrNull(form.fats),
+    carbohydrateAmount: numOrNull(form.carbs),
+    allergensText: form.allergens ? String(form.allergens).split(',').map((a) => a.trim()).filter(Boolean) : [],
+    isInStopList: Boolean(cell?.stop),
+  };
+}
+function sendPreview() {
+  const product = previewProduct();
+  if (product) previewFrame.value?.contentWindow?.postMessage({ type: 'fuji-preview', product: JSON.parse(JSON.stringify(product)) }, location.origin);
+}
+watch(() => [{ ...form }, previewPoint.value?.slug, props.item?.key], sendPreview, { deep: true });
+function onPreviewReady(e: MessageEvent) {
+  if (e.origin === location.origin && e.data?.type === 'fuji-preview-ready') sendPreview();
+}
+onMounted(() => window.addEventListener('message', onPreviewReady));
+onBeforeUnmount(() => window.removeEventListener('message', onPreviewReady));
+
 // ---------- доступность: показывать ли блюдо гостям на каждой точке (сохраняется сразу)
 const busy = ref<Set<string>>(new Set());
 const shownCount = computed(() => props.points.filter((p) => props.item?.points[p.slug] && !props.item.points[p.slug]!.hidden).length);
@@ -132,7 +170,7 @@ async function setAll(visible: boolean) {
 </script>
 
 <template>
-  <USlideover v-model="open" prevent-close :ui="{ width: 'w-screen max-w-2xl' }" @close-prevented="requestClose">
+  <USlideover v-model="open" prevent-close :ui="{ width: 'w-screen max-w-2xl xl:max-w-6xl' }" @close-prevented="requestClose">
     <div v-if="item" class="flex h-full flex-col">
       <div class="flex items-start gap-3 border-b border-brand-50 px-5 py-4">
         <div class="min-w-0 flex-1">
@@ -186,7 +224,8 @@ async function setAll(visible: boolean) {
         <p class="text-xs text-slate-500">«Нет в меню iiko точки» — блюдо не добавлено во внешнее меню iiko этой точки: добавьте его в iiko, и после обновления оно появится здесь.</p>
       </div>
 
-      <div v-show="tab === 'card'" class="flex-1 space-y-6 overflow-y-auto px-5 py-5">
+      <div v-show="tab === 'card'" class="flex min-h-0 flex-1">
+      <div class="min-w-0 flex-1 space-y-6 overflow-y-auto px-5 py-5">
         <!-- Точки -->
         <section class="space-y-2">
           <h3 class="panel-section-title">На каких точках применить</h3>
@@ -245,6 +284,14 @@ async function setAll(visible: boolean) {
           Сохраняются только изменённые поля — то, что уже настроено отдельно на точках, не затрётся.
           Показ блюда на точках — во вкладке «Доступность». Стоп-лист ставят на кассе iiko.
         </p>
+      </div>
+      <!-- Превью: настоящее гостевое меню во фрейме, обновляется вместе с формой -->
+      <aside class="hidden w-[400px] shrink-0 flex-col border-l border-brand-50 bg-cream/60 xl:flex">
+        <div class="px-5 pb-2 pt-4 text-xs font-medium text-slate-500">Так увидит гость · {{ previewPoint ? shortName(previewPoint) : '' }}</div>
+        <div class="mx-auto mb-4 flex min-h-0 w-[360px] flex-1 overflow-hidden rounded-[36px] border-[6px] border-slate-900 bg-white shadow-xl">
+          <iframe ref="previewFrame" :src="previewSrc" title="Превью карточки блюда" class="h-full w-full" @load="sendPreview" />
+        </div>
+      </aside>
       </div>
 
       <div v-show="tab === 'card'" class="flex flex-wrap items-center gap-2 border-t border-brand-50 bg-white px-5 py-3">

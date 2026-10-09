@@ -967,16 +967,14 @@
     });
   }
 
-  function openProduct(id) {
-    const p = findProduct(id);
-    if (!p) return;
+  /** Экран блюда (шторка): фото, название, цена, описание, КБЖУ, аллергены, кнопка. Его же рисует превью админки. */
+  function productDetailHtml(p) {
     const nutri = [['ккал', p.energyAmount], ['белки', p.fiberAmount], ['жиры', p.fatAmount], ['углев.', p.carbohydrateAmount]]
       .filter(([, v]) => v != null);
     const allergens = [...(p.allergensText || []), ...(p.allergens || []).map((a) => a.name || a)].filter(Boolean);
-    const draw = () => {
-      const qty = S.cart[String(p.id)]?.qty || 0;
-      const stopped = isStopped(p);
-      return `<div class="hero-wrap">${imgHtml(p, 'product-hero', 720)}${qty && !stopped ? `<span class="dish__count dish__count--hero" aria-label="В заказе ${qty}">${qty}</span>` : ''}</div>
+    const qty = S.cart[String(p.id)]?.qty || 0;
+    const stopped = isStopped(p);
+    return `<div class="hero-wrap">${imgHtml(p, 'product-hero', 720)}${qty && !stopped ? `<span class="dish__count dish__count--hero" aria-label="В заказе ${qty}">${qty}</span>` : ''}</div>
         <h2 style="margin-top:16px">${esc(p.name)}</h2>
         <div class="dish__price" style="margin:0 4px 12px"><b>${rub(p.price)}</b>${p.weight ? `<span>${esc(p.weight)}</span>` : ''}${stopped ? '<span class="tag tag--stop">Нет в наличии</span>' : ''}</div>
         ${p.description ? `<p class="muted" style="margin:0 4px;font-size:15px;line-height:1.45">${esc(p.description)}</p>` : ''}
@@ -985,7 +983,12 @@
         ${stopped ? '<button class="btn btn--center" disabled>Временно недоступно</button>'
     : qty ? `<div class="btn" style="justify-content:space-between"><button class="round-btn round-btn--light" data-dec="${esc(p.id)}">${ICONS.minus}</button><b>${qty} в заказе · ${rub(qty * p.price)}</b><button class="round-btn" data-inc="${esc(p.id)}">${ICONS.plus}</button></div>`
       : `<button class="btn btn--dark" data-inc="${esc(p.id)}"><span>Добавить в заказ</span><span class="round-btn">${ICONS.plus}</span></button>`}`;
-    };
+  }
+
+  function openProduct(id) {
+    const p = findProduct(id);
+    if (!p) return;
+    const draw = () => productDetailHtml(p);
     openSheet(`<div id="product-sheet">${draw()}</div>`, (sheet) => {
       sheet.addEventListener('click', (e) => {
         const inc = e.target.closest('[data-inc]'); const dec = e.target.closest('[data-dec]');
@@ -1599,5 +1602,31 @@
     if (S.table) await startTable();
   }
 
-  boot();
+  /**
+   * Превью карточки для админки (?preview=1): без стола и входа рисует плитку блюда из меню и экран блюда
+   * по данным, которые присылает админка (postMessage), — ровно так, как увидит гость.
+   */
+  function bootPreview() {
+    document.body.classList.add('is-preview');
+    const draw = (p) => {
+      $('#app').innerHTML = `<main class="preview">
+        <div class="preview__label">В меню</div>
+        <div class="list">${dishCard(p)}</div>
+        <div class="preview__label">Карточка блюда</div>
+        <div class="sheet sheet--static"><div class="sheet__grip"></div><div id="product-sheet">${productDetailHtml(p)}</div></div>
+      </main>`;
+      watchLiveVideos($('#app'));
+    };
+    $('#app').innerHTML = '<div class="boot"><div class="orb orb--md"></div></div>';
+    window.addEventListener('message', (e) => {
+      if (e.data?.type !== 'fuji-preview' || !e.data.product) return;
+      const p = e.data.product;
+      draw({ ...p, id: p.id || 'preview', price: Number(p.price) || 0 });
+    });
+    // Клики в превью ничего не заказывают
+    document.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); }, true);
+    window.parent?.postMessage({ type: 'fuji-preview-ready' }, '*');
+  }
+
+  if (params.get('preview') === '1') bootPreview(); else boot();
 })();

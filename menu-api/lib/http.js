@@ -98,6 +98,12 @@ export function securityHeaders(req, res, next) {
     'Content-Security-Policy': "frame-ancestors 'none'; object-src 'none'; base-uri 'self'",
     'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
   });
+  // Превью карточки блюда (гостевое меню ?preview=1) показывается во фрейме админки
+  if (req.query?.preview === '1' && (req.path === '/' || req.path === '/index.html')) {
+    const admin = process.env.ADMIN_FRAME_ORIGINS || 'https://adm.menu.franchise-fuji.ru';
+    res.removeHeader('X-Frame-Options');
+    res.set('Content-Security-Policy', `frame-ancestors 'self' ${admin}; object-src 'none'; base-uri 'self'`);
+  }
   if (req.secure) res.set('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   next();
 }

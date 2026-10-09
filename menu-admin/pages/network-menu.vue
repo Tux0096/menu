@@ -37,7 +37,7 @@ const multi = computed(() => points.value.length > 1);
 const BAR_MODE = { none: 'Одна iiko · без кассы бара', same: 'Одна iiko · кухня и бар', separate: 'Две iiko · бар отдельно' } as const;
 
 // ---------- фильтры
-type Chip = '' | 'partial' | 'stop' | 'hidden' | 'noPhoto';
+type Chip = '' | 'partial' | 'stop' | 'hidden' | 'noPhoto' | 'gone';
 // Кухня и бар — два меню точки: бар уходит на свою кассу
 type Section = '' | 'kitchen' | 'bar';
 const section = ref<Section>('');
@@ -84,6 +84,7 @@ const chips = computed(() => [
   { value: 'stop' as Chip, label: 'На стопе в iiko', n: count(hasStop) },
   { value: 'hidden' as Chip, label: 'Скрыты от гостей', n: count(hasHidden) },
   { value: 'noPhoto' as Chip, label: 'Без фото', n: count((it) => !it.image) },
+  { value: 'gone' as Chip, label: 'Нет в iiko', n: count((it) => !cellsOf(it).length) },
 ].filter((c) => !c.value || c.n || chip.value === c.value));
 
 const filtered = computed(() => {
@@ -96,6 +97,7 @@ const filtered = computed(() => {
     if (chip.value === 'stop' && !hasStop(it)) return false;
     if (chip.value === 'hidden' && !hasHidden(it)) return false;
     if (chip.value === 'noPhoto' && it.image) return false;
+    if (chip.value === 'gone' && cellsOf(it).length) return false;
     if (!inSection(it)) return false;
     return true;
   });
@@ -121,7 +123,8 @@ function summary(it: NetworkItem) {
   const max = prices.length ? Math.max(...prices) : 0;
   const price = !prices.length ? '—' : min === max ? formatRub(min) : `${formatRub(min)} – ${formatRub(max)}`;
   let status: { label: string; cls: string };
-  if (!live.length && cells.some((c) => c.stop && !c.hidden)) status = { label: 'на стопе', cls: 'bg-red-50 text-red-700 ring-red-200' };
+  if (!cells.length) status = { label: 'нет в iiko', cls: 'bg-slate-100 text-slate-500 ring-slate-200' };
+  else if (!live.length && cells.some((c) => c.stop && !c.hidden)) status = { label: 'на стопе', cls: 'bg-red-50 text-red-700 ring-red-200' };
   else if (!live.length) status = { label: 'скрыто от гостей', cls: 'bg-slate-100 text-slate-500 ring-slate-200' };
   else if (multi.value) status = { label: `в меню: ${live.length} из ${points.value.length}`, cls: live.length === points.value.length ? 'bg-green-50 text-green-800 ring-green-200' : 'bg-amber-50 text-amber-800 ring-amber-200' };
   else status = { label: 'в меню', cls: 'bg-green-50 text-green-800 ring-green-200' };
@@ -253,6 +256,8 @@ function openItem(it: NetworkItem, tab: 'card' | 'availability' = 'card') {
               role="button"
               tabindex="0"
               class="grid cursor-pointer grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-4 py-2.5 hover:bg-cream/60 md:grid-cols-[minmax(0,1fr)_170px_150px_120px]"
+              :class="!cellsOf(it).length && 'opacity-55 grayscale'"
+              :title="!cellsOf(it).length ? 'Блюда сейчас нет в меню iiko ни на одной точке — карточка сохранена и заработает, когда блюдо вернут в iiko' : undefined"
               @click="openItem(it)"
               @keydown.enter.prevent="openItem(it)"
             >
