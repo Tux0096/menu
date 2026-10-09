@@ -7,7 +7,7 @@ import { randomUUID } from 'crypto';
 import { h, httpError, requireBody } from '../lib/http.js';
 import pool from '../db/pool.js';
 import { isIikoDemo, accessibleOrgs, iikoRequest, withIikoCreds } from '../iiko-client.js';
-import { iikoCredsList, iikoApiLogin, maskIikoKey } from '../lib/iiko-token.js';
+import { iikoCredsList, iikoCredsLabel, iikoApiLogin, maskIikoKey } from '../lib/iiko-token.js';
 import { listSources } from '../services/sources.js';
 import { paySettingsForAdmin, savePaySettings } from '../services/payments.js';
 import { listStopLists, refreshStopLists } from '../services/stoplist.js';
@@ -119,7 +119,7 @@ admin.post('/cashdesks/terminal', h(async (req) => {
   return getCashdesks(await staffRestaurant(req));
 }));
 // Сколько iiko на точке: одна (кухня и бар в одной iiko) или две (бар в отдельной iiko со своим ключом)
-const credsOptions = () => iikoCredsList().map((c) => ({ code: c, label: c ? `Ключ ${c} (${maskIikoKey(iikoApiLogin(c))})` : `Основной ключ (${maskIikoKey()})` }));
+const credsOptions = () => iikoCredsList().map((c) => ({ code: c, label: iikoCredsLabel(c) }));
 admin.get('/iiko-setup', h(async (req) => ({ ...(await getIikoSetup(await staffRestaurant(req))), creds: credsOptions() })));
 admin.post('/iiko-setup', h(async (req) => {
   const r = await staffRestaurant(req);
@@ -183,7 +183,7 @@ admin.get('/sources', h(async (req) => {
   const r = await staffRestaurant(req);
   return {
     sources: await listSources(r, { all: true }),
-    creds: iikoCredsList().map((c) => ({ code: c, label: c ? `Ключ ${c} (${maskIikoKey(iikoApiLogin(c))})` : `Основной ключ (${maskIikoKey()})` })),
+    creds: credsOptions(),
   };
 }));
 admin.get('/sources/options', h(async (req) => {

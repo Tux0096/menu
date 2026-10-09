@@ -30,9 +30,14 @@ export function iikoAppId(creds = '') {
  */
 export function iikoCredsList() {
   const extra = Object.keys(process.env)
-    .map((k) => k.match(/^IIKO_([A-Z0-9]+)_API_LOGIN$/)?.[1])
+    .map((k) => k.match(/^IIKO_([A-Z0-9_]{1,30})_API_LOGIN$/)?.[1])
     .filter((c) => c && c !== 'MENU' && process.env[`IIKO_${c}_API_LOGIN`]);
   return ['', ...new Set(extra)];
+}
+
+/** Название ключа для админки: код из имени секрета (IIKO_<КОД>_API_LOGIN) и маска ключа */
+export function iikoCredsLabel(creds = '') {
+  return creds ? `${creds.replace(/_/g, ' ')} · ${maskIikoKey(iikoApiLogin(creds))}` : `Основной ключ · ${maskIikoKey()}`;
 }
 
 export function maskIikoKey(k = iikoApiLogin()) {
