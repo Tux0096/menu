@@ -20,6 +20,8 @@ const open = computed({
 
 // Вкладки: карточка (контент) и доступность по точкам
 const tab = ref<'card' | 'availability'>('card');
+// Точка, чьё меню показано в превью ('' — первая из выбранных)
+const previewSlug = ref('');
 const available = computed(() => props.points.filter((p) => props.item?.points[p.slug]));
 const targets = ref<string[]>([]);
 
@@ -36,6 +38,7 @@ watch(
   (it) => {
     if (!it) return;
     tab.value = props.tab ?? 'card';
+    previewSlug.value = '';
     // Своё название — только если отличается от названия в iiko; пусто — гость видит название из iiko
     Object.assign(form, blank(), { name: it.iikoName && it.name !== it.iikoName ? it.name : '', image_url: it.image ?? '', description: it.description ?? '', badge: it.badge ?? '' });
     initial.value = { ...form };
@@ -98,7 +101,16 @@ const shortName = (p: NetworkPoint) => p.name.replace(/^Фуджи\s+/i, '');
 // ---------- превью карточки: гостевое меню (?preview=1) получает блюдо из формы
 const previewFrame = ref<HTMLIFrameElement | null>(null);
 const previewSrc = '/index.html?preview=1';
-const previewPoint = computed(() => available.value.find((p) => targets.value.includes(p.slug)) ?? available.value[0] ?? null);
+const PREVIEW_VIEWS = [
+  { value: 'product', label: 'Товар' },
+  { value: 'details', label: 'Подробнее' },
+  { value: 'list', label: 'В списке' },
+] as const;
+const previewView = ref<'product' | 'details' | 'list'>('product');
+const previewPoint = computed(() => available.value.find((p) => p.slug === previewSlug.value)
+  ?? available.value.find((p) => targets.value.includes(p.slug)) ?? available.value[0] ?? null);
+// В выборе точки сразу видна точка, чьё меню показано
+watch(() => previewPoint.value?.slug, (slug) => { if (slug && !previewSlug.value) previewSlug.value = slug; }, { immediate: true });
 const numOrNull = (v: string) => (v === '' || v == null ? null : Number(String(v).replace(',', '.')) || null);
 function previewProduct() {
   const it = props.item;
@@ -107,8 +119,7 @@ function previewProduct() {
   const video = form.video_url || null;
   return {
     id: cell?.productId || it.key,
-    name: form.name.trim() || it.iikoName || it.name,
-    price: cell?.price ?? 0,
+    name: form.name.trim() || null,
     description: form.description.trim() || null,
     image: form.image_url || null,
     video,
@@ -119,14 +130,20 @@ function previewProduct() {
     fatAmount: numOrNull(form.fats),
     carbohydrateAmount: numOrNull(form.carbs),
     allergensText: form.allergens ? String(form.allergens).split(',').map((a) => a.trim()).filter(Boolean) : [],
-    isInStopList: Boolean(cell?.stop),
   };
 }
 function sendPreview() {
   const product = previewProduct();
-  if (product) previewFrame.value?.contentWindow?.postMessage({ type: 'fuji-preview', product: JSON.parse(JSON.stringify(product)) }, location.origin);
+  if (!product || !previewPoint.value) return;
+  previewFrame.value?.contentWindow?.postMessage({
+    type: 'fuji-preview', restaurant: previewPoint.value.slug, view: previewView.value, product: JSON.parse(JSON.stringify(product)),
+  }, location.origin);
 }
-watch(() => [{ ...form }, previewPoint.value?.slug, props.item?.key], sendPreview, { deep: true });
+let previewTimer: ReturnType<typeof setTimeout> | undefined;
+watch(() => [{ ...form }, previewPoint.value?.slug, previewView.value, props.item?.key], () => {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(sendPreview, 250);
+}, { deep: true });
 function onPreviewReady(e: MessageEvent) {
   if (e.origin === location.origin && e.data?.type === 'fuji-preview-ready') sendPreview();
 }
@@ -285,10 +302,24 @@ async function setAll(visible: boolean) {
           Показ блюда на точках — во вкладке «Доступность». Стоп-лист ставят на кассе iiko.
         </p>
       </div>
-      <!-- Превью: настоящее гостевое меню во фрейме, обновляется вместе с формой -->
-      <aside class="hidden w-[400px] shrink-0 flex-col border-l border-brand-50 bg-cream/60 xl:flex">
-        <div class="px-5 pb-2 pt-4 text-xs font-medium text-slate-500">Так увидит гость · {{ previewPoint ? shortName(previewPoint) : '' }}</div>
-        <div class="mx-auto mb-4 flex min-h-0 w-[360px] flex-1 overflow-hidden rounded-[36px] border-[6px] border-slate-900 bg-white shadow-xl">
+      <!-- Превью: настоящее гостевое меню точки во фрейме, как в приложении; обновляется вместе с формой -->
+      <aside class="hidden w-[430px] shrink-0 flex-col items-center gap-3 border-l border-brand-50 bg-cream/60 px-4 py-4 xl:flex">
+        <div class="flex rounded-xl bg-white/70 p-1 ring-1 ring-brand-100" role="tablist" aria-label="Вид превью">
+          <button
+            v-for="v in PREVIEW_VIEWS"
+            :key="v.value"
+            type="button"
+            role="tab"
+            :aria-selected="previewView === v.value"
+            class="rounded-lg px-4 py-1.5 text-sm transition"
+            :class="previewView === v.value ? 'bg-white font-medium text-slate-900 shadow-sm ring-1 ring-brand-100' : 'text-slate-500 hover:text-slate-800'"
+            @click="previewView = v.value"
+          >
+            {{ v.label }}
+          </button>
+        </div>
+        <USelect v-if="available.length > 1" v-model="previewSlug" :options="available.map((p) => ({ value: p.slug, label: `Меню точки: ${shortName(p)}` }))" size="xs" class="w-64" />
+        <div class="relative min-h-0 w-[375px] max-h-[812px] flex-1 overflow-hidden rounded-[44px] border-[10px] border-[#2b2523] bg-white shadow-xl">
           <iframe ref="previewFrame" :src="previewSrc" title="Превью карточки блюда" class="h-full w-full" @load="sendPreview" />
         </div>
       </aside>

@@ -554,8 +554,7 @@ html { scroll-behavior: smooth; -webkit-tap-highlight-color: transparent; }
 .rest-item em { font-style: normal; font-size: 12px; color: var(--muted); }
 .topbar__table--btn { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-align: left; }
 
-/* Превью карточки в админке (?preview=1) */
-body.is-preview { background: var(--bg, #F5F4F9); }
-.preview { padding: 12px 12px 32px; display: grid; gap: 10px; }
-.preview__label { font-size: 12px; letter-spacing: .04em; text-transform: uppercase; color: #8a8797; margin: 6px 4px 0; }
-.sheet.sheet--static { position: static; transform: none; max-height: none; width: auto; animation: none; border-radius: 28px; }
+/* Превью карточки в админке (?preview=1): настоящее меню, блюдо в фокусе */
+body.is-preview { overscroll-behavior: none; }
+body.preview-list .dish:not(.is-focus) { opacity: .35; filter: grayscale(.3); }
+body.preview-list .dish.is-focus { box-shadow: 0 0 0 2px var(--ink, #1D1B2E); }

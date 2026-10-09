@@ -1603,29 +1603,65 @@
   }
 
   /**
-   * Превью карточки для админки (?preview=1): без стола и входа рисует плитку блюда из меню и экран блюда
-   * по данным, которые присылает админка (postMessage), — ровно так, как увидит гость.
+   * Превью карточки для админки (?preview=1) — настоящее меню точки, как у гостя: админка присылает (postMessage)
+   * точку, вид и блюдо из формы; блюдо подставляется в загруженное меню точки поверх данных iiko.
+   * Виды: product — открытая карточка блюда поверх меню; details — карточка, прокрученная к описанию и КБЖУ;
+   * list — экран меню с блюдом на своём месте (соседи приглушены). Ничего не заказывает и не сохраняет.
    */
   function bootPreview() {
     document.body.classList.add('is-preview');
-    const draw = (p) => {
-      $('#app').innerHTML = `<main class="preview">
-        <div class="preview__label">В меню</div>
-        <div class="list">${dishCard(p)}</div>
-        <div class="preview__label">Карточка блюда</div>
-        <div class="sheet sheet--static"><div class="sheet__grip"></div><div id="product-sheet">${productDetailHtml(p)}</div></div>
-      </main>`;
-      watchLiveVideos($('#app'));
-    };
+    S.cart = {}; S.token = null; S.guest = null; S.session = null; S.sessionId = null;
+    let loadedFor = null;
+    let base = null;
+    let req = 0;
+    const CONTENT = ['name', 'description', 'image', 'video', 'weight', 'badge', 'energyAmount', 'fiberAmount', 'fatAmount', 'carbohydrateAmount'];
+    async function ensure(slug) {
+      if (loadedFor === slug && base) return;
+      S.restaurant = slug;
+      S.config = await api('GET', `/api/v1/config?restaurant=${encodeURIComponent(slug)}`);
+      const cat = await api('GET', `/api/v1/restaurants/${encodeURIComponent(slug)}/catalog`, null, { timeout: 20000 });
+      base = cat;
+      loadedFor = slug;
+    }
+    async function show({ restaurant, view, product }) {
+      const my = ++req;
+      try { await ensure(restaurant); } catch (e) {
+        $('#app').innerHTML = `<div class="empty">Меню точки не загрузилось: ${esc(e.message)}</div>`; return;
+      }
+      if (my !== req) return;
+      const list = base.products.slice();
+      const idx = list.findIndex((x) => String(x.id) === String(product.id) || String(x.iikoId) === String(product.id));
+      const merged = { ...(idx >= 0 ? list[idx] : { id: product.id || 'preview', price: 0, parentGroup: list[0]?.parentGroup }) };
+      // Пустое поле формы — «как в iiko»: оставляем то, что уже в меню точки
+      for (const k of CONTENT) if (product[k] != null && product[k] !== '') merged[k] = product[k];
+      if (product.allergensText?.length) merged.allergensText = product.allergensText;
+      if (idx >= 0) list[idx] = merged; else list.unshift(merged);
+      S.catalog = { ...base, products: list };
+      S.menu.search = '';
+      S.menu.section = barGroupIds().has(String(merged.parentGroup)) ? 'bar' : 'kitchen';
+      S.activeCat = merged.parentGroup;
+      S.tab = 'menu';
+      $('#sheet-root').innerHTML = '';
+      lastHtml = '';
+      render();
+      document.body.classList.toggle('preview-list', view === 'list');
+      const el = document.querySelector(`.dish[data-product="${CSS.escape(String(merged.id))}"]`);
+      el?.classList.add('is-focus');
+      el?.scrollIntoView({ block: 'center' });
+      if (view !== 'list') {
+        openProduct(merged.id);
+        const sheet = document.querySelector('#sheet-root .sheet');
+        if (sheet) { sheet.style.animation = 'none'; if (view === 'details') sheet.scrollTop = sheet.scrollHeight; }
+      }
+    }
     $('#app').innerHTML = '<div class="boot"><div class="orb orb--md"></div></div>';
     window.addEventListener('message', (e) => {
-      if (e.data?.type !== 'fuji-preview' || !e.data.product) return;
-      const p = e.data.product;
-      draw({ ...p, id: p.id || 'preview', price: Number(p.price) || 0 });
+      if (e.origin !== location.origin || e.data?.type !== 'fuji-preview' || !e.data.product || !e.data.restaurant) return;
+      show(e.data);
     });
-    // Клики в превью ничего не заказывают
-    document.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); }, true);
-    window.parent?.postMessage({ type: 'fuji-preview-ready' }, '*');
+    // Клики в превью ничего не заказывают и не открывают
+    for (const t of ['click', 'submit', 'input']) document.addEventListener(t, (e) => { e.preventDefault(); e.stopPropagation(); }, true);
+    window.parent?.postMessage({ type: 'fuji-preview-ready' }, location.origin);
   }
 
   if (params.get('preview') === '1') bootPreview(); else boot();
