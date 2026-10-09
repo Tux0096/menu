@@ -198,27 +198,31 @@ export function webhookUrl() {
  * если у ключа уже указан другой адрес вебхука — только пишет об этом в лог.
  */
 export async function registerWebhooks() {
-  if (isIikoDemo() || process.env.IIKO_WEBHOOKS_DISABLED === 'true') return;
+  if (isIikoDemo() || process.env.IIKO_WEBHOOKS_DISABLED === 'true') return 0;
   const url = webhookUrl();
   const seen = new Set();
+  let failed = 0;
   for (const t of await allOrgTargets()) {
     const key = `${t.creds}|${t.organization_id}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    await withIikoCreds(t.creds, () => registerWebhookFor(t.organization_id, url));
+    // iiko ограничивает частоту запросов (429) — между точками пауза
+    if (seen.size > 1) await new Promise((r) => setTimeout(r, 1500));
+    if (!(await withIikoCreds(t.creds, () => registerWebhookFor(t.organization_id, url)))) failed++;
   }
+  return failed;
 }
 
 async function registerWebhookFor(organizationId, url) {
   const allowed = await accessibleOrgIds();
-  if (allowed && !allowed.has(organizationId)) return; // точка не подключена к API-логину
+  if (allowed && !allowed.has(organizationId)) return true; // точка не подключена к API-логину
   {
     try {
       const current = await iikoRequest('/api/1/webhooks/settings', { organizationId });
       const existing = current?.webHooksUri || '';
       if (existing && existing !== url) {
         console.log(`iiko webhook ${organizationId}: уже настроен на ${existing} — не меняю (укажите ${url} вручную, если нужно)`);
-        return;
+        return true;
       }
       await iikoRequest('/api/1/webhooks/update_settings', {
         organizationId,
@@ -234,8 +238,10 @@ async function registerWebhookFor(organizationId, url) {
         },
       });
       console.log(`iiko webhook ${organizationId}: настроен на ${url}`);
+      return true;
     } catch (e) {
       console.log(`iiko webhook ${organizationId}: ${e.response?.status || ''} ${e.response?.data?.errorDescription || e.message}`);
+      return false;
     }
   }
 }

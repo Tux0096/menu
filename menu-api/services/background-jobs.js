@@ -64,6 +64,12 @@ async function refreshAllStopLists() {
   }
 }
 
+/** Вебхуки iiko: при ошибке (например 429 — лимит запросов) повторяем через 2, 4, 8… мин */
+async function registerWebhooksWithRetry(attempt = 0) {
+  const failed = await registerWebhooks().catch((e) => (console.warn('iiko webhooks:', e.message), 1));
+  if (failed && attempt < 6) setTimeout(() => registerWebhooksWithRetry(attempt + 1), 2 ** attempt * 120_000).unref?.();
+}
+
 /** Запуск при старте сервера: прогрев меню, выгрузка из iiko, вебхуки и периодические проверки */
 export function startBackgroundJobs() {
   // Бездействие гостя 5+ мин, долгое ожидание официанта
@@ -74,10 +80,12 @@ export function startBackgroundJobs() {
   warmCatalogs()
     .then(() => syncIikoMenu())
     .then(() => refreshAllStopLists())
-    .then(() => registerWebhooks())
+    .then(() => registerWebhooksWithRetry())
     .catch((e) => console.warn('startup iiko:', e.message))
     .then(() => warmImages())
     .catch((e) => console.warn('картинки меню:', e.message));
+  // Новые точки, подключённые к ключу, получают вебхук без перезапуска
+  setInterval(() => registerWebhooksWithRetry(), 6 * 60 * 60 * 1000);
   setInterval(() => syncIikoMenu(), 60 * 60 * 1000); // раз в час проверяем, не пора ли (раз в сутки)
   setInterval(() => checkPendingPayments().catch((e) => console.warn('онлайн-оплата:', e.message)), 30000);
   setInterval(refreshAllStopLists, parseInt(process.env.STOP_LIST_REFRESH_MS || '600000', 10));
