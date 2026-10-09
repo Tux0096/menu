@@ -229,6 +229,8 @@ export interface NetworkCell {
 export interface NetworkItem {
   key: string;
   name: string;
+  /** Название в iiko (без служебных пометок) — то, что видит гость, если своё не задано */
+  iikoName?: string;
   group: string | null;
   image: string | null;
   description: string | null;
