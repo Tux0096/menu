@@ -110,6 +110,28 @@ export async function getNetworkMenu(restaurants) {
     }
   }
 
+  // Карточки админки, чьих блюд больше нет в iiko ни на одной точке: строка остаётся (серая, «нет в iiko»),
+  // контент не теряется — блюдо вернут в iiko, и карточка снова заработает
+  const connected = new Set(points.filter((p) => p.connected).map((p) => p.id));
+  const { rows: cards } = await pool.query(
+    `SELECT DISTINCT ON (lower(o.product_name)) o.product_name, o.name, o.image_url, o.description, o.badge
+       FROM menu_overrides o
+      WHERE o.product_name IS NOT NULL AND (o.restaurant_id IS NULL OR o.restaurant_id = ANY($1::uuid[]))
+        AND (o.image_url IS NOT NULL OR o.description IS NOT NULL OR o.name IS NOT NULL OR o.badge IS NOT NULL)
+      ORDER BY lower(o.product_name), o.updated_at DESC`,
+    [[...connected]],
+  );
+  const present = new Set([...items.keys()].map((k) => k.split('|')[0]));
+  for (const c of cards) {
+    const key = menuKey(c.product_name);
+    if (!key || present.has(key)) continue;
+    present.add(key);
+    items.set(key, {
+      key, name: c.name || cleanMenuName(c.product_name), iikoName: cleanMenuName(c.product_name), gone: true,
+      group: null, image: c.image_url, description: c.description, badge: c.badge, points: {},
+    });
+  }
+
   const list = [...items.values()].sort((a, b) => String(a.group || 'яяя').localeCompare(String(b.group || 'яяя'), 'ru')
     || a.name.localeCompare(b.name, 'ru'));
   return { points, items: list };

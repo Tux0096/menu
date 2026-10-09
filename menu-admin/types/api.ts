@@ -231,6 +231,8 @@ export interface NetworkItem {
   name: string;
   /** Название в iiko (без служебных пометок) — то, что видит гость, если своё не задано */
   iikoName?: string;
+  /** Блюда нет в iiko ни на одной точке — карточка админки сохранена */
+  gone?: boolean;
   group: string | null;
   image: string | null;
   description: string | null;

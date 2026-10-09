@@ -9,9 +9,10 @@ import { invalidateCatalogCache, warmCatalogs } from './catalog.js';
 import { refreshKitchenStatuses, runServiceChecks } from './table-session.js';
 
 // ── Меню и стоп-листы iiko ──────────────────────────────────────────────────
-// Меню хранится на сервере (БД + память) и отдаётся мгновенно. Полная перевыгрузка — раз в сутки
+// Меню хранится на сервере (БД + память) и отдаётся мгновенно. Полная перевыгрузка — по расписанию
 // (IIKO_SYNC_MS), при старте — только если выгрузка устарела или у ресторана меню пустое.
-const IIKO_SYNC_MS = parseInt(process.env.IIKO_SYNC_MS || '86400000', 10);
+// Меню из iiko — каждые 30 минут: правки в iiko (новые, удалённые блюда, цены) быстро доходят до админки и гостя
+const IIKO_SYNC_MS = parseInt(process.env.IIKO_SYNC_MS || '1800000', 10);
 let syncing = false;
 
 async function getSetting(name) {
@@ -86,7 +87,7 @@ export function startBackgroundJobs() {
     .catch((e) => console.warn('картинки меню:', e.message));
   // Новые точки, подключённые к ключу, получают вебхук без перезапуска
   setInterval(() => registerWebhooksWithRetry(), 6 * 60 * 60 * 1000);
-  setInterval(() => syncIikoMenu(), 60 * 60 * 1000); // раз в час проверяем, не пора ли (раз в сутки)
+  setInterval(() => syncIikoMenu(), 5 * 60 * 1000); // раз в 5 минут проверяем, не пора ли (IIKO_SYNC_MS)
   setInterval(() => checkPendingPayments().catch((e) => console.warn('онлайн-оплата:', e.message)), 30000);
   setInterval(refreshAllStopLists, parseInt(process.env.STOP_LIST_REFRESH_MS || '600000', 10));
 }
