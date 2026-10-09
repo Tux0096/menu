@@ -13,9 +13,9 @@
 #   FCM_SERVICE_ACCOUNT — ключ сервисного аккаунта Firebase (JSON) для push в приложение официанта
 #   IIKO_BAR_API_LOGIN / IIKO_BAR_APP_ID / IIKO_BAR_CLIENT_SECRET — второй iiko (бар), если он в другом аккаунте iiko
 #   IIKO_EXTERNAL_MENU_ID — ID внешнего меню iiko (если не задан — выбирается из меню ключа)
-#   IIKO_<НАЗВАНИЕ>_API_LOGIN — любые дополнительные ключи iiko (например IIKO_LENINGRADSKAYA_BAR_API_LOGIN),
-#     по желанию IIKO_<НАЗВАНИЕ>_APP_ID / _CLIENT_SECRET. Попадают на сервер сами, без правки этого файла,
-#     и появляются в админке (Меню сети → Настройки iiko → Ключ API iiko) под этим названием.
+#   IIKO_KEYS — дополнительные ключи iiko, по строке на ключ: «Название = ключ» (например «Ленинградская бар = 1a2b…»).
+#     Появляются в админке (Меню сети → Настройки iiko → Ключ API iiko) под своим названием.
+
 name: Deploy
 
 on:
@@ -60,21 +60,10 @@ jobs:
           target: /home/ubuntu/menu-admin-upload
           overwrite: true
 
-      # Дополнительные ключи iiko: все секреты IIKO_<НАЗВАНИЕ>_API_LOGIN / _APP_ID / _CLIENT_SECRET одной строкой.
-      # Значение маскируется в логах; на сервере раскладывается в .env (deploy/update.sh).
-      - name: Collect iiko keys
-        env:
-          ALL_SECRETS: ${{ toJSON(secrets) }}
-        run: |
-          B64=$(printf '%s' "$ALL_SECRETS" | jq -c 'with_entries(select(.key | test("^IIKO_[A-Z0-9_]{1,30}_(API_LOGIN|APP_ID|CLIENT_SECRET)$")) | select(.key | test("^IIKO_MENU_") | not))' | base64 -w0)
-          echo "::add-mask::$B64"
-          echo "IIKO_KEYS_B64=$B64" >> "$GITHUB_ENV"
-          printf '%s' "$ALL_SECRETS" | jq -r 'keys[] | select(test("^IIKO_[A-Z0-9_]{1,30}_API_LOGIN$")) | select(test("^IIKO_MENU_") | not) | "  ключ iiko: " + (sub("^IIKO_"; "") | sub("_API_LOGIN$"; ""))'
-
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.0
         env:
-          IIKO_KEYS_B64: ${{ env.IIKO_KEYS_B64 }}
+          IIKO_KEYS: ${{ secrets.IIKO_KEYS }}
           BRANCH: ${{ github.ref_name }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           IIKO_API_LOGIN: ${{ secrets.IIKO_API_LOGIN }}
@@ -100,7 +89,7 @@ jobs:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: BRANCH,IIKO_KEYS_B64,OPENROUTER_API_KEY,IIKO_API_LOGIN,IIKO_CLIENT_SECRET,IIKO_MENU_API_LOGIN,IIKO_MENU_CLIENT_SECRET,IIKO_APP_ID,IIKO_EXTERNAL_MENU_ID,IIKO_BAR_API_LOGIN,IIKO_BAR_APP_ID,IIKO_BAR_CLIENT_SECRET,IIKO_BAR_ORGANIZATION_ID,FCM_SERVICE_ACCOUNT,CLOUDPAYMENTS_PUBLIC_ID,CLOUDPAYMENTS_API_SECRET,IIKO_PAYMENT_TYPE_ID,IIKO_BAR_PAYMENT_TYPE_ID,IIKO_PAYMENT_FISCALIZED_EXTERNALLY,ADMIN_PASSWORD,MANAGER_PASSWORD,WAITER_PASSWORD
+          envs: BRANCH,IIKO_KEYS,OPENROUTER_API_KEY,IIKO_API_LOGIN,IIKO_CLIENT_SECRET,IIKO_MENU_API_LOGIN,IIKO_MENU_CLIENT_SECRET,IIKO_APP_ID,IIKO_EXTERNAL_MENU_ID,IIKO_BAR_API_LOGIN,IIKO_BAR_APP_ID,IIKO_BAR_CLIENT_SECRET,IIKO_BAR_ORGANIZATION_ID,FCM_SERVICE_ACCOUNT,CLOUDPAYMENTS_PUBLIC_ID,CLOUDPAYMENTS_API_SECRET,IIKO_PAYMENT_TYPE_ID,IIKO_BAR_PAYMENT_TYPE_ID,IIKO_PAYMENT_FISCALIZED_EXTERNALLY,ADMIN_PASSWORD,MANAGER_PASSWORD,WAITER_PASSWORD
           command_timeout: 20m
           script: |
             set -e
