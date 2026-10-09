@@ -5,7 +5,7 @@ import { useMenuStore } from '~/stores/menu';
 // Карточка позиции сразу на нескольких точках: фото, описание, метка, КБЖУ. У каждой точки свой ID блюда
 // в iiko — правка записывается на каждую выбранную точку. Уходят только изменённые поля: то, что уже
 // настроено на отдельных точках, не затирается.
-const props = defineProps<{ item: NetworkItem | null; points: NetworkPoint[] }>();
+const props = defineProps<{ item: NetworkItem | null; points: NetworkPoint[]; tab?: 'card' | 'availability' }>();
 const emit = defineEmits<{ close: []; saved: [] }>();
 
 const notify = useNotify();
@@ -18,6 +18,8 @@ const open = computed({
   },
 });
 
+// Вкладки: карточка (контент) и доступность по точкам
+const tab = ref<'card' | 'availability'>('card');
 const available = computed(() => props.points.filter((p) => props.item?.points[p.slug]));
 const targets = ref<string[]>([]);
 
@@ -33,6 +35,7 @@ watch(
   () => props.item,
   (it) => {
     if (!it) return;
+    tab.value = props.tab ?? 'card';
     Object.assign(form, blank(), { image_url: it.image ?? '', description: it.description ?? '', badge: it.badge ?? '' });
     initial.value = { ...form };
     targets.value = available.value.map((p) => p.slug);
@@ -90,6 +93,41 @@ function onVideo(url: string, file: File) {
   else form.video_url = url;
 }
 const shortName = (p: NetworkPoint) => p.name.replace(/^Фуджи\s+/i, '');
+
+// ---------- доступность: показывать ли блюдо гостям на каждой точке (сохраняется сразу)
+const busy = ref<Set<string>>(new Set());
+const shownCount = computed(() => props.points.filter((p) => props.item?.points[p.slug] && !props.item.points[p.slug]!.hidden).length);
+function cellState(p: NetworkPoint) {
+  const c = props.item?.points[p.slug];
+  if (!c) return { label: 'нет в меню iiko точки', cls: 'text-slate-400' };
+  if (c.hidden) return { label: 'скрыто от гостей', cls: 'text-slate-500' };
+  if (c.stop) return { label: 'стоп в iiko', cls: 'text-red-700' };
+  return { label: 'в меню', cls: 'text-green-700' };
+}
+async function setVisible(p: NetworkPoint, visible: boolean) {
+  const it = props.item;
+  const cell = it?.points[p.slug];
+  if (!it || !cell || cell.hidden === !visible) return;
+  busy.value = new Set(busy.value).add(p.slug);
+  try {
+    await useAuthFetch('/admin/network-menu/availability', {
+      method: 'POST',
+      body: { restaurant: p.slug, productId: cell.productId, productName: it.name, available: visible },
+    }, { restaurant: false });
+    cell.hidden = !visible;
+    menu.invalidate();
+    notify.success(visible ? `«${it.name}» снова в меню · ${shortName(p)}` : `«${it.name}» скрыто от гостей · ${shortName(p)}`);
+  } catch (e) {
+    notify.error(e, 'Не удалось переключить');
+  } finally {
+    const next = new Set(busy.value);
+    next.delete(p.slug);
+    busy.value = next;
+  }
+}
+async function setAll(visible: boolean) {
+  for (const p of props.points) if (props.item?.points[p.slug]) await setVisible(p, visible);
+}
 </script>
 
 <template>
@@ -102,8 +140,52 @@ const shortName = (p: NetworkPoint) => p.name.replace(/^Фуджи\s+/i, '');
         </div>
         <UButton color="gray" variant="ghost" icon="i-heroicons-x-mark" aria-label="Закрыть" @click="requestClose" />
       </div>
+      <div class="flex gap-1 border-b border-brand-50 px-5" role="tablist">
+        <button
+          v-for="t in [{ v: 'card', l: 'Карточка' }, { v: 'availability', l: `Доступность · ${shownCount} из ${points.length}` }] as const"
+          :key="t.v"
+          type="button"
+          role="tab"
+          :aria-selected="tab === t.v"
+          class="-mb-px border-b-2 px-3 py-2.5 text-sm font-medium transition"
+          :class="tab === t.v ? 'border-brand-500 text-slate-900' : 'border-transparent text-slate-500 hover:text-slate-800'"
+          @click="tab = t.v"
+        >
+          {{ t.l }}
+        </button>
+      </div>
 
-      <div class="flex-1 space-y-6 overflow-y-auto px-5 py-5">
+      <!-- Доступность по точкам -->
+      <div v-if="tab === 'availability'" class="flex-1 space-y-3 overflow-y-auto px-5 py-5">
+        <p class="text-sm text-slate-600">Отметьте точки, где гости видят блюдо. Сохраняется сразу. Цена и стоп-лист приходят из iiko точки.</p>
+        <div class="flex gap-2">
+          <UButton size="xs" color="white" icon="i-heroicons-check" @click="setAll(true)">Показывать везде</UButton>
+          <UButton size="xs" color="white" icon="i-heroicons-eye-slash" @click="setAll(false)">Скрыть везде</UButton>
+        </div>
+        <div class="overflow-hidden rounded-xl ring-1 ring-brand-100">
+          <label
+            v-for="p in points"
+            :key="p.slug"
+            class="flex items-center gap-3 border-b border-brand-50 px-3 py-2.5 text-sm last:border-0"
+            :class="item.points[p.slug] ? 'cursor-pointer hover:bg-cream/60' : 'opacity-70'"
+          >
+            <UCheckbox
+              :model-value="Boolean(item.points[p.slug] && !item.points[p.slug]!.hidden)"
+              :disabled="!item.points[p.slug] || busy.has(p.slug)"
+              @update:model-value="(v: boolean) => setVisible(p, v)"
+            />
+            <span class="min-w-0 flex-1 font-medium">{{ shortName(p) }}</span>
+            <template v-if="item.points[p.slug]">
+              <span class="w-12 text-xs text-slate-500">{{ item.points[p.slug]!.source && item.points[p.slug]!.source !== 'main' ? 'бар' : 'кухня' }}</span>
+              <span class="w-20 text-right font-semibold">{{ item.points[p.slug]!.price ? formatRub(item.points[p.slug]!.price) : 'без цены' }}</span>
+            </template>
+            <span class="w-36 text-right text-xs" :class="cellState(p).cls">{{ cellState(p).label }}</span>
+          </label>
+        </div>
+        <p class="text-xs text-slate-500">«Нет в меню iiko точки» — блюдо не добавлено во внешнее меню iiko этой точки: добавьте его в iiko, и после обновления оно появится здесь.</p>
+      </div>
+
+      <div v-show="tab === 'card'" class="flex-1 space-y-6 overflow-y-auto px-5 py-5">
         <!-- Точки -->
         <section class="space-y-2">
           <h3 class="panel-section-title">На каких точках применить</h3>
@@ -157,11 +239,11 @@ const shortName = (p: NetworkPoint) => p.name.replace(/^Фуджи\s+/i, '');
 
         <p class="rounded-xl bg-cream p-3 text-xs text-slate-600">
           Сохраняются только изменённые поля — то, что уже настроено отдельно на точках, не затрётся.
-          Стоп-лист и «есть ли позиция на точке» меняются в таблице меню сети.
+          Показ блюда на точках — во вкладке «Доступность». Стоп-лист ставят на кассе iiko.
         </p>
       </div>
 
-      <div class="flex flex-wrap items-center gap-2 border-t border-brand-50 bg-white px-5 py-3">
+      <div v-show="tab === 'card'" class="flex flex-wrap items-center gap-2 border-t border-brand-50 bg-white px-5 py-3">
         <span class="text-xs text-slate-500">{{ changed.length ? `Изменено полей: ${changed.length}` : 'Изменений нет' }} · точек: {{ targets.length }}</span>
         <div class="flex-1" />
         <UButton color="white" @click="requestClose">Отмена</UButton>

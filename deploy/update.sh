@@ -68,6 +68,15 @@ done
 [ -n "${IIKO_BAR_CLIENT_SECRET:-}" ] && set_env IIKO_BAR_CLIENT_SECRET "$IIKO_BAR_CLIENT_SECRET"
 [ -n "${IIKO_BAR_ORGANIZATION_ID:-}" ] && set_env IIKO_BAR_ORGANIZATION_ID "$IIKO_BAR_ORGANIZATION_ID"
 [ -n "${IIKO_EXTERNAL_MENU_ID:-}" ] && set_env IIKO_EXTERNAL_MENU_ID "$IIKO_EXTERNAL_MENU_ID"
+# Дополнительные ключи iiko из секретов GitHub (IIKO_<НАЗВАНИЕ>_API_LOGIN …) — названия печатаем, значения нет
+if [ -n "${IIKO_KEYS_B64:-}" ]; then
+  while IFS=$'\t' read -r k v; do
+    if [[ "$k" =~ ^IIKO_[A-Z0-9_]{1,30}_(API_LOGIN|APP_ID|CLIENT_SECRET)$ ]] && [[ "$v" =~ ^[A-Za-z0-9._-]+$ ]]; then
+      set_env "$k" "$v"
+      [[ "$k" == *_API_LOGIN ]] && echo "  ключ iiko ${k#IIKO_}: задан" | sed 's/_API_LOGIN: / /'
+    fi
+  done < <(printf '%s' "$IIKO_KEYS_B64" | base64 -d | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{for(const [k,v] of Object.entries(JSON.parse(s||"{}")))if(v)console.log(k+"\t"+String(v).trim())})')
+fi
 # Онлайн-оплата CloudPayments: ключи есть — оплата в меню включается
 [ -n "${CLOUDPAYMENTS_PUBLIC_ID:-}" ] && set_env CLOUDPAYMENTS_PUBLIC_ID "$CLOUDPAYMENTS_PUBLIC_ID"
 [ -n "${CLOUDPAYMENTS_API_SECRET:-}" ] && set_env CLOUDPAYMENTS_API_SECRET "$CLOUDPAYMENTS_API_SECRET"

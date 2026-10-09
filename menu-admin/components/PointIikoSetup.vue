@@ -174,7 +174,12 @@ const shortName = (p: NetworkPoint) => p.name.replace(/^Фуджи\s+/i, '');
 
           <section v-else class="space-y-4">
             <h3 class="panel-section-title">iiko бара</h3>
-            <UFormGroup label="Ключ API iiko" help="Ключи хранятся в секретах сервера. Нужного ключа нет — его добавляет разработчик, в админку ключ не вводится.">
+            <UFormGroup label="Ключ API iiko">
+              <template #help>
+                Ключи добавляются в секреты GitHub с именем <span class="mono">IIKO_НАЗВАНИЕ_API_LOGIN</span> (латиницей, например
+                <span class="mono">IIKO_LENINGRADSKAYA_BAR_API_LOGIN</span>) и появляются здесь под этим названием после деплоя.
+                Сам ключ в админку не вводится и здесь не показывается целиком.
+              </template>
               <USelect v-model="form.creds" :options="credsOptions" />
             </UFormGroup>
             <UFormGroup label="Организация бара" :error="optionsError || undefined">

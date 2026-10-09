@@ -357,6 +357,14 @@ async function checkExtraKey(creds) {
     } catch { /* нет внешних меню */ }
     console.log(`iiko ${creds}: внешние меню — ${menus.length ? menus.map((m) => `${m.name} [${m.id}]`).join('; ') : 'нет'}`);
     await printPaymentTypes(`iiko ${creds}`, headers, orgs.map((o) => o.id));
+    // Именные ключи (IIKO_<НАЗВАНИЕ>_API_LOGIN) к точке привязывают в админке: Меню сети → Настройки iiko
+    if (creds !== 'BAR') {
+      const { rows: used } = await pool.query(
+        'SELECT r.name FROM restaurant_sources s JOIN restaurants r ON r.id = s.restaurant_id WHERE s.creds = $1', [creds],
+      );
+      console.log(`iiko ${creds}: ${used.length ? `используется — ${used.map((x) => x.name).join(', ')}` : 'ни к одной точке не привязан — выберите его в админке: Меню сети → Настройки iiko'}`);
+      return;
+    }
 
     const slug = process.env.QR_RESTAURANT_SLUG || 'novo-sadovaya';
     const { rows: rest } = await pool.query('SELECT id, name FROM restaurants WHERE slug = $1', [slug]);
