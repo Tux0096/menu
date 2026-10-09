@@ -206,6 +206,8 @@ export interface NetworkPoint {
   isDisabled: boolean;
   /** Подключена к API-ключу iiko — меню и стоп-лист обновляются; иначе показана последняя выгрузка */
   connected: boolean;
+  /** Бар: none — нет, same — касса в той же iiko, separate — отдельная iiko */
+  barMode?: 'none' | 'same' | 'separate';
   menuSource: string;
   menuUpdatedAt: string | null;
   products: number;
@@ -285,4 +287,13 @@ export interface Cashdesks {
   kitchen: { terminalGroupId: string | null };
   bars: { code: string; name: string; terminalGroupId: string | null; enabled: boolean; manual: boolean }[];
   sections: CashSection[];
+}
+
+/** Сколько iiko на точке: одна (кухня и бар в одной iiko) или две (бар в отдельной iiko) */
+export interface IikoSetup {
+  restaurant: { id: string; slug: string; name: string; organizationId: string | null };
+  mode: 'one' | 'two';
+  bar: { creds: string; organizationId: string; externalMenuId: string | null; enabled: boolean } | null;
+  sameIikoBar: { terminalGroupId: string } | null;
+  creds: { code: string; label: string }[];
 }
