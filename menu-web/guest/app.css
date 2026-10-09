@@ -558,3 +558,6 @@ html { scroll-behavior: smooth; -webkit-tap-highlight-color: transparent; }
 body.is-preview { overscroll-behavior: none; }
 body.preview-list .dish:not(.is-focus) { opacity: .35; filter: grayscale(.3); }
 body.preview-list .dish.is-focus { box-shadow: 0 0 0 2px var(--ink, #1D1B2E); }
+/* В превью, как на телефоне, полос прокрутки нет */
+body.is-preview, body.is-preview * { scrollbar-width: none; }
+body.is-preview ::-webkit-scrollbar { display: none; }

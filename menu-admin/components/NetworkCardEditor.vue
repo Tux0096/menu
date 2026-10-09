@@ -107,6 +107,25 @@ const PREVIEW_VIEWS = [
   { value: 'list', label: 'В списке' },
 ] as const;
 const previewView = ref<'product' | 'details' | 'list'>('product');
+// Телефон: экран 390 × 844 плюс рамка 12 px; масштаб — по свободной высоте и ширине колонки превью
+const PHONE = { w: 390 + 24, h: 844 + 24 };
+const phoneBox = ref<HTMLElement | null>(null);
+const phoneScale = ref(0.8);
+let phoneRO: ResizeObserver | null = null;
+function fitPhone() {
+  const el = phoneBox.value;
+  if (!el) return;
+  phoneScale.value = Math.max(0.4, Math.min(1, el.clientHeight / PHONE.h, el.clientWidth / PHONE.w));
+}
+watch(phoneBox, (el) => {
+  phoneRO?.disconnect();
+  if (el && typeof ResizeObserver === 'function') {
+    phoneRO = new ResizeObserver(fitPhone);
+    phoneRO.observe(el);
+  }
+  fitPhone();
+});
+onBeforeUnmount(() => phoneRO?.disconnect());
 const previewPoint = computed(() => available.value.find((p) => p.slug === previewSlug.value)
   ?? available.value.find((p) => targets.value.includes(p.slug)) ?? available.value[0] ?? null);
 // В выборе точки сразу видна точка, чьё меню показано
@@ -319,8 +338,16 @@ async function setAll(visible: boolean) {
           </button>
         </div>
         <USelect v-if="available.length > 1" v-model="previewSlug" :options="available.map((p) => ({ value: p.slug, label: `Меню точки: ${shortName(p)}` }))" size="xs" class="w-64" />
-        <div class="relative min-h-0 w-[375px] max-h-[812px] flex-1 overflow-hidden rounded-[44px] border-[10px] border-[#2b2523] bg-white shadow-xl">
-          <iframe ref="previewFrame" :src="previewSrc" title="Превью карточки блюда" class="h-full w-full" @load="sendPreview" />
+        <!-- Экран телефона всегда 390 × 844 (как iPhone), целиком масштабируется под свободное место — без искажения пропорций -->
+        <div ref="phoneBox" class="flex min-h-0 w-full flex-1 items-start justify-center">
+          <div :style="{ width: `${PHONE.w * phoneScale}px`, height: `${PHONE.h * phoneScale}px` }" class="shrink-0">
+            <div
+              class="origin-top-left overflow-hidden rounded-[54px] border-[12px] border-[#2b2523] bg-white shadow-2xl"
+              :style="{ width: `${PHONE.w}px`, height: `${PHONE.h}px`, transform: `scale(${phoneScale})` }"
+            >
+              <iframe ref="previewFrame" :src="previewSrc" title="Превью карточки блюда" class="block h-full w-full" @load="sendPreview" />
+            </div>
+          </div>
         </div>
       </aside>
       </div>
