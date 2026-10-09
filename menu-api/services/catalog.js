@@ -5,6 +5,7 @@
  * и стоп-лист iiko + ручной стоп из админки.
  */
 import pool from '../db/pool.js';
+import { menuKey } from '../lib/menu-key.js';
 import { orderGroups } from './menu-order.js';
 import { getStopBalances, getStopListIds } from './stoplist.js';
 
@@ -204,6 +205,39 @@ export async function getOverrides(restaurantId) {
   return map;
 }
 
+// Поля карточки из админки — общие для блюда, где бы оно ни было (скрытие и стоп — свои у каждой точки)
+const CONTENT_FIELDS = ['name', 'description', 'image_url', 'video_url', 'weight', 'energy', 'proteins', 'fats', 'carbs', 'allergens', 'badge', 'is_recommended', 'priority'];
+
+/**
+ * Карточки из админки по названию блюда — запасная привязка, когда ID блюда в iiko не совпал:
+ * блюдо пересоздали в iiko, бар переехал в другое внешнее меню, подключили новую точку.
+ * Контент админки главный: перевыгрузка из iiko его не теряет. Сначала правки этой точки, потом общие, потом других точек.
+ */
+export async function getContentByName(restaurantId) {
+  const { rows } = await pool.query(
+    `SELECT o.*, COALESCE(o.product_name, p.name) AS key_name
+       FROM menu_overrides o
+       LEFT JOIN LATERAL (SELECT name FROM products WHERE iiko_id::text = o.product_id LIMIT 1) p ON TRUE
+      ORDER BY (o.restaurant_id = $1) DESC NULLS LAST, (o.restaurant_id IS NULL) DESC, o.updated_at DESC`,
+    [restaurantId],
+  );
+  const map = new Map();
+  for (const o of rows) {
+    const key = menuKey(o.key_name);
+    if (!key) continue;
+    const cur = map.get(key) || {};
+    for (const f of CONTENT_FIELDS) {
+      const v = o[f];
+      if (cur[f] != null || v == null || v === false || (Array.isArray(v) && !v.length)) continue;
+      cur[f] = v;
+    }
+    // Скрыто админом на этой точке — остаётся скрытым и с новым ID из iiko
+    if (o.restaurant_id === restaurantId && o.is_hidden) cur.is_hidden = true;
+    map.set(key, cur);
+  }
+  return map;
+}
+
 function normalizeLegacyStopList(stopList, terminalId) {
   const ids = new Set();
   for (const s of stopList || []) {
@@ -240,8 +274,9 @@ function applyOverride(product, o) {
  */
 export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
   const raw = await loadRawCatalog(restaurant, { force });
-  const [overrides, iikoStop, balances] = await Promise.all([
+  const [overrides, byName, iikoStop, balances] = await Promise.all([
     getOverrides(restaurant.id),
+    getContentByName(restaurant.id).catch(() => new Map()),
     loadIikoStopList(restaurant),
     getStopBalances(restaurant.id).catch(() => new Map()),
   ]);
@@ -252,7 +287,13 @@ export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
   const groupName = new Map((raw.data.groups || []).map((g) => [g.id, g.name]));
   const products = [];
   for (const product of raw.data.products || []) {
-    const o = overrides.get(String(product.id)) || overrides.get(String(product.iikoId));
+    // Своя карточка по ID блюда, недостающие поля — из карточки этого же блюда по названию
+    const own = overrides.get(String(product.id)) || overrides.get(String(product.iikoId));
+    const named = byName.get(menuKey(product.name));
+    // Скрытие по названию — только когда у блюда нет своей карточки (иначе скрытие решает она)
+    const o = own && named
+      ? { ...named, is_hidden: false, ...Object.fromEntries(Object.entries(own).filter(([, v]) => v != null && v !== false)) }
+      : own || named;
     if (o?.is_hidden) continue;
     if (o?.is_stopped) stop.add(String(product.id));
     const p = o ? applyOverride(product, o) : { ...product };

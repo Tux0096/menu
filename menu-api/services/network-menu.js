@@ -1,5 +1,5 @@
 /**
- * Меню сети: все позиции всех точек в одной таблице и где каждая из них есть.
+ * Меню сети: все позиции точек, подключённых к iiko, в одной таблице и где каждая из них есть.
  *
  * У точек разные организации iiko, поэтому ID одного и того же блюда на точках разные, артикулов может не быть,
  * а цены свои у каждой точки. Позиции сводятся по названию (без регистра, «ё», пробелов и знаков).
@@ -10,9 +10,9 @@ import pool from '../db/pool.js';
 import { accessibleOrgIds } from '../iiko-client.js';
 import { getRestaurantCatalog } from './catalog.js';
 import { getStopListIds } from './stoplist.js';
+import { menuKey } from '../lib/menu-key.js';
 
-export const menuKey = (name) => String(name || '').toLowerCase().replace(/ё/g, 'е')
-  .replace(/[^a-zа-я0-9]+/g, ' ').trim();
+export { menuKey };
 
 /** Состояние точки: подключена ли к ключу iiko, сколько позиций, когда обновлялись меню и стоп-лист */
 async function pointInfo(r, allowed, catalog) {
@@ -20,9 +20,16 @@ async function pointInfo(r, allowed, catalog) {
   const { rows } = await pool.query(
     'SELECT MAX(updated_at) AS at, COUNT(*)::int AS n FROM stop_lists WHERE restaurant_id = $1', [r.id],
   );
+  // Бар: нет / касса в той же iiko / отдельная iiko (своя организация или ключ)
+  const { rows: bar } = await pool.query(
+    "SELECT organization_id, creds, terminal_group_id, is_enabled FROM restaurant_sources WHERE restaurant_id = $1 AND code = 'bar'", [r.id],
+  );
+  const b = bar[0];
+  const barMode = !b || !b.is_enabled ? 'none' : (b.creds || (b.organization_id && b.organization_id !== r.organization_id)) ? 'separate' : 'same';
   return {
     id: r.id,
     slug: r.slug,
+    barMode,
     name: r.name,
     isDisabled: Boolean(r.is_disabled),
     // Не подключена к API-ключу iiko — меню и стоп-лист не обновляются (показывается последняя выгрузка)
@@ -61,7 +68,10 @@ export async function getNetworkMenu(restaurants) {
   }
   for (const r of restaurants) {
     const catalog = catalogs.get(r.id);
-    points.push(await pointInfo(r, allowed, catalog));
+    const info = await pointInfo(r, allowed, catalog);
+    points.push(info);
+    // В меню сети — только точки, подключённые к iiko: у остальных устаревшая выгрузка
+    if (!info.connected) continue;
     const groupName = new Map((catalog.groups || []).map((g) => [g.id, g.name]));
     for (const p of catalog.products || []) {
       put(p.name, r.slug, {

@@ -20,7 +20,7 @@ import {
 import { staffRestaurant } from '../lib/staff-scope.js';
 import { getNetworkMenu, getNetworkMenuPoints } from '../services/network-menu.js';
 import { syncIikoMenu } from '../services/background-jobs.js';
-import { getCashdesks, setCashdesk, setSectionRoute } from '../services/cashdesks.js';
+import { getCashdesks, getIikoSetup, setCashdesk, setIikoSetup, setSectionRoute } from '../services/cashdesks.js';
 
 const router = express.Router();
 export default router;
@@ -117,6 +117,25 @@ admin.post('/cashdesks/terminal', h(async (req) => {
   await setCashdesk(r, { role, terminalGroupId });
   audit(req.staff, 'cashdesk.terminal', 'restaurant', r.slug, { role, terminalGroupId });
   return getCashdesks(await staffRestaurant(req));
+}));
+// Сколько iiko на точке: одна (кухня и бар в одной iiko) или две (бар в отдельной iiko со своим ключом)
+const credsOptions = () => iikoCredsList().map((c) => ({ code: c, label: c ? `Ключ ${c} (${maskIikoKey(iikoApiLogin(c))})` : `Основной ключ (${maskIikoKey()})` }));
+admin.get('/iiko-setup', h(async (req) => ({ ...(await getIikoSetup(await staffRestaurant(req))), creds: credsOptions() })));
+admin.post('/iiko-setup', h(async (req) => {
+  const r = await staffRestaurant(req);
+  const mode = String(req.body?.mode || '');
+  const creds = String(req.body?.creds || '');
+  if (creds && !iikoCredsList().includes(creds)) throw httpError(400, `Ключ ${creds} не задан на сервере`);
+  const setup = await setIikoSetup(r, {
+    mode, creds,
+    organizationId: req.body?.organizationId ? String(req.body.organizationId) : null,
+    externalMenuId: req.body?.externalMenuId ? String(req.body.externalMenuId) : null,
+  });
+  audit(req.staff, 'restaurant.iiko_setup', 'restaurant', r.slug, { mode, creds, organizationId: req.body?.organizationId || null });
+  // Сразу перевыгружаем меню точки: бар приходит своим меню или возвращается в меню кухни
+  await syncIikoMenu({ slugs: [r.slug] }).catch((e) => console.warn('iiko-setup sync:', e.message));
+  invalidateCatalogCache(r.id);
+  return { ...setup, creds: credsOptions() };
 }));
 admin.post('/cashdesks/route', h(async (req) => {
   const r = await staffRestaurant(req);

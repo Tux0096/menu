@@ -135,7 +135,7 @@ const warnings = computed<Warning[]>(() => {
       icon: 'i-heroicons-arrow-path-rounded-square',
       title: 'Меню из iiko давно не обновлялось',
       text: `Последняя выгрузка — ${formatAgo(menu.data!.fetchedAt)}. Цены и состав могли устареть.`,
-      to: '/menu',
+      to: '/network-menu',
       action: 'К меню',
     });
   }
@@ -145,8 +145,8 @@ const warnings = computed<Warning[]>(() => {
       color: 'amber',
       icon: 'i-heroicons-tag',
       title: `Без цены: ${noPrice.value} ${pluralize(noPrice.value, ['блюдо', 'блюда', 'блюд'])}`,
-      text: 'Гость их не видит. Цены задаются во внешнем меню iiko — после правки нажмите «Перевыгрузить из iiko».',
-      to: '/menu?noPrice=1',
+      text: 'Гость их не видит. Цены задаются во внешнем меню iiko — после правки нажмите «Обновить из iiko» у точки в меню сети.',
+      to: '/network-menu',
       action: 'Показать',
     });
   }
@@ -158,10 +158,9 @@ const actions = computed(() => {
   const list: { to: string; icon: string; title: string; text: string; count?: number | null; tone?: 'red' }[] = [];
   if (isAdmin.value) {
     list.push(
-      { to: '/menu?stop=1', icon: 'i-heroicons-no-symbol', title: 'Стоп-лист', text: 'Что сейчас нельзя заказать', count: menu.stopCount || null, tone: menu.stopCount ? 'red' : undefined },
-      { to: '/network-menu', icon: 'i-heroicons-table-cells', title: 'Меню сети', text: 'Где какая позиция есть, цены по точкам' },
+      { to: '/network-menu?chip=stop', icon: 'i-heroicons-no-symbol', title: 'Стоп-лист', text: 'Что сейчас нельзя заказать', count: menu.stopCount || null, tone: menu.stopCount ? 'red' : undefined },
+      { to: '/network-menu', icon: 'i-heroicons-table-cells', title: 'Меню сети', text: 'Карточки блюд: фото, описание, метки — сразу на всех точках' },
       { to: '/stop-lists', icon: 'i-heroicons-no-symbol', title: 'Стоп-листы iiko', text: 'Что на стопе на каждой точке' },
-      { to: '/menu', icon: 'i-heroicons-book-open', title: 'Меню точки', text: 'Фото, видео, описание, метки «Хит» и «Новинка»' },
       { to: '/banners', icon: 'i-heroicons-photo', title: 'Баннеры', text: 'Акции и новинки над меню' },
       { to: '/qr', icon: 'i-heroicons-qr-code', title: 'QR-коды столов', text: 'Распечатать наклейки на столы' },
     );

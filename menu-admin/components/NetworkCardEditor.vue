@@ -97,7 +97,7 @@ const shortName = (p: NetworkPoint) => p.name.replace(/^Фуджи\s+/i, '');
     <div v-if="item" class="flex h-full flex-col">
       <div class="flex items-start gap-3 border-b border-brand-50 px-5 py-4">
         <div class="min-w-0 flex-1">
-          <div class="text-xs text-slate-500">{{ item.group || 'Без раздела' }} · карточка для нескольких точек</div>
+          <div class="text-xs text-slate-500">{{ item.group || 'Без раздела' }} · общая карточка для всех точек</div>
           <h2 class="truncate text-lg font-semibold">{{ item.name }}</h2>
         </div>
         <UButton color="gray" variant="ghost" icon="i-heroicons-x-mark" aria-label="Закрыть" @click="requestClose" />
@@ -115,7 +115,7 @@ const shortName = (p: NetworkPoint) => p.name.replace(/^Фуджи\s+/i, '');
             </label>
           </div>
           <p class="text-xs text-slate-500">
-            Точки без этой позиции в iiko здесь не показаны. Цена у каждой точки своя и приходит из iiko.
+            Обычно — все точки. Точки без этого блюда в iiko здесь не показаны. Цена у каждой точки своя и приходит из iiko.
           </p>
         </section>
 

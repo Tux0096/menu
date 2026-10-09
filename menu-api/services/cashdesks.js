@@ -6,7 +6,7 @@
  * Раздел → касса: выбранная вручную (category_routes), иначе по названию раздела (lib/alco.js).
  */
 import pool from '../db/pool.js';
-import { accessibleOrgIds, iikoRequest, isIikoDemo, listTerminalGroups } from '../iiko-client.js';
+import { accessibleOrgIds, iikoRequest, isIikoDemo, listTerminalGroups, withIikoCreds } from '../iiko-client.js';
 import { alcoRegex, autoRoute } from '../lib/alco.js';
 import { httpError } from '../lib/http.js';
 import { invalidateCatalogCache } from './catalog.js';
@@ -161,4 +161,62 @@ async function applyRoutes(r) {
     );
   }
   invalidateCatalogCache(r.id);
+}
+
+// ── Сколько iiko на точке ────────────────────────────────────────────────────
+/**
+ * Одна iiko — кухня и бар в одной организации iiko (бар — своя касса той же iiko, настраивается в «Кассах»).
+ * Две iiko — бар в отдельной организации/ключе iiko: его меню выгружается из своего внешнего меню,
+ * заказы алкоголя уходят туда же. Ключи iiko хранятся только в секретах сервера, здесь выбирается их код.
+ */
+const separateBar = (r, src) => Boolean(src && (src.creds || (src.organization_id && src.organization_id !== r.organization_id)));
+
+export async function getIikoSetup(r) {
+  const { rows } = await pool.query('SELECT * FROM restaurant_sources WHERE restaurant_id = $1 AND code = $2', [r.id, BAR]);
+  const src = rows[0] || null;
+  const two = separateBar(r, src);
+  return {
+    restaurant: { id: r.id, slug: r.slug, name: r.name, organizationId: r.organization_id || null },
+    mode: two ? 'two' : 'one',
+    bar: two ? { creds: src.creds || '', organizationId: src.organization_id, externalMenuId: src.external_menu_id || null, enabled: src.is_enabled } : null,
+    sameIikoBar: !two && src?.is_enabled && src.terminal_group_id ? { terminalGroupId: src.terminal_group_id } : null,
+  };
+}
+
+export async function setIikoSetup(r, { mode, creds = '', organizationId, externalMenuId = null }) {
+  const { rows } = await pool.query('SELECT * FROM restaurant_sources WHERE restaurant_id = $1 AND code = $2', [r.id, BAR]);
+  const src = rows[0] || null;
+  if (mode === 'one') {
+    // Отдельной iiko бара больше нет: убираем её меню; бар как касса той же iiko включается в «Кассах»
+    if (separateBar(r, src)) {
+      await pool.query('DELETE FROM products WHERE restaurant_id = $1 AND source = $2', [r.id, BAR]);
+      await pool.query('DELETE FROM restaurant_sources WHERE restaurant_id = $1 AND code = $2', [r.id, BAR]);
+      await pool.query("DELETE FROM restaurant_table_cache WHERE restaurant_id = $1 AND table_number LIKE 'bar:%'", [r.id]);
+    }
+  } else if (mode === 'two') {
+    if (!organizationId) throw httpError(400, 'Выберите организацию бара в iiko');
+    if (organizationId === r.organization_id && !creds) {
+      throw httpError(400, 'Это та же iiko, что у кухни. Для кассы бара в той же iiko выберите «Одна iiko» и настройте кассу в разделе «Кассы»');
+    }
+    let terminalGroupId = null;
+    if (!isIikoDemo()) {
+      const tgs = await withIikoCreds(creds, () => listTerminalGroups(organizationId)).catch(() => []);
+      terminalGroupId = (tgs.find((t) => t.isAlive) || tgs[0])?.id || null;
+    }
+    await pool.query(
+      `INSERT INTO restaurant_sources (restaurant_id, code, name, organization_id, terminal_group_id, creds, external_menu_id, is_enabled, sort_order, split_regex, manual)
+       VALUES ($1, $2, 'Бар', $3, $4, $5, $6, TRUE, 10, NULL, TRUE)
+       ON CONFLICT (restaurant_id, code) DO UPDATE SET organization_id = EXCLUDED.organization_id, terminal_group_id = EXCLUDED.terminal_group_id,
+         creds = EXCLUDED.creds, external_menu_id = EXCLUDED.external_menu_id, is_enabled = TRUE, split_regex = NULL, manual = TRUE,
+         order_creds = NULL, order_organization_id = NULL, order_terminal_group_id = NULL`,
+      [r.id, BAR, organizationId, terminalGroupId, creds, externalMenuId || null],
+    );
+    // Барные позиции из меню кухни больше не барные: бар теперь приходит своим меню
+    await pool.query('DELETE FROM category_routes WHERE restaurant_id = $1 AND source = $2', [r.id, BAR]);
+    await pool.query("DELETE FROM restaurant_table_cache WHERE restaurant_id = $1 AND table_number LIKE 'bar:%'", [r.id]);
+  } else {
+    throw httpError(400, 'Укажите: одна iiko или две');
+  }
+  invalidateCatalogCache(r.id);
+  return getIikoSetup(r);
 }
