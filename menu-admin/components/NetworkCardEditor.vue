@@ -24,7 +24,7 @@ const available = computed(() => props.points.filter((p) => props.item?.points[p
 const targets = ref<string[]>([]);
 
 const blank = () => ({
-  image_url: '', video_url: '', description: '', badge: '', weight: '',
+  name: '', image_url: '', video_url: '', description: '', badge: '', weight: '',
   energy: '', proteins: '', fats: '', carbs: '', allergens: '', is_recommended: false,
 });
 const form = reactive(blank());
@@ -36,7 +36,8 @@ watch(
   (it) => {
     if (!it) return;
     tab.value = props.tab ?? 'card';
-    Object.assign(form, blank(), { image_url: it.image ?? '', description: it.description ?? '', badge: it.badge ?? '' });
+    // Своё название — только если отличается от названия в iiko; пусто — гость видит название из iiko
+    Object.assign(form, blank(), { name: it.iikoName && it.name !== it.iikoName ? it.name : '', image_url: it.image ?? '', description: it.description ?? '', badge: it.badge ?? '' });
     initial.value = { ...form };
     targets.value = available.value.map((p) => p.slug);
     takeSnapshot();
@@ -71,7 +72,7 @@ async function save() {
     await useAuthFetch('/admin/network-menu/card', {
       method: 'POST',
       body: {
-        productName: it.name,
+        productName: it.iikoName || it.name,
         targets: targets.value.map((slug) => ({ restaurant: slug, productId: it.points[slug]!.productId })),
         fields,
       },
@@ -216,6 +217,9 @@ async function setAll(visible: boolean) {
 
         <section class="space-y-4">
           <h3 class="panel-section-title">Описание и метка</h3>
+          <UFormGroup label="Название для гостей" :help="`Пусто — как в iiko: «${item.iikoName || item.name}». Пометки «ЗАЛ», «(ИП)» убираются сами.`">
+            <UInput v-model="form.name" :placeholder="item.iikoName || item.name" maxlength="120" />
+          </UFormGroup>
           <UFormGroup label="Описание" :help="`${form.description.length} / 400`">
             <UTextarea v-model="form.description" :rows="3" :maxlength="400" autoresize />
           </UFormGroup>

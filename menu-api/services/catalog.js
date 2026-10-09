@@ -5,7 +5,7 @@
  * и стоп-лист iiko + ручной стоп из админки.
  */
 import pool from '../db/pool.js';
-import { menuKey } from '../lib/menu-key.js';
+import { cleanMenuName, menuKey } from '../lib/menu-key.js';
 import { orderGroups } from './menu-order.js';
 import { getStopBalances, getStopListIds } from './stoplist.js';
 
@@ -296,7 +296,9 @@ export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
       : own || named;
     if (o?.is_hidden) continue;
     if (o?.is_stopped) stop.add(String(product.id));
-    const p = o ? applyOverride(product, o) : { ...product };
+    // Гость видит название без служебных пометок iiko («ЗАЛ», «(ИП)»); своё название — из карточки админки
+    const base = { ...product, iikoName: product.name, name: cleanMenuName(product.name) };
+    const p = o ? applyOverride(base, o) : base;
     if (!p.parentGroupName) p.parentGroupName = groupName.get(p.parentGroup) || null;
     p.isInStopList = stop.has(String(p.id)) || stop.has(String(p.iikoId));
     // Ограниченный остаток в iiko («осталось N») — официант видит, сколько ещё можно предложить

@@ -10,7 +10,7 @@ import pool from '../db/pool.js';
 import { accessibleOrgIds } from '../iiko-client.js';
 import { getRestaurantCatalog } from './catalog.js';
 import { getStopListIds } from './stoplist.js';
-import { menuKey } from '../lib/menu-key.js';
+import { cleanMenuName, menuKey } from '../lib/menu-key.js';
 
 export { menuKey };
 
@@ -47,10 +47,12 @@ export async function getNetworkMenu(restaurants) {
   const allowed = await accessibleOrgIds().catch(() => null);
   const points = [];
   const items = new Map();
+  // Ключ — по названию из iiko (переименование в админке не разрывает связь точек); бар — отдельной строкой
   const put = (name, slug, cell, extra = {}) => {
-    const key = menuKey(name);
-    if (!key) return;
-    if (!items.has(key)) items.set(key, { key, name, group: null, image: null, description: null, badge: null, points: {} });
+    const base = menuKey(extra.iikoName || name);
+    if (!base) return;
+    const key = cell.source && cell.source !== 'main' ? `${base}|${cell.source}` : base;
+    if (!items.has(key)) items.set(key, { key, name, iikoName: cleanMenuName(extra.iikoName || name), group: null, image: null, description: null, badge: null, points: {} });
     const it = items.get(key);
     it.points[slug] = cell;
     if (!it.group && extra.group) it.group = extra.group;
@@ -82,6 +84,7 @@ export async function getNetworkMenu(restaurants) {
         source: p.source || 'main',
       }, {
         group: groupName.get(p.parentGroup) || p.parentGroupName || null,
+        iikoName: p.iikoName || p.name,
         image: p.image || null,
         description: p.description || null,
         badge: p.badge || null,
@@ -90,7 +93,7 @@ export async function getNetworkMenu(restaurants) {
     // Скрытые в админке (в каталоге их нет): берём цену и раздел из выгрузки iiko
     const { rows: hidden } = await pool.query(
       `SELECT DISTINCT ON (o.product_id) o.product_id, COALESCE(p.name, o.product_name, o.name) AS name,
-              p.price::float AS price, c.name AS group_name, o.restaurant_id IS NULL AS global
+              p.price::float AS price, c.name AS group_name, o.restaurant_id IS NULL AS global, p.source
        FROM menu_overrides o
        LEFT JOIN products p ON p.restaurant_id = $1 AND p.iiko_id::text = o.product_id
        LEFT JOIN categories c ON c.id = p.category_id
@@ -102,7 +105,7 @@ export async function getNetworkMenu(restaurants) {
       // Название не сохранено и блюда нет в выгрузке — узнаём позицию по ID блюда на других точках
       const name = h.name || idName.get(String(h.product_id));
       if (!name) continue;
-      put(name, r.slug, { productId: String(h.product_id), price: h.price || 0, stop: false, hidden: true, hiddenEverywhere: h.global },
+      put(cleanMenuName(name), r.slug, { productId: String(h.product_id), price: h.price || 0, stop: false, hidden: true, hiddenEverywhere: h.global, source: h.source || 'main' },
         { group: h.group_name || null });
     }
   }
