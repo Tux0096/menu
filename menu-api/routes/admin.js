@@ -18,7 +18,7 @@ import {
   tableQrSvg, tableUrl, updateRestaurant,
 } from '../services/admin.js';
 import { staffRestaurant } from '../lib/staff-scope.js';
-import { getNetworkMenu, getNetworkMenuPoints } from '../services/network-menu.js';
+import { getCategoryList, getNetworkMenu, getNetworkMenuPoints, setCategoryImage } from '../services/network-menu.js';
 import { syncIikoMenu } from '../services/background-jobs.js';
 import { getCashdesks, getIikoSetup, setCashdesk, setIikoSetup, setSectionRoute } from '../services/cashdesks.js';
 
@@ -51,6 +51,17 @@ async function staffRestaurantBySlug(req, slug) {
 }
 admin.get('/network-menu', h(async (req) => getNetworkMenu(await staffRestaurants(req))));
 // Есть ли позиция на точке: скрыть / вернуть (только среди блюд, которые есть в iiko этой точки)
+// Картинки разделов меню (шторка «Меню» у гостя): общие для всех точек
+admin.get('/network-menu/categories', h(async (req) => getCategoryList(await staffRestaurants(req))));
+admin.post('/network-menu/categories', h(async (req) => {
+  requireBody(req.body, 'name');
+  const image = req.body.image ? String(req.body.image) : null;
+  if (image && !/^(\/media\/|https:\/\/)/.test(image)) throw httpError(400, 'Картинка — загруженный файл или ссылка https://');
+  const res = await setCategoryImage(String(req.body.name), image);
+  if (!res) throw httpError(400, 'Нет названия раздела');
+  audit(req.staff, 'menu.category.image', 'category', String(req.body.name), { image });
+  return res;
+}));
 admin.post('/network-menu/availability', h(async (req) => {
   requireBody(req.body, 'restaurant', 'productId');
   const r = await staffRestaurantBySlug(req, req.body.restaurant);
@@ -136,6 +147,22 @@ admin.post('/iiko-setup', h(async (req) => {
   await syncIikoMenu({ slugs: [r.slug] }).catch((e) => console.warn('iiko-setup sync:', e.message));
   invalidateCatalogCache(r.id);
   return { ...setup, creds: credsOptions() };
+}));
+// Карточка точки для гостя: адрес и время работы (в выборе ресторана)
+admin.get('/point-info', h(async (req) => {
+  const r = await staffRestaurant(req);
+  return { name: r.name, address: r.address || '', workHours: r.hours_text || '' };
+}));
+admin.post('/point-info', h(async (req) => {
+  const r = await staffRestaurant(req);
+  const address = String(req.body?.address ?? r.address ?? '').trim().slice(0, 300);
+  const workHours = String(req.body?.workHours ?? '').trim().slice(0, 60);
+  const { rows } = await pool.query(
+    'UPDATE restaurants SET address = $2, hours_text = $3 WHERE id = $1 RETURNING name, address, hours_text',
+    [r.id, address, workHours || null],
+  );
+  audit(req.staff, 'restaurant.info', 'restaurant', r.slug, { address, workHours });
+  return { name: rows[0].name, address: rows[0].address || '', workHours: rows[0].hours_text || '' };
 }));
 admin.post('/cashdesks/route', h(async (req) => {
   const r = await staffRestaurant(req);

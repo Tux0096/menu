@@ -153,6 +153,7 @@ async function syncPoint(p: NetworkPoint) {
   }
 }
 const setupPoint = ref<NetworkPoint | null>(null);
+const categoriesOpen = ref(false);
 
 // ---------- общая карточка блюда
 const editItem = ref<NetworkItem | null>(null);
@@ -170,6 +171,7 @@ function openItem(it: NetworkItem, tab: 'card' | 'availability' = 'card') {
       icon="i-heroicons-table-cells"
       description="Одна карточка блюда — на всех точках: фото, описание, метка, КБЖУ. Блюда, цены и стоп-лист приходят из iiko каждой точки (кухня и бар). Нажмите на блюдо, чтобы заполнить карточку; на «в меню: N из M» — чтобы отметить, на каких точках его видят гости."
     >
+      <UButton icon="i-heroicons-photo" color="white" @click="categoriesOpen = true">Картинки разделов</UButton>
       <UButton icon="i-heroicons-arrow-path" color="white" :loading="loading" aria-label="Обновить" @click="load" />
     </PageHeader>
 
@@ -191,7 +193,7 @@ function openItem(it: NetworkItem, tab: 'card' | 'availability' = 'card') {
             <div class="w-40 text-xs text-slate-500">из iiko: {{ p.menuUpdatedAt ? formatAgo(p.menuUpdatedAt) : '—' }}</div>
             <div v-if="isAdmin" class="flex gap-2">
               <UButton size="xs" color="white" icon="i-heroicons-arrow-path" :loading="syncing === p.slug" @click="syncPoint(p)">Обновить из iiko</UButton>
-              <UButton size="xs" color="white" icon="i-heroicons-cog-6-tooth" @click="setupPoint = p">Настройки iiko</UButton>
+              <UButton size="xs" color="white" icon="i-heroicons-cog-6-tooth" @click="setupPoint = p">Карточка точки</UButton>
             </div>
           </li>
         </ul>
@@ -299,5 +301,6 @@ function openItem(it: NetworkItem, tab: 'card' | 'availability' = 'card') {
 
     <NetworkCardEditor :item="editItem" :points="points" :tab="editTab" @close="editItem = null" @saved="load" />
     <PointIikoSetup :point="setupPoint" @close="setupPoint = null" @saved="load" />
+    <MenuCategoriesEditor :open="categoriesOpen" @close="categoriesOpen = false" />
   </div>
 </template>

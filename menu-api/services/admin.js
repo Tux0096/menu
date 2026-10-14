@@ -39,6 +39,7 @@ export async function getAdminMenu(restaurant, { force = false } = {}) {
       isInStopList: p.isInStopList,
       isRecommended: Boolean(p.isRecommended),
       badge: p.badge || null,
+      cardSize: p.cardSize || null,
       sku: p.sku || null,
       priority: p.priority || 0,
       video: p.video || null,
@@ -53,7 +54,7 @@ export async function getAdminMenu(restaurant, { force = false } = {}) {
 
 const OVERRIDE_FIELDS = [
   'is_stopped', 'is_hidden', 'is_recommended', 'name', 'description', 'image_url', 'weight',
-  'energy', 'proteins', 'fats', 'carbs', 'allergens', 'product_name', 'badge', 'priority', 'video_url',
+  'energy', 'proteins', 'fats', 'carbs', 'allergens', 'product_name', 'badge', 'priority', 'video_url', 'card_size',
 ];
 
 export async function saveOverride(restaurantId, productId, patch) {
@@ -65,6 +66,9 @@ export async function saveOverride(restaurantId, productId, patch) {
     if (['energy', 'proteins', 'fats', 'carbs'].includes(f)) v = v === '' || v == null ? null : Number(v);
     if (f === 'priority') v = Math.max(-999, Math.min(999, Math.round(Number(v) || 0)));
     if (['name', 'description', 'image_url', 'weight', 'product_name', 'badge', 'video_url'].includes(f)) v = v ? String(v) : null;
+    // Метки: список через запятую, только латинские коды (hit, new, spicy…)
+    if (f === 'badge' && v) v = [...new Set(v.split(',').map((b) => b.trim().toLowerCase()).filter((b) => /^[a-z]{2,12}$/.test(b)))].slice(0, 6).join(',') || null;
+    if (f === 'card_size') v = v === 'big' ? 'big' : null;
     if (f === 'allergens') v = Array.isArray(v) ? v.map((a) => String(a).trim()).filter(Boolean) : null;
     if (f.startsWith('is_')) v = Boolean(v);
     values[f] = v;

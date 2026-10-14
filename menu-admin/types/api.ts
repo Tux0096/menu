@@ -237,6 +237,8 @@ export interface NetworkItem {
   image: string | null;
   description: string | null;
   badge: string | null;
+  /** 'big' — большая карточка в списке гостя */
+  cardSize?: string | null;
   points: Record<string, NetworkCell>;
 }
 
@@ -300,4 +302,19 @@ export interface IikoSetup {
   bar: { creds: string; organizationId: string; externalMenuId: string | null; enabled: boolean } | null;
   sameIikoBar: { terminalGroupId: string } | null;
   creds: { code: string; label: string }[];
+}
+
+export interface MenuCategory {
+  key: string;
+  name: string;
+  image: string | null;
+  isBar: boolean;
+  points: number;
+  items: number;
+}
+
+export interface PointInfo {
+  name: string;
+  address: string;
+  workHours: string;
 }

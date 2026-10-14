@@ -22,7 +22,7 @@
     back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>',
     expand: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg>',
     collapse: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg>',
-    arrowRight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>',
+    arrowRight: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.5 6l6 6-6 6"/></svg>',
     arrowUp: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 19V5M6 11l6-6 6 6"/></svg>',
     plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
     minus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 12h14"/></svg>',
@@ -34,8 +34,45 @@
     grid: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>',
     close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   };
-  // Метки блюд (задаёт маркетинг в админке)
-  const BADGES = { hit: 'Хит', new: 'Новинка', spicy: 'Острое', veg: 'Вег', sale: 'Выгодно', chef: 'Шеф рекомендует' };
+  // Метки блюд (задаёт маркетинг в админке; у блюда их может быть несколько — через запятую)
+  const BADGES = {
+    mild: 'Остро', spicy: 'Остро', new: 'Новинка', hit: 'Хит', kids: 'Детям', gift: 'Подарок', nosugar: 'Без сахара',
+    veg: 'Вег', sale: 'Выгодно', chef: 'Шеф рекомендует',
+  };
+  const BADGE_ICON = {
+    mild: 'pepper-green', spicy: 'pepper-red', new: 'new', hit: 'hit', kids: 'child', gift: 'gift', nosugar: 'no-sugar',
+  };
+  const badgeList = (p) => String(p.badge || '').split(',').map((b) => b.trim()).filter(Boolean);
+  const UI = (f) => `/ui/${f}`;
+  /** Метки на фото: в списке — только значки, в карточке блюда — значок и текст. */
+  function tagsHtml(p, { text = false } = {}) {
+    const list = badgeList(p);
+    if (!list.length) return '';
+    return `<div class="tags ${text ? 'tags--text' : ''}">${list.map((b) => {
+      const icon = BADGE_ICON[b];
+      return `<span class="tag-chip" data-badge="${esc(b)}" title="${esc(BADGES[b] || b)}">${icon ? `<img src="${UI(`tags/${icon}.svg`)}" alt="">` : ''}${text || !icon ? `<span>${esc(BADGES[b] || b)}</span>` : ''}</span>`;
+    }).join('')}</div>`;
+  }
+  // Картинки разделов в шторке «Меню»: своя из админки, иначе стандартная по названию раздела
+  const CAT_IMAGES = [['новин', 'novinki'], ['хит', 'hity'], ['ролл', 'rolly'], ['суш', 'rolly'], ['сет', 'rolly'], ['пицц', 'pizza'],
+    ['бенто', 'bento'], ['wok', 'wok'], ['вок', 'wok'], ['лапш', 'wok'], ['бургер', 'burgery'], ['поке', 'poke'], ['салат', 'poke'],
+    ['суп', 'supy'], ['горяч', 'goryachee'], ['закуск', 'zakuski'], ['десерт', 'deserty'], ['напит', 'napitki'], ['бар', 'napitki'],
+    ['лимонад', 'napitki'], ['чай', 'napitki'], ['кофе', 'napitki'], ['соус', 'sousy']];
+  const catImage = (g) => {
+    if (g.image) return imgSrc(g.image, 200);
+    const name = String(g.name || '').toLowerCase();
+    const hit = CAT_IMAGES.find(([k]) => name.includes(k));
+    return hit ? UI(`cats/${hit[1]}.png`) : null;
+  };
+  /** Вес порции в граммах (для КБЖУ «на блюдо»): «235 г», «0,3 кг»; иначе null. */
+  const gramsOf = (w) => {
+    const m = String(w || '').replace(',', '.').match(/([\d.]+)\s*(кг|г|гр|мл|л)?/i);
+    if (!m) return null;
+    const n = parseFloat(m[1]);
+    if (!n) return null;
+    const unit = (m[2] || 'г').toLowerCase();
+    return unit === 'кг' || unit === 'л' ? n * 1000 : n;
+  };
   const GROUP_EMOJI = [['ролл', '🍣'], ['суш', '🍣'], ['сет', '🍱'], ['пицц', '🍕'], ['суп', '🍜'], ['wok', '🥡'], ['лапш', '🍜'],
     ['салат', '🥗'], ['закуск', '🥟'], ['десерт', '🍰'], ['напит', '🥤'], ['бар', '🍸'], ['чай', '🍵'], ['кофе', '☕'],
     ['бургер', '🍔'], ['поке', '🥙'], ['соус', '🥢'], ['горяч', '🔥']];
@@ -105,6 +142,9 @@
     cartDirty: false,
     changedSinceSubmit: store.get('changedSinceSubmit', true),
     aiFresh: false,
+    nutri: '100', // КБЖУ в карточке блюда: '100' — на 100 г, 'dish' — на порцию
+    helpUntil: 0, // официанта позвали — в шапке «Помощь», пока он идёт
+    offline: typeof navigator !== 'undefined' && navigator.onLine === false,
   };
   const qrChanged = (params.get('table') && params.get('table') !== store.get('table'))
     || (params.get('restaurant') && params.get('restaurant') !== store.get('restaurant'));
@@ -143,9 +183,9 @@
   }
 
   let toastTimer;
-  function toast(text, isError = false) {
+  function toast(text, isError = false, icon = null) {
     const el = $('#toast');
-    el.textContent = text;
+    el.innerHTML = `${icon ? `<img src="${UI(icon)}" alt="">` : ''}<span>${esc(text)}</span>`;
     el.classList.toggle('is-error', isError);
     el.classList.add('is-shown');
     clearTimeout(toastTimer);
@@ -268,11 +308,10 @@
       <h2>Стол №${esc(info.tableNumber)} уже занят</h2>
       <p class="sheet__hint" style="margin-top:0">${who ? `За столом: <b>${esc(who)}</b>` : 'За столом уже делают заказ'}${info.itemsCount ? ` · в заказе ${info.itemsCount} поз.` : ''}.<br>
         Присоединитесь к столу — ваши блюда будут отмечены вашим именем, официант принесёт их вам.</p>
-      <div class="label">Ваше имя</div>
-      <div class="pill-input" style="min-height:60px"><input id="join-name" type="text" maxlength="40" autocomplete="given-name" placeholder="Как к вам обращаться" value="${esc(info.guestName || S.guest?.name || '')}"></div>
+      <label class="field"><span class="field__label">Ваше имя</span><input id="join-name" class="input" type="text" maxlength="40" autocomplete="given-name" placeholder="Как к вам обращаться" value="${esc(info.guestName || S.guest?.name || '')}"></label>
       <div class="auth__error" id="join-error"></div>
       <button class="btn btn--dark" type="submit"><span>Присоединиться к столу</span><span class="round-btn">${ICONS.arrowRight}</span></button>
-      <button class="btn" type="button" data-other-table style="margin-top:10px"><span>Это не мой стол</span></button>
+      <button class="btn btn--outline" type="button" data-other-table><span>Это не мой стол</span></button>
     </form>`, (sheet) => {
       const input = $('#join-name', sheet);
       input.focus();
@@ -323,7 +362,7 @@
   // В Telegram — развернуть Mini App на весь экран. В Chrome на Android сайт не может убрать адресную строку сам,
   // поэтому после первого касания включаем полноэкранный режим; если гость вышел из него — больше не навязываем.
   const tg = window.Telegram?.WebApp;
-  if (tg) { try { tg.ready(); tg.expand(); tg.requestFullscreen?.(); tg.setHeaderColor?.('#F5F4F9'); tg.disableVerticalSwipes?.(); } catch { /* старый Telegram */ } }
+  if (tg) { try { tg.ready(); tg.expand(); tg.requestFullscreen?.(); tg.setHeaderColor?.('#F9F9F9'); tg.disableVerticalSwipes?.(); } catch { /* старый Telegram */ } }
   // Полный экран по умолчанию (Chrome на Android): браузер разрешает его только после касания, поэтому
   // разворачиваемся при первом касании гостя. Выход — стрелка «назад» в левом верхнем углу;
   // вышел — до следующего открытия меню больше не разворачиваем.
@@ -365,75 +404,96 @@
   }
 
   // ── Статусы ────────────────────────────────────────────────
-  const STATUS_TONE = {
-    browsing: 'idle', building_cart: 'idle', cart_ready: 'wait', waiter_review: 'work', in_production: 'work',
-    reorder_pending: 'wait', bill_requested: 'wait', paid: 'ok', closed: 'ok',
+  // Пилюля в шапке (макет): тон и короткая подпись; полная — в подсказке
+  const PILL = {
+    welcome: ['welcome', 'status-welcome.svg', 'Добро пожаловать'],
+    waiter: ['info', 'status-waiter.svg', 'Официант'],
+    help: ['info', 'status-help.svg', 'Помощь'],
+    cooking: ['cooking', 'status-cooking.svg', 'Готовится'],
+    done: ['done', 'status-done.svg', 'Подано'],
+    paid: ['done', 'status-done.svg', 'Оплачено'],
+    bill: ['info', 'status-waiter.svg', 'Несём счёт'],
+    table: ['info', 'status-pin.svg', 'Выберите стол'],
+    offline: ['error', 'status-disconnected.svg', 'Нет связи'],
   };
+  function pillKind(s) {
+    if (S.offline) return 'offline';
+    if (!s) return 'table';
+    if (s.isPaid || s.workflowStatus === 'paid' || s.workflowStatus === 'closed') return 'paid';
+    if (Date.now() < S.helpUntil) return 'help';
+    if (s.workflowStatus === 'bill_requested') return 'bill';
+    if (['cart_ready', 'waiter_review', 'reorder_pending'].includes(s.workflowStatus)) return 'waiter';
+    if (s.kitchenStatus === 'Served' || s.kitchenStatus === 'CookingCompleted') return 'done';
+    if (s.workflowStatus === 'in_production') return 'cooking';
+    return 'welcome';
+  }
+  const shortRest = (name) => String(name || '').replace(/^Фуджи\s+/i, '');
 
   // ── Разметка: общие части ──────────────────────────────────
   function topbar() {
     const s = S.session;
-    const name = S.guest?.name || s?.guest?.name || '';
-    const who = name || S.guest?.phoneMasked || '';
-    if (!s) {
-      return `<header class="topbar">${fsBack()}
-      <div class="topbar__main">
-        <button class="topbar__rest" data-action="restaurant" aria-label="Сменить ресторан">
-          <span class="topbar__table">${esc(S.config?.restaurant?.name || 'Фуджи')} ▾</span>
-          <span class="topbar__guest">${esc(S.config?.restaurant?.address || '')}</span></button>
-      </div>
-      <div class="topbar__right"><button class="status-chip" data-action="seat" data-tone="idle">${S.table ? `Стол №${esc(S.table)} · войти` : 'Выбрать стол'}</button></div>
-    </header>`;
-    }
+    const kind = pillKind(s);
+    const [tone, icon, label] = PILL[kind];
+    const rest = shortRest(S.config?.restaurant?.name) || 'Ресторан не выбран';
+    const table = s || S.table ? `Стол №${esc(S.table)}` : 'Стол не выбран';
+    const pillAction = kind === 'table' ? 'data-action="seat"' : kind === 'help' ? 'data-action="call"' : 'data-go="order"';
     return `<header class="topbar">${fsBack()}
       <div class="topbar__main">
-        <button class="topbar__table topbar__table--btn" data-action="place" aria-label="Сменить стол или ресторан">Стол №${esc(S.table)} ▾</button>
-        <button class="topbar__rest" data-action="restaurant" aria-label="Сменить ресторан">
-          <span class="topbar__guest">${esc(who ? `${who} · ` : '')}${esc(S.config?.restaurant?.name || '')} ▾</span></button>
+        <button class="topbar__rest" data-action="restaurant" aria-label="Сменить ресторан"><span>${esc(rest)}</span><img src="${UI('dropdown.svg')}" alt=""></button>
+        <button class="topbar__table" data-action="${s ? 'place' : 'seat'}" aria-label="Выбрать стол">${table}</button>
       </div>
-      <div class="topbar__right">${s ? `<button class="status-chip" data-go="order" data-tone="${STATUS_TONE[s.workflowStatus] || 'idle'}">${esc(s.workflowLabel)}</button>` : ''}</div>
+      <button class="status-pill" data-tone="${tone}" ${pillAction} title="${esc(s?.workflowLabel || label)}">
+        <img src="${UI(icon)}" alt=""><span>${esc(kind === 'table' && S.table && !s ? 'Войти за стол' : label)}</span></button>
     </header>`;
   }
 
   function nav() {
     const count = cartCount();
+    const item = (key, label, attr, iconName) => {
+      const active = S.tab === key;
+      const icon = key === 'ai' ? `<img src="${UI('nav-ai.png')}" alt="" class="nav__orb">`
+        : `<img src="${UI(`nav-${iconName}${active ? '-active' : ''}.svg`)}" alt="">`;
+      return `<button class="nav__item ${active ? 'is-active' : ''}" ${attr} aria-label="${label}">
+        <span class="nav__icon nav__icon--${key}">${icon}${key === 'order' && count ? `<span class="badge">${count}</span>` : ''}</span><span class="nav__label">${label}</span></button>`;
+    };
     return `<nav class="nav" aria-label="Навигация">
-      <button class="nav__ai ${S.tab === 'ai' ? 'is-active' : ''}" data-go="ai" aria-label="AI-помощник"><div class="orb"></div><span>AI</span></button>
-      <div class="nav__bar">
-        <button class="nav__btn ${S.tab === 'menu' ? 'is-active' : ''}" data-go="menu" aria-label="Меню">${ICONS.home}</button>
-        <button class="nav__btn" data-action="call" aria-label="Позвать официанта">${ICONS.bell}</button>
-        <button class="nav__btn ${S.tab === 'order' ? 'is-active' : ''}" data-go="order" aria-label="Заказ">${ICONS.cart}${count ? `<span class="badge">${count}</span>` : ''}</button>
-      </div>
+      ${item('menu', 'Главная', 'data-go="menu"', 'home')}
+      ${item('ai', 'Фуджи AI', 'data-go="ai"', 'ai')}
+      ${item('help', 'Помощь', 'data-action="call"', 'help')}
+      ${item('order', 'Корзина', 'data-go="order"', 'cart')}
     </nav>`;
   }
 
-
+  /** Кнопка цены на карточке: «299 ₽» → в корзине «− 299 ₽ +»; нет в наличии — подпись вместо кнопки. */
+  function pricePill(p, qty, stopped, cls = 'price-pill') {
+    if (stopped) return `<span class="dish__soon">${Number(p.price) ? 'Закончился :(' : 'Скоро в продаже'}</span>`;
+    if (!qty) return `<button class="${cls}" data-inc="${esc(p.id)}" aria-label="Добавить ${esc(p.name)}">${rub(p.price)}${cls.includes('big') ? `<img src="${UI('plus-circle.svg')}" alt="">` : ''}</button>`;
+    return `<div class="${cls} ${cls}--qty">
+      <button data-dec="${esc(p.id)}" aria-label="Убрать">${ICONS.minus}</button>
+      <span>${rub(p.price)}</span>
+      <button data-inc="${esc(p.id)}" aria-label="Добавить">${ICONS.plus}</button></div>`;
+  }
 
   function dishCard(p, { reason = null } = {}) {
     const qty = S.cart[String(p.id)]?.qty || 0;
     const stopped = isStopped(p);
     const sub = reason || p.description || '';
-    const label = p.badge ? `<span class="dish__label" data-badge="${esc(p.badge)}">${esc(BADGES[p.badge] || p.badge)}</span>` : '';
+    const count = qty && !stopped ? `<span class="dish__count" aria-label="В заказе ${qty}">${qty}</span>` : '';
+    if (p.cardSize === 'big' && !reason) {
+      return `<article class="dish dish--big ${stopped ? 'is-stopped' : ''} ${qty && !stopped ? 'has-qty' : ''}" data-product="${esc(p.id)}">
+        <div class="dish__photo">${imgHtml(p, 'dish__img', 720)}${tagsHtml(p)}${count}</div>
+        <div class="dish__overlay"><div class="dish__name">${esc(p.name)}</div>${pricePill(p, qty, stopped, 'price-pill price-pill--big')}</div>
+      </article>`;
+    }
     return `<article class="dish ${stopped ? 'is-stopped' : ''} ${qty && !stopped ? 'has-qty' : ''}" data-product="${esc(p.id)}">
-      <div class="dish__photo">${imgHtml(p)}${label}${qty && !stopped ? `<span class="dish__count" aria-label="В заказе ${qty}">${qty}</span>` : ''}</div>
+      <div class="dish__photo">${imgHtml(p)}${tagsHtml(p)}${count}</div>
       <div class="dish__body">
-        <div>
-          <div class="dish__name">${esc(p.name)}</div>
-          ${sub ? `<div class="dish__desc" style="margin-top:6px">${esc(sub)}</div>` : ''}
-        </div>
-        <div class="dish__price"><b>${rub(p.price)}</b>${p.weight ? `<span>${esc(p.weight)}</span>` : ''}
-          ${stopped ? '<span class="tag tag--stop">Нет в наличии</span>' : ''}</div>
-      </div>
-      <div class="dish__action">
-        ${stopped ? '' : qty ? `<div class="qty">
-            <button class="round-btn round-btn--sm round-btn--light" data-dec="${esc(p.id)}" aria-label="Убрать">${ICONS.minus}</button>
-            <b>${qty}</b>
-            <button class="round-btn round-btn--sm" data-inc="${esc(p.id)}" aria-label="Добавить">${ICONS.plus}</button>
-          </div>` : `<button class="round-btn round-btn--sm" data-inc="${esc(p.id)}" aria-label="Добавить ${esc(p.name)}">${ICONS.plus}</button>`}
+        <div class="dish__name">${esc(p.name)}</div>
+        ${sub ? `<div class="dish__desc">${esc(sub)}</div>` : ''}
+        <div class="dish__foot"><span class="dish__weight">${esc(p.weight || '')}</span>${pricePill(p, qty, stopped)}</div>
       </div>
     </article>`;
   }
-
   // ── Экран: вход ────────────────────────────────────────────
   /** Шторка «Сделать заказ»: номер стола (если не из QR) и телефон (если гость ещё не входил). */
   function openSeatSheet(then = null, error = '') {
@@ -441,22 +501,18 @@
     const needTable = !S.table || S.changeTable;
     const needLogin = !S.token;
     const needName = !S.guest?.name;
+    const field = (label, input) => `<label class="field"><span class="field__label">${label}</span>${input}</label>`;
     openSheet(`<form id="seat-form" autocomplete="on">
-      <h2>Сделать заказ</h2>
-      <p class="sheet__hint">${esc(S.config?.restaurant?.name || '')}${S.config?.restaurant?.address ? `, ${esc(S.config.restaurant.address)}` : ''}</p>
-      ${needTable ? `<div class="label">Номер стола</div>
-        <div class="pill-input" style="min-height:60px;margin-bottom:8px"><input id="seat-table" type="text" inputmode="numeric" maxlength="10" placeholder="Номер на табличке стола" value="${esc(S.table || '')}"></div>`
-    : `<div class="card" style="display:flex;justify-content:space-between;align-items:center;padding:14px 20px">
-        <span>Стол <b>№${esc(S.table)}</b></span><button type="button" class="link-btn" data-change-table>Другой стол</button></div>`}
-      ${needLogin ? `<div class="label">Телефон</div>
-        <div class="pill-input" style="min-height:60px"><input id="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+7 000 000 00 00" value="+7 " aria-label="Номер телефона"></div>
+      <h2>${needLogin ? 'Авторизация' : 'Выбор стола'}</h2>
+      <p class="sheet__hint">${esc(S.config?.restaurant?.name || '')}${S.config?.restaurant?.address ? `, ${esc(S.config.restaurant.address)}` : ''}${needTable ? '' : `. Стол №${esc(S.table)} <button type="button" class="link-btn" data-change-table>Другой стол</button>`}</p>
+      ${needTable ? field('Номер стола', `<input id="seat-table" class="input" type="text" inputmode="numeric" maxlength="10" placeholder="Номер стола на табличке" value="${esc(S.table || '')}">`) : ''}
+      ${needName ? field('Ваше имя', '<input id="seat-name" class="input" type="text" maxlength="40" autocomplete="given-name" placeholder="Ваше имя">') : ''}
+      ${needLogin ? `${field('Телефон', '<input id="phone" class="input" type="tel" inputmode="tel" autocomplete="tel" placeholder="+7" value="+7 " aria-label="Номер телефона">')}
         <label class="consent"><input type="checkbox" id="consent" checked><span class="consent__box">${ICONS.check}</span><span>Согласие на обработку персональных данных</span></label>` : ''}
-      ${needName ? `<div class="label">Ваше имя</div>
-        <div class="pill-input" style="min-height:60px"><input id="seat-name" type="text" maxlength="40" autocomplete="given-name" placeholder="Чтобы официант знал, чьё блюдо"></div>` : ''}
       <div class="auth__error" id="seat-error">${esc(error)}</div>
       <button class="btn btn--dark" type="submit"><span>Продолжить</span><span class="round-btn">${ICONS.arrowRight}</span></button>
-      ${needLogin ? `<a class="fuji-btn" id="fuji-login" style="margin-top:12px" href="${fujiUrl ? esc(`${fujiUrl}${fujiUrl.includes('?') ? '&' : '?'}return=${encodeURIComponent(`${location.origin}${location.pathname}?restaurant=${S.restaurant || ''}&table=${S.table || ''}`)}`) : '#'}">
-        <span class="fuji-btn__icon">Ф</span><span>Войти через приложение Фуджи</span></a>` : ''}
+      ${needLogin ? `<a class="fuji-btn" id="fuji-login" href="${fujiUrl ? esc(`${fujiUrl}${fujiUrl.includes('?') ? '&' : '?'}return=${encodeURIComponent(`${location.origin}${location.pathname}?restaurant=${S.restaurant || ''}&table=${S.table || ''}`)}`) : '#'}">
+        <img src="${UI('fuji-app.svg')}" alt=""><span>Войти через приложение Фуджи</span></a>` : ''}
     </form>`, (sheet) => {
       const phone = $('#phone', sheet);
       if (phone) phone.addEventListener('input', () => { phone.value = formatPhone(phone.value); });
@@ -508,14 +564,13 @@
   function openPlaceSheet(error = '') {
     const pending = pendingCount();
     openSheet(`<form id="place-form">
-      <h2>Стол и ресторан</h2>
-      <p class="sheet__hint" style="margin-top:0">${esc(S.config?.restaurant?.name || '')}${S.config?.restaurant?.address ? `, ${esc(S.config.restaurant.address)}` : ''} · сейчас стол №${esc(S.table)}</p>
-      <div class="label">Пересесть за другой стол</div>
-      <div class="pill-input" style="min-height:60px;margin-bottom:8px"><input id="place-table" type="text" inputmode="numeric" maxlength="10" placeholder="Номер нового стола"></div>
-      <p class="sheet__hint">Уже отправленные блюда остаются за столом №${esc(S.table)} — официант перенесёт их сам.${pending ? ' Неотправленные блюда из корзины перейдут на новый стол.' : ''}</p>
+      <h2>Выбор стола</h2>
+      <p class="sheet__hint">${esc(S.config?.restaurant?.name || '')}${S.config?.restaurant?.address ? `, ${esc(S.config.restaurant.address)}` : ''}. Стол №${esc(S.table)}</p>
+      <label class="field"><span class="field__label">Пересесть за другой стол</span><input id="place-table" class="input" type="text" inputmode="numeric" maxlength="10" placeholder="Номер стола на табличке"></label>
+      <p class="field__note">Уже отправленные блюда остаются за столом №${esc(S.table)} – официант перенесёт их сам.${pending ? ' Неотправленные блюда из корзины перейдут на новый стол.' : ''}</p>
       <div class="auth__error" id="place-error">${esc(error)}</div>
-      <button class="btn btn--dark" type="submit"><span>Сменить стол</span><span class="round-btn">${ICONS.arrowRight}</span></button>
-      <button class="btn" type="button" data-place-rest style="margin-top:10px"><span>Сменить ресторан</span></button>
+      <button class="btn btn--dark" type="submit"><span>Продолжить</span><span class="round-btn">${ICONS.arrowRight}</span></button>
+      <button class="btn btn--outline" type="button" data-place-rest><span>Сменить ресторан</span><span class="round-btn">${ICONS.arrowRight}</span></button>
     </form>`, (sheet) => {
       $('[data-place-rest]', sheet).addEventListener('click', () => openRestaurantSheet());
       $('#place-form', sheet).addEventListener('submit', async (e) => {
@@ -572,12 +627,18 @@
     try { list = await api('GET', '/api/v1/restaurants'); } catch (e) { toast(e.message, true); return; }
     // Все рестораны сети; где QR-заказ ещё не подключён к iiko — видно, но выбрать нельзя
     const pending = pendingCount();
-    openSheet(`<h2>Ресторан</h2>
-      <p class="sheet__hint" style="margin-top:0">${S.session ? `Сейчас вы за столом №${esc(S.table)}. При смене ресторана стол нужно будет выбрать заново${pending ? ', неотправленные блюда из корзины удалятся' : ''}.` : 'Выберите, в каком ресторане вы находитесь'}</p>
+    openSheet(`<h2>Выбор ресторана</h2>
+      <p class="sheet__hint">${S.session ? `Сейчас вы за столом №${esc(S.table)}. При смене ресторана стол нужно будет выбрать заново${pending ? ', неотправленные блюда из корзины удалятся' : ''}.` : 'Выберите, в каком ресторане вы находитесь'}</p>
       <div class="rest-list">${list.map((r) => {
     const off = r.hasMenu === false && r.slug !== S.restaurant;
-    return `<button class="rest-item ${r.slug === S.restaurant ? 'is-current' : ''}" ${off ? 'disabled' : `data-rest="${esc(r.slug)}"`}>
-        <b>${esc(r.name)}</b><span>${esc(r.address || '')}</span>${r.slug === S.restaurant ? '<i>вы здесь</i>' : off ? '<em>скоро — заказ через меню пока не подключён</em>' : ''}</button>`;
+    const here = r.slug === S.restaurant;
+    const notes = [
+      here ? '<i class="rest-note rest-note--here">Вы здесь</i>' : '',
+      r.workHours && !off ? `<i class="rest-note">Время работы : ${esc(r.workHours)}</i>` : '',
+      off ? '<i class="rest-note">Скоро в приложении</i>' : '',
+    ].join('');
+    return `<button class="rest-item ${here ? 'is-current' : ''}" ${off ? 'disabled' : `data-rest="${esc(r.slug)}"`}>
+        <b>${esc(r.name)}</b><span>${esc(r.address || '')}</span>${notes}</button>`;
   }).join('')}</div>`, (sheet) => {
       sheet.addEventListener('click', (e) => {
         const b = e.target.closest('[data-rest]');
@@ -612,37 +673,44 @@
   }
 
   // ── Экран: AI ──────────────────────────────────────────────
+  const chipIcon = (c) => {
+    const l = String(c.label || '').toLowerCase();
+    if (l.includes('остр')) return `<img src="${UI('ai-pepper.svg')}" alt="">`;
+    if (l.includes('реб') || l.includes('дет')) return `<img src="${UI('ai-child.svg')}" alt="">`;
+    return c.emoji ? `<span class="chip__emoji">${esc(c.emoji)}</span>` : '';
+  };
   function renderAi() {
     const { results, loading, error, query } = S.ai;
     const hasResults = Boolean(results?.length) || loading || error;
-    const hello = S.guest?.name ? `${S.guest.name}, что сегодня хотите?` : 'Подберу блюда под ваше настроение';
-    const chips = (S.config?.chips || []).map((c) => `<button class="chip ${query === c.query ? 'is-active' : ''}" data-chip="${esc(c.query)}">${c.emoji ? `${esc(c.emoji)} ` : ''}${esc(c.label)}</button>`).join('');
+    const hello = S.guest?.name ? `${S.guest.name}, что сегодня хотите?` : 'Что сегодня хотите?';
+    const chips = (S.config?.chips || []).map((c) => `<button class="chip ${query === c.query ? 'is-active' : ''}" data-chip="${esc(c.query)}">${chipIcon(c)}<span>${esc(c.label)}</span></button>`).join('');
     let body = '';
     if (loading) body = '<div class="ai-results"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>';
     else if (error) {
       body = `<div class="ai-results"><div class="ai-error">
-        <div style="font-weight:500;margin-bottom:6px">${esc(error)}</div>
-        <div class="muted" style="font-size:14px;margin-bottom:14px">Пока можно выбрать из популярного или повторить запрос</div>
+        <div class="ai-error__title">${esc(error)}</div>
+        <div class="muted">Пока можно выбрать из популярного или повторить запрос</div>
         <button class="btn btn--dark btn--center" data-retry>Повторить</button></div></div>`;
     } else if (results?.length) {
-      body = `<div class="ai-answer">${S.ai.label ? esc(S.ai.label) : ''}</div><div class="ai-results ${S.aiFresh ? 'is-fresh' : ''}">${results.map((r) => {
+      body = `<div class="ai-results ${S.aiFresh ? 'is-fresh' : ''}">${results.map((r) => {
         const p = findProduct(r.productId) || { id: r.productId, iikoId: r.iikoId, name: r.name, price: r.price, image: r.image, weight: r.weight };
         return dishCard(p, { reason: r.reason });
       }).join('')}</div>`;
     }
-    return `${topbar()}<main class="screen screen--center">
-      <section class="ai-hero ${hasResults ? 'ai-hero--compact' : ''}">
-        <div class="orb ${hasResults ? 'orb--md' : 'orb--lg'} ${loading ? 'is-thinking' : ''}"></div>
-        <h1>Спросите Fudji Ai</h1>
-        <div class="ai-hero__hello">${esc(hello)}</div>
-      </section>
+    const head = hasResults
+      ? `<section class="ai-head"><img class="ai-head__orb ${loading ? 'is-thinking' : ''}" src="${UI('ai-orb.png')}" alt="">
+          <div><div class="ai-head__title">Fudji AI</div><div class="ai-head__sub">${esc(loading ? 'Подбираю…' : error ? 'Не получилось' : (S.ai.label || 'Вот что я подобрал:'))}</div></div></section>`
+      : `<section class="ai-hero"><img class="ai-orb" src="${UI('ai-orb.png')}" alt="">
+          <h1>Спросите Fudji AI</h1><div class="ai-hero__hello">${esc(hello)}</div></section>`;
+    return `${topbar()}<main class="screen screen--center screen--ai">
+      ${head}
       ${hasResults ? '' : bannersHtml('ai')}
       ${body}
       <div class="ai-bottom">
         <div class="chips">${chips}</div>
-        <form class="pill-input" id="ai-form">
-          <input id="ai-input" type="text" enterkeyhint="send" maxlength="300" placeholder="Например: что-то лёгкое на двоих" value="${esc(query)}" aria-label="Запрос к AI">
-          <button class="round-btn" type="submit" aria-label="Спросить">${ICONS.arrowUp}</button>
+        <form class="ai-input" id="ai-form">
+          <input id="ai-input" type="text" enterkeyhint="send" maxlength="300" placeholder="${hasResults ? 'Повторить поиск' : 'Поиск блюда с помощью ИИ'}" value="${esc(query)}" aria-label="Запрос к AI">
+          <button type="submit" aria-label="Спросить"><img src="${UI('ai-send.svg')}" alt=""></button>
         </form>
         ${cartCount() && !S.session?.isPaid ? submitBlock() : ''}
       </div>
@@ -682,13 +750,9 @@
     if (!pending) return '';
     // Уже передано и с тех пор не менялось — повторно отправлять нечего
     if (WAITING_WAITER.includes(S.session?.workflowStatus) && !S.changedSinceSubmit) return '';
-    // Свайп вправо, как в Яндексе: случайным касанием заказ не уйдёт
-    return `<div class="swipe" data-swipe="submit" role="button" tabindex="0"
-        aria-label="${reorder ? 'Передать дозаказ' : 'Передать официанту'} — проведите вправо">
-      <div class="swipe__fill"></div>
-      <div class="swipe__text">${reorder ? 'Передать дозаказ' : 'Передать официанту'}<span class="btn__sub">${pending} ${plural(pending, ['позиция', 'позиции', 'позиций'])} · ${rub(cartTotal())} · проведите →</span></div>
-      <div class="swipe__knob">${ICONS.arrowRight}</div>
-    </div>`;
+    return `<button class="btn btn--dark submit-btn" data-action="submit">
+      <span>${reorder ? 'Передать дозаказ официанту' : 'Передать заказ официанту'}<span class="btn__sub">${pending} ${plural(pending, ['позиция', 'позиции', 'позиций'])} · ${rub(cartTotal())}</span></span>
+      <span class="round-btn">${ICONS.arrowRight}</span></button>`;
   }
 
   // ── Баннеры маркетинга (админка → «Баннеры и акции») ────────
@@ -716,7 +780,7 @@
   }
 
   // ── Экран: меню ────────────────────────────────────────────
-  function menuSections() {
+  function menuSections(section = S.menu.section) {
     const products = S.catalog?.products || [];
     const groups = S.catalog?.groups || [];
     const q = S.menu.search.trim().toLowerCase();
@@ -732,7 +796,7 @@
     return [...byGroup.entries()]
       .map(([id, items]) => ({ id, name: groups.find((g) => g.id === id)?.name || items[0].parentGroupName || 'Другое', items, order: order.get(id) ?? 999 }))
       // Вкладки «Кухня / Бар»; поиск ищет по всему меню
-      .filter((sec) => q || !bar.size || bar.has(String(sec.id)) === (S.menu.section === 'bar'))
+      .filter((sec) => q || !bar.size || bar.has(String(sec.id)) === (section === 'bar'))
       .sort((a, b) => a.order - b.order);
   }
 
@@ -743,152 +807,131 @@
     return new Set([...ids].filter((id) => used.has(id)));
   }
 
-  function sectionTabs() {
-    if (S.menu.search || !barGroupIds().size) return '';
-    const tab = (key, label) => `<button role="tab" data-section="${key}" aria-selected="${S.menu.section === key}" class="${S.menu.section === key ? 'is-active' : ''}">${label}</button>`;
-    return `<div class="seg" role="tablist" aria-label="Кухня или бар">${tab('kitchen', 'Кухня')}${tab('bar', 'Бар')}</div>`;
-  }
-
   function renderMenu() {
     if (!S.catalog) return `${topbar()}<main class="screen"><div class="list"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div></main>`;
     const sections = menuSections();
     return `${topbar()}<main class="screen">
-      <form class="pill-input search" id="search-form" onsubmit="return false">
-        ${ICONS.search}<input id="search" type="search" placeholder="Поиск по меню" value="${esc(S.menu.search)}" aria-label="Поиск">
+      <form class="search ${S.menu.search ? 'is-active' : ''}" id="search-form" onsubmit="return false">
+        <input id="search" type="search" placeholder="Поиск по меню" value="${esc(S.menu.search)}" aria-label="Поиск">
+        ${S.menu.search ? `<button type="button" class="search__clear" data-action="clear-search" aria-label="Очистить поиск">${ICONS.close}</button>`
+    : `<span class="search__icon"><img src="${UI('search.svg')}" alt=""></span>`}
       </form>
+      ${S.menu.search ? '' : `<div class="cats" id="cats"><button class="cats__all" data-action="all-cats" aria-label="Все разделы меню">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="2" width="5" height="5" rx="1.5"/><rect x="9" y="2" width="5" height="5" rx="1.5"/><rect x="2" y="9" width="5" height="5" rx="1.5"/><rect x="9" y="9" width="5" height="5" rx="1.5"/></svg>Меню</button>${sections.map((s) => `<button data-cat="${esc(s.id)}" class="${String(S.activeCat) === String(s.id) ? 'is-active' : ''}">${esc(s.name)}</button>`).join('')}</div>`}
       ${S.menu.search ? '' : bannersHtml('menu')}
-      ${sectionTabs()}
-      ${S.menu.search ? '' : `<div class="cats" id="cats"><button class="cats__all" data-action="all-cats" aria-label="Все разделы меню">${ICONS.grid}</button>${sections.map((s) => `<button data-cat="${esc(s.id)}" class="${String(S.activeCat) === String(s.id) ? 'is-active' : ''}">${esc(s.name)}</button>`).join('')}</div>`}
       ${sections.length ? sections.map((s, i) => `<h2 class="section-title" id="cat-${esc(s.id)}">${esc(s.name)}</h2>
         <div class="list ${i === sections.length - 1 && !S.menu.search ? 'list--last' : ''}">${s.items.map((p) => dishCard(p)).join('')}</div>`).join('')
     : S.catalog.products?.length
-      ? `<div class="empty"><div class="orb orb--md"></div>Ничего не нашлось. Спросите AI — он подберёт похожее.</div>`
-      : `<div class="empty"><div class="orb orb--md"></div>Меню ресторана ещё загружается из iiko.<br>Загляните чуть позже или позовите официанта.</div>`}
+      ? `<div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.png')}" alt="">Ничего не нашлось. Спросите AI — он подберёт похожее.</div>`
+      : `<div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.png')}" alt="">Меню ресторана ещё загружается из iiko.<br>Загляните чуть позже или позовите официанта.</div>`}
     </main>`;
   }
 
   // ── Экран: заказ ───────────────────────────────────────────
-  const STEPS = [
-    { key: 'sent', label: 'Передан', done: (s) => ['cart_ready', 'waiter_review', 'in_production', 'reorder_pending', 'bill_requested', 'paid'].includes(s.workflowStatus) },
-    { key: 'waiter', label: 'Официант', done: (s) => ['waiter_review', 'in_production', 'reorder_pending', 'bill_requested', 'paid'].includes(s.workflowStatus) },
-    { key: 'kitchen', label: 'Готовится', done: (s) => ['in_production', 'reorder_pending', 'bill_requested', 'paid'].includes(s.workflowStatus) },
-    { key: 'served', label: 'Подано', done: (s) => s.kitchenStatus === 'Served' },
+  // Четыре шага макета: ждём заказ → ждём официанта → готовим → готово
+  const STEP_TEXT = [
+    ['Ждём ваш заказ', 'Выбирайте любимое или спросите AI'],
+    ['Ждём официанта', 'Скоро подойдём и примем ваш заказ'],
+    ['Готовим ваш заказ', 'Повара готовят ваши блюда'],
+    ['Заказ готов', 'Несём к вашему столу. Приятного аппетита!'],
   ];
+  function orderStep(s) {
+    if (!s) return 0;
+    if (s.isPaid || s.kitchenStatus === 'Served' || s.kitchenStatus === 'CookingCompleted') return 3;
+    if (['in_production', 'bill_requested', 'paid', 'closed'].includes(s.workflowStatus)) return 2;
+    if (['cart_ready', 'waiter_review', 'reorder_pending'].includes(s.workflowStatus)) return 1;
+    return 0;
+  }
   const STATUS_SUB = {
-    browsing: 'Добавьте блюда из меню или спросите AI',
-    building_cart: 'Проверьте заказ и передайте официанту',
-    cart_ready: 'Официант получил заказ и скоро подойдёт',
-    waiter_review: 'Официант сверяет состав заказа',
-    in_production: 'Готовим! Можно дозаказать в любой момент',
     reorder_pending: 'Дозаказ ждёт подтверждения официанта',
     bill_requested: 'Официант скоро принесёт счёт',
     paid: 'Спасибо, что были с нами!',
   };
-
-  /** Статусы уже отправленных порций блюда гостя: [{ label, qty, served, ready }]. */
-  function kitchenBreakdown(pid) {
-    const map = new Map();
-    for (const i of myItems()) {
-      if (!i.isLocked || !(String(i.productId) === String(pid) || String(i.iikoProductId) === String(pid))) continue;
-      const served = Boolean(i.servedAt) || i.kitchenStatus === 'Served';
-      const label = served ? 'подано' : (i.kitchenLabel || 'на кухне');
-      const prev = map.get(label) || { label, qty: 0, served, ready: i.isReady };
-      prev.qty += i.quantity;
-      map.set(label, prev);
-    }
-    return [...map.values()];
+  function orderStepper(s) {
+    const step = orderStep(s);
+    const wf = s?.workflowStatus;
+    const [title, sub0] = STEP_TEXT[step];
+    const sub = (wf && STATUS_SUB[wf]) || (s?.kitchenLabel && step === 2 ? `Кухня: ${s.kitchenLabel}` : sub0);
+    const bars = [0, 1, 2, 3].map((n) => `<div class="stepper__bar ${n < step ? 'is-done' : n === step ? 'is-current' : ''}">${n === step
+      ? `<img src="${UI(`order-step${n + 1}.svg`)}" alt="">` : ''}</div>`).join('');
+    return `<section class="stepper-card">
+      <div class="stepper" aria-label="Шаг ${step + 1} из 4">${bars}</div>
+      <div class="stepper__title">${esc(title)}</div>
+      <div class="stepper__sub">${esc(sub)}${s?.waitingMinutes ? ` · ждёте ${s.waitingMinutes} мин` : ''}</div>
+    </section>`;
   }
 
-  function kitchenLabelFor(pid) {
-    const it = myItems().find((i) => i.isLocked && (String(i.productId) === String(pid) || String(i.iikoProductId) === String(pid)));
-    return it?.kitchenLabel || null;
-  }
+  const thumb = (p) => (p ? imgHtml(p, 'cart-line__img', 120) : '<div class="cart-line__img"></div>');
+  const itemStatus = (i) => (i.servedAt || i.kitchenStatus === 'Served' ? ['served', 'подано'] : i.isReady ? ['ready', 'готово']
+    : i.isLocked ? ['kitchen', i.kitchenLabel || 'на кухне'] : ['cart', 'в корзине']);
 
   function renderOrder() {
     const s = S.session;
-    const wf = s?.workflowStatus || 'browsing';
     const lines = cartLines();
-    const st0 = s || { workflowStatus: wf };
-    const current = STEPS.findIndex((st) => !st.done(st0));
-    const stepper = STEPS.map((st, i) => `<div class="step ${st.done(st0) ? 'is-done' : ''} ${i === current ? 'is-current' : ''}"><i></i>${st.label}</div>`).join('');
-
-    const items = lines.map((l) => {
-      const locked = lockedQty(l.product.id);
-      const fresh = l.qty - locked;
-      const parts = locked ? kitchenBreakdown(l.product.id) : [];
-      const allServed = locked && fresh <= 0 && parts.length && parts.every((b) => b.served);
-      const tags = [
-        ...parts.map((b) => `<span class="tag ${b.served ? 'tag--served' : b.ready ? 'tag--ready' : 'tag--kitchen'}">${b.served ? '✓ ' : ''}${esc(b.label)} ${b.qty}</span>`),
-        locked && fresh > 0 ? `<span class="tag tag--new">+${fresh} новое</span>` : '',
-      ].join('');
-      return `<div class="line-item ${allServed ? 'is-served' : ''}">
-        <div class="line-item__main">
-          <div class="line-item__name">${esc(l.product.name)}</div>
-          <div class="line-item__meta">${rub(l.product.price)} × ${l.qty} ${tags}</div>
-        </div>
-        ${s?.isPaid ? `<b>${rub(l.qty * l.product.price)}</b>` : `<div class="qty">
-          <button class="round-btn round-btn--sm round-btn--light" data-dec="${esc(l.product.id)}" ${l.qty <= locked ? 'disabled' : ''} aria-label="Убрать">${ICONS.minus}</button>
-          <b>${l.qty}</b>
-          <button class="round-btn round-btn--sm" data-inc="${esc(l.product.id)}" aria-label="Добавить">${ICONS.plus}</button>
-        </div>`}
-      </div>`;
-    }).join('');
-
-    const canClear = lines.some((l) => l.qty > lockedQty(l.product.id));
     const paid = s?.isPaid;
-    // Остальные за столом: блюда других гостей и добавленные официантом
-    const others = (s?.items || []).filter((i) => (i.guestId || null) !== (S.guest?.id || null));
-    const byWho = new Map();
-    for (const i of others) {
-      const who = i.guestName || (i.seatNumber ? `Место ${i.seatNumber}` : 'Добавил официант');
-      if (!byWho.has(who)) byWho.set(who, []);
-      byWho.get(who).push(i);
-    }
-    const table = [...byWho].map(([who, list]) => `<div class="table-guest">
-        <div class="table-guest__name">${esc(who)}</div>
-        ${list.map((i) => `<div class="table-guest__item"><span>${esc(i.name)} × ${i.quantity}</span>
-          <span class="tag ${i.servedAt ? 'tag--served' : i.isReady ? 'tag--ready' : i.isLocked ? 'tag--kitchen' : ''}">${i.servedAt ? '✓ подано' : esc(i.isLocked ? (i.kitchenLabel || 'на кухне') : 'в корзине')}</span></div>`).join('')}
+    // Корзина — то, что ещё не ушло официанту; отправленное — блоком выше, по гостям
+    const fresh = lines.map((l) => ({ l, q: l.qty - lockedQty(l.product.id) })).filter((x) => x.q > 0);
+    const cartHtml = fresh.map(({ l, q }) => `<div class="cart-line" data-key="cart-${esc(l.product.id)}">
+        <div class="cart-line__row" data-swipe-del="${esc(l.product.id)}">
+          ${thumb(findProduct(l.product.id) || l.product)}
+          <div class="cart-line__main"><div class="cart-line__name">${esc(l.product.name)}</div><div class="cart-line__price">${rub(l.product.price)}</div></div>
+          ${paid ? '' : `<div class="stepper-mini">
+            <button data-dec="${esc(l.product.id)}" aria-label="Убрать">${ICONS.minus}</button><b>${q}</b>
+            <button data-inc="${esc(l.product.id)}" aria-label="Добавить">${ICONS.plus}</button></div>`}
+        </div>
+        <button class="cart-line__del" data-remove="${esc(l.product.id)}" aria-label="Удалить"><img src="${UI('trash.svg')}" alt=""></button>
       </div>`).join('');
-    const multi = (s?.guests || []).length > 1;
-    return `${topbar()}<main class="screen">
-      <h1 class="page-title">Заказ</h1>
+
+    // Отправленное: мои блюда («Вы») и остальные гости за столом
+    const me = S.guest?.id || null;
+    const groups = new Map();
+    for (const i of s?.items || []) {
+      const mine = (i.guestId || null) === me;
+      if (mine && !i.isLocked) continue; // мои неотправленные — в корзине ниже
+      const who = mine ? 'Вы' : i.guestName || (i.seatNumber ? `Место ${i.seatNumber}` : 'Добавил официант');
+      if (!groups.has(who)) groups.set(who, []);
+      groups.get(who).push(i);
+    }
+    const multi = groups.size > 1 || [...groups.keys()].some((k) => k !== 'Вы');
+    const sentHtml = [...groups].map(([who, list]) => `<div class="sent-group">
+        ${multi ? `<div class="sent-group__name">${esc(who)}</div>` : ''}
+        ${list.map((i) => {
+    const [cls, label] = itemStatus(i);
+    return `<div class="sent-line">${thumb(findProduct(i.productId) || findProduct(i.iikoProductId))}
+            <div class="cart-line__main"><div class="cart-line__name">${esc(i.name)}</div><span class="st st--${cls}">${esc(label)}</span></div>
+            <div class="sent-line__sum">${rub(i.price)} <span>x ${i.quantity}</span></div></div>`;
+  }).join('')}
+      </div>`).join('');
+
+    const canClear = fresh.length > 0;
+    const row = (attr, label, icon = '') => `<button class="menu-row" ${attr}>${icon}<span>${label}</span><img src="${UI('chevron.svg')}" alt=""></button>`;
+    return `${topbar()}<main class="screen screen--order">
+      ${orderStepper(s)}
       ${bannersHtml('order')}
-      <section class="card">
-        <div class="steps">${stepper}</div>
-        <div class="status-text">${esc(s?.workflowLabel || 'Добро пожаловать')}</div>
-        <div class="status-sub">${esc(s?.kitchenLabel ? `Кухня: ${s.kitchenLabel}` : (STATUS_SUB[wf] || ''))}${s?.waitingMinutes ? ` · ждёте ${s.waitingMinutes} мин` : ''}</div>
-      </section>
-      <section class="card">
-        ${multi ? `<div class="table-guest__name" style="margin-bottom:6px">Мой заказ${S.guest?.name ? ` · ${esc(S.guest.name)}` : ''}</div>` : ''}
-        ${lines.length ? items : `<div class="empty" style="padding:24px 8px">Корзина пуста.<br>Выберите блюда в меню или спросите AI.</div>`}
-        ${lines.length ? `<div class="total-row"><span class="muted">${multi ? 'Мой заказ' : 'Итого'}</span><b>${rub(cartTotal())}</b></div>` : ''}
-      </section>
-      ${table ? `<section class="card">
-        <div class="status-text" style="font-size:17px;margin-bottom:6px">За столом</div>
-        ${table}
-        <div class="total-row"><span class="muted">Весь стол</span><b>${rub(s.total)}</b></div>
-      </section>` : ''}
+      ${sentHtml ? `<section class="order-card">${sentHtml}
+        ${s?.total > 0 ? `<div class="total-row"><span>${multi ? 'Весь стол' : 'Итого'}</span><b>${rub(s.total)}</b></div>` : ''}</section>` : ''}
+      ${cartHtml ? `<section class="order-card">${cartHtml}
+        <div class="total-row"><span>В корзине</span><b>${rub(fresh.reduce((n, x) => n + x.q * (Number(x.l.product.price) || 0), 0))}</b></div></section>`
+    : sentHtml ? '' : '<section class="order-empty">Корзина пуста</section>'}
       <div class="actions">
         ${paid ? `<button class="btn btn--dark" data-action="new-visit"><span>Начать новый заказ</span><span class="round-btn">${ICONS.arrowRight}</span></button>
-          ${s.feedbackLeft ? '' : '<button class="btn" data-action="feedback"><span>Оценить визит</span></button>'}`
+          ${s.feedbackLeft ? '' : row('data-action="feedback"', 'Оценить визит')}`
     : `${submitBlock()}
-        ${s?.items?.length && s.total > 0 && (s.canRequestBill || S.config?.onlinePay) ? `<button class="btn ${pendingCount() ? '' : 'btn--dark'}" data-action="bill"><span>Оплатить счёт<span class="btn__sub">${rub(s.total)}</span></span><span class="round-btn">${ICONS.arrowRight}</span></button>` : ''}
-        <div class="actions-grid">
-          <button class="btn" data-go="menu">Дополнить из меню</button>
-          <button class="btn" data-action="call">Позвать официанта</button>
-          ${canClear ? '<button class="btn" data-action="clear">Очистить</button>' : ''}
-        </div>`}
+        ${s?.items?.length && s.total > 0 && (s.canRequestBill || S.config?.onlinePay) ? `<button class="btn ${pendingCount() ? 'btn--outline' : 'btn--dark'}" data-action="bill"><span>Оплатить счёт<span class="btn__sub">${rub(s.total)}</span></span><span class="round-btn">${ICONS.arrowRight}</span></button>` : ''}
+        ${lines.length ? row('data-go="menu"', 'Дополнить из меню') : ''}
+        ${row('data-action="call"', 'Позвать официанта', `<img class="menu-row__icon" src="${UI('status-help.svg')}" alt="">`)}
+        ${canClear ? row('data-action="clear"', 'Очистить корзину') : ''}`}
       </div>
     </main>`;
   }
 
   // ── Шторки ─────────────────────────────────────────────────
-  function openSheet(html, onMount) {
+  function openSheet(html, onMount, { cls = '' } = {}) {
     const root = $('#sheet-root');
-    root.innerHTML = `<div class="sheet-backdrop" data-close><div class="sheet" role="dialog" aria-modal="true"><div class="sheet__grip"></div>${html}</div></div>`;
+    root.innerHTML = `<div class="sheet-backdrop" data-close><div class="sheet ${cls}" role="dialog" aria-modal="true"><div class="sheet__grip"></div>${html}</div></div>`;
     const backdrop = root.firstElementChild;
     const sheet = backdrop.querySelector('.sheet');
-    backdrop.addEventListener('click', (e) => { if (e.target === backdrop) closeSheet(); });
+    backdrop.addEventListener('click', (e) => { if (e.target === backdrop || e.target.closest('[data-sheet-close]')) closeSheet(); });
     enableSheetDrag(backdrop, sheet);
     onMount?.(sheet);
     watchLiveVideos(sheet);
@@ -944,10 +987,10 @@
 
   function openCallSheet() {
     const hasItems = (S.session?.items || []).length > 0 && !S.session?.isPaid;
-    const opt = (reason, label) => `<button class="btn" data-reason="${reason}"><span>${label}</span><span class="round-btn">${ICONS.arrowRight}</span></button>`;
+    const opt = (reason, label) => `<button class="menu-row" data-reason="${reason}"><span>${label}</span><img src="${UI('chevron.svg')}" alt=""></button>`;
     openSheet(`<h2>Позвать официанта</h2><p class="sheet__hint">Официант увидит стол №${esc(S.table)} и причину вызова</p>
-      ${opt('general', 'Нужна помощь')}${opt('order', 'Дозаказ')}${hasItems ? opt('bill', 'Попросить счёт') : ''}${opt('question', 'Вопрос по блюдам')}
-      <button class="link-btn" data-logout style="display:block;margin:12px auto 0">Выйти (${esc(S.guest?.phoneMasked || 'гость')})</button>`, (sheet) => {
+      <div class="menu-rows">${opt('general', 'Нужна помощь')}${opt('order', 'Дозаказ')}${hasItems ? opt('bill', 'Попросить счёт') : ''}${opt('question', 'Вопрос по блюдам')}</div>
+      <button class="link-btn link-btn--logout" data-logout>Выйти (${esc(S.guest?.phoneMasked || 'гость')})</button>`, (sheet) => {
       sheet.addEventListener('click', async (e) => {
         if (e.target.closest('[data-logout]')) {
           closeSheet();
@@ -961,28 +1004,45 @@
         try {
           const res = await api('POST', '/api/v1/table/call-waiter', { sessionId: S.sessionId, reason: b.dataset.reason });
           if (res.session) applySession(res.session);
-          closeSheet(); toast(res.message || 'Официант скоро подойдёт'); render();
+          S.helpUntil = Date.now() + 5 * 60_000;
+          setTimeout(render, 5 * 60_000 + 500);
+          closeSheet(); toast(res.message || 'Официант скоро подойдёт', false, 'bell.svg'); render();
         } catch (err) { b.disabled = false; toast(err.message, true); }
       });
-    });
+    }, { cls: 'sheet--gray' });
   }
 
-  /** Экран блюда (шторка): фото, название, цена, описание, КБЖУ, аллергены, кнопка. Его же рисует превью админки. */
+  /** Экран блюда (шторка): фото, метки, название, описание, КБЖУ, аллергены, кнопка. Его же рисует превью админки. */
   function productDetailHtml(p) {
-    const nutri = [['ккал', p.energyAmount], ['белки', p.fiberAmount], ['жиры', p.fatAmount], ['углев.', p.carbohydrateAmount]]
+    const grams = gramsOf(p.weight);
+    const perDish = S.nutri === 'dish' && grams;
+    const k = perDish ? grams / 100 : 1;
+    const fmt = (v) => (Math.round(v * k * 10) / 10).toLocaleString('ru-RU');
+    const nutri = [['Белки', p.fiberAmount], ['Жиры', p.fatAmount], ['Углеводы', p.carbohydrateAmount], ['Ккал', p.energyAmount]]
       .filter(([, v]) => v != null);
     const allergens = [...(p.allergensText || []), ...(p.allergens || []).map((a) => a.name || a)].filter(Boolean);
     const qty = S.cart[String(p.id)]?.qty || 0;
     const stopped = isStopped(p);
-    return `<div class="hero-wrap">${imgHtml(p, 'product-hero', 720)}${qty && !stopped ? `<span class="dish__count dish__count--hero" aria-label="В заказе ${qty}">${qty}</span>` : ''}</div>
-        <h2 style="margin-top:16px">${esc(p.name)}</h2>
-        <div class="dish__price" style="margin:0 4px 12px"><b>${rub(p.price)}</b>${p.weight ? `<span>${esc(p.weight)}</span>` : ''}${stopped ? '<span class="tag tag--stop">Нет в наличии</span>' : ''}</div>
-        ${p.description ? `<p class="muted" style="margin:0 4px;font-size:15px;line-height:1.45">${esc(p.description)}</p>` : ''}
-        ${nutri.length ? `<div class="nutri">${nutri.map(([k, v]) => `<div><b>${Math.round(v)}</b>${k}</div>`).join('')}</div>` : ''}
-        ${allergens.length ? `<p style="margin:0 4px 16px;font-size:13px"><span class="muted">Аллергены:</span> ${esc(allergens.join(', '))}</p>` : ''}
-        ${stopped ? '<button class="btn btn--center" disabled>Временно недоступно</button>'
-    : qty ? `<div class="btn" style="justify-content:space-between"><button class="round-btn round-btn--light" data-dec="${esc(p.id)}">${ICONS.minus}</button><b>${qty} в заказе · ${rub(qty * p.price)}</b><button class="round-btn" data-inc="${esc(p.id)}">${ICONS.plus}</button></div>`
-      : `<button class="btn btn--dark" data-inc="${esc(p.id)}"><span>Добавить в заказ</span><span class="round-btn">${ICONS.plus}</span></button>`}`;
+    const toggle = grams ? `<div class="nutri-toggle">
+        <button data-nutri="dish" class="${perDish ? 'is-active' : ''}">Блюдо</button><button data-nutri="100" class="${perDish ? '' : 'is-active'}">100 грамм</button></div>` : '';
+    return `<div class="product__photo">${imgHtml(p, 'product-hero', 720)}
+        <button class="product__close" data-sheet-close aria-label="Закрыть"><img src="${UI('close-white.svg')}" alt=""></button>
+        ${qty && !stopped ? `<span class="dish__count dish__count--hero" aria-label="В заказе ${qty}">${qty}</span>` : ''}</div>
+      <div class="product__info">
+        ${tagsHtml(p, { text: true })}
+        <h2 class="product__name">${esc(p.name)}</h2>
+        ${p.weight ? `<div class="product__weight">${esc(p.weight)}</div>` : ''}
+        ${p.description ? `<div class="product__block"><div class="product__label">Описание</div><p>${esc(p.description)}</p></div>` : ''}
+        ${nutri.length ? `<div class="product__block"><div class="product__label product__label--row">Пищевая ценность${toggle}</div>
+          <div class="nutri">${nutri.map(([label, v]) => `<div><b>${fmt(v)}</b>${label}</div>`).join('')}</div></div>` : ''}
+        ${allergens.length ? `<div class="product__block"><div class="product__label">Аллергены</div><p>${esc(allergens.join(', '))}</p></div>` : ''}
+      </div>
+      <div class="product__cta">
+        ${stopped ? `<button class="btn btn--dark btn--center" disabled>${Number(p.price) ? 'Закончился' : 'Скоро в продаже'}</button>`
+    : qty ? `<div class="btn btn--dark btn--qty"><button data-dec="${esc(p.id)}" aria-label="Убрать">${ICONS.minus}</button>
+          <span>${rub(qty * p.price)}<i></i>${qty}</span><button data-inc="${esc(p.id)}" aria-label="Добавить">${ICONS.plus}</button></div>`
+      : `<button class="btn btn--dark btn--center" data-inc="${esc(p.id)}">Добавить • ${rub(p.price)}</button>`}
+      </div>`;
   }
 
   function openProduct(id) {
@@ -991,12 +1051,13 @@
     const draw = () => productDetailHtml(p);
     openSheet(`<div id="product-sheet">${draw()}</div>`, (sheet) => {
       sheet.addEventListener('click', (e) => {
-        const inc = e.target.closest('[data-inc]'); const dec = e.target.closest('[data-dec]');
-        if (inc) changeQty(p, 1); else if (dec) changeQty(p, -1); else return;
+        const inc = e.target.closest('[data-inc]'); const dec = e.target.closest('[data-dec]'); const nutri = e.target.closest('[data-nutri]');
+        if (inc) changeQty(p, 1); else if (dec) changeQty(p, -1); else if (nutri) S.nutri = nutri.dataset.nutri; else return;
         e.stopPropagation();
-        $('#product-sheet').innerHTML = draw(); watchLiveVideos($('#product-sheet'));
+        const box = $('#product-sheet'); // шторку могла сменить форма входа за стол
+        if (box) { box.innerHTML = draw(); watchLiveVideos(box); }
       });
-    });
+    }, { cls: 'sheet--product' });
   }
 
   // ── Онлайн-оплата CloudPayments ─────────────────────────────
@@ -1130,7 +1191,7 @@
       go('order');
     } catch (e) {
       toast(e.network ? 'Нет связи. Корзина сохранена — попробуйте ещё раз' : e.message, true);
-      if (btn) { btn.disabled = false; btn.classList?.remove('is-busy', 'is-done'); resetSwipe(btn); }
+      if (btn) { btn.disabled = false; btn.classList?.remove('is-busy', 'is-done'); }
     }
   }
 
@@ -1261,18 +1322,33 @@
     try { await enterTable(); go('ai'); } catch (e) { toast(e.message, true); }
   }
 
-  /** Все разделы меню одним списком — строка категорий вмещает только несколько. */
+  /** Шторка «Меню»: разделы плитками с картинками, вкладки «Кухня / Бар». */
   function openCategoriesSheet() {
-    const sections = menuSections();
-    openSheet(`<h2>Разделы меню</h2><div class="cat-list">${sections.map((s) => `<button data-cat-jump="${esc(s.id)}">
-        <span>${esc(s.name)}</span><i>${s.items.length}</i></button>`).join('')}</div>`, (sheet) => {
+    const hasBar = barGroupIds().size > 0;
+    let section = S.menu.section;
+    const groups = new Map((S.catalog?.groups || []).map((g) => [String(g.id), g]));
+    const draw = () => {
+      const tab = (key, label) => `<button data-cat-tab="${key}" class="${section === key ? 'is-active' : ''}">${label}</button>`;
+      return `<button class="sheet__close" data-sheet-close aria-label="Закрыть"><img src="${UI('close.svg')}" alt=""></button>
+        <h2 class="sheet__title-center">Меню</h2>
+        ${hasBar ? `<div class="cat-tabs">${tab('kitchen', 'Кухня')}${tab('bar', 'Бар')}</div>` : ''}
+        <div class="cat-grid">${menuSections(section).map((sec) => {
+    const src = catImage({ ...(groups.get(String(sec.id)) || {}), name: sec.name });
+    return `<button data-cat-jump="${esc(sec.id)}">${src ? `<img src="${esc(src)}" alt="" loading="lazy">` : `<span class="cat-grid__emoji">${emojiFor({ parentGroupName: sec.name })}</span>`}<span>${esc(sec.name)}</span></button>`;
+  }).join('')}</div>`;
+    };
+    openSheet('<div id="cats-sheet"></div>', (sheet) => {
+      const box = $('#cats-sheet', sheet); box.innerHTML = draw();
       sheet.addEventListener('click', (e) => {
+        const t = e.target.closest('[data-cat-tab]');
+        if (t) { section = t.dataset.catTab; box.innerHTML = draw(); return; }
         const b = e.target.closest('[data-cat-jump]');
         if (!b) return;
         closeSheet();
+        if (section !== S.menu.section) { S.menu.section = section; S.activeCat = null; render(); }
         setTimeout(() => scrollToCategory(b.dataset.catJump), 60);
       });
-    });
+    }, { cls: 'sheet--white' });
   }
 
   /** Высота закреплённой сверху части: шапка + строка категорий (с вырезом камеры и полноэкранным режимом). */
@@ -1333,56 +1409,37 @@
     scrollTo({ top: 0 });
   }
 
-  // ── Свайп «Передать официанту» ─────────────────────────────
-  function resetSwipe(el) {
-    const knob = el?.querySelector?.('.swipe__knob'); const fill = el?.querySelector?.('.swipe__fill');
-    if (!knob) return;
-    knob.style.transition = fill.style.transition = 'transform .35s cubic-bezier(.2,.9,.3,1.3), width .35s ease';
-    knob.style.transform = 'translateX(0)'; fill.style.width = '0px';
-    el.style.setProperty('--p', 0);
-  }
-  let drag = null;
+  // ── Свайп влево по строке корзины — кнопка «удалить» (как в макете) ──
+  let sw = null;
   addEventListener('pointerdown', (e) => {
-    const el = e.target.closest('[data-swipe]');
-    if (!el || el.classList.contains('is-busy')) return;
-    const knob = el.querySelector('.swipe__knob'); const fill = el.querySelector('.swipe__fill');
-    const max = el.clientWidth - knob.offsetWidth - 16;
-    drag = { el, knob, fill, max, x0: e.clientX, moved: 0 };
-    S.dragging = true;
-    knob.style.transition = fill.style.transition = 'none';
-    el.classList.add('is-dragging');
-    el.setPointerCapture?.(e.pointerId);
+    const row = e.target.closest('[data-swipe-del]');
+    document.querySelectorAll('.cart-line.is-open').forEach((l) => { if (!row || l !== row.parentElement) l.classList.remove('is-open'); });
+    if (!row || e.target.closest('button')) return;
+    sw = { row, x0: e.clientX, y0: e.clientY, dx: 0, open: row.parentElement.classList.contains('is-open'), active: false };
   });
   addEventListener('pointermove', (e) => {
-    if (!drag) return;
-    const dx = Math.max(0, Math.min(drag.max, e.clientX - drag.x0));
-    drag.moved = dx;
-    drag.knob.style.transform = `translateX(${dx}px)`;
-    drag.fill.style.width = `${dx + drag.knob.offsetWidth}px`;
-    drag.el.style.setProperty('--p', (dx / drag.max).toFixed(2));
-  });
-  const endDrag = () => {
-    if (!drag) return;
-    const { el, knob, fill, max, moved } = drag;
-    drag = null; S.dragging = false;
-    el.classList.remove('is-dragging');
-    if (moved >= max * 0.75) {
-      knob.style.transition = fill.style.transition = 'transform .2s ease, width .2s ease';
-      knob.style.transform = `translateX(${max}px)`; fill.style.width = '100%';
-      el.classList.add('is-done');
-      try { navigator.vibrate?.([20, 40, 30]); } catch { /* нет вибро */ }
-      submitToWaiter(el);
-    } else {
-      if (moved < 6) toast('Проведите кнопку вправо, чтобы передать заказ');
-      resetSwipe(el);
+    if (!sw) return;
+    const dx = e.clientX - sw.x0;
+    if (!sw.active) {
+      if (Math.abs(e.clientY - sw.y0) > 10) { sw = null; return; }
+      if (Math.abs(dx) < 8) return;
+      sw.active = true; S.dragging = true; sw.row.style.transition = 'none';
     }
-  };
-  addEventListener('pointerup', endDrag);
-  addEventListener('pointercancel', endDrag);
-  addEventListener('keydown', (e) => {
-    const el = e.target.closest?.('[data-swipe]');
-    if (el && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); submitToWaiter(el); }
+    sw.dx = Math.max(-84, Math.min(0, dx + (sw.open ? -84 : 0)));
+    sw.row.style.transform = `translateX(${sw.dx}px)`;
   });
+  const endSwipe = () => {
+    if (!sw) return;
+    const { row, dx, active } = sw;
+    sw = null; S.dragging = false;
+    if (!active) return;
+    row.style.transition = ''; row.style.transform = '';
+    row.parentElement.classList.toggle('is-open', dx < -40);
+  };
+  addEventListener('pointerup', endSwipe);
+  addEventListener('pointercancel', endSwipe);
+  addEventListener('online', () => { S.offline = false; render(); });
+  addEventListener('offline', () => { S.offline = true; render(); });
 
   // ── Рендер ─────────────────────────────────────────────────
   /**
@@ -1477,6 +1534,14 @@
       if (product) changeQty(product, inc ? 1 : -1);
       return;
     }
+    const remove = t.closest('#app [data-remove]');
+    if (remove) {
+      // Удалить из корзины всё неотправленное; уже переданное официанту остаётся
+      const key = remove.dataset.remove;
+      const line = S.cart[key];
+      if (line) changeQty(line.product, lockedQty(key) - line.qty);
+      return;
+    }
     const courseBtn = t.closest('[data-course]');
     if (courseBtn) {
       const line = S.cart[courseBtn.dataset.course];
@@ -1520,6 +1585,7 @@
     else if (action === 'pay') openPaySheet();
     else if (action === 'bill') requestBill();
     else if (action === 'all-cats') openCategoriesSheet();
+    else if (action === 'clear-search') { S.menu.search = ''; render(); $('#search')?.focus(); }
     else if (action === 'feedback') openFeedbackSheet();
     else if (action === 'new-visit') newVisit();
     else if (action === 'clear') {
@@ -1614,7 +1680,7 @@
     let loadedFor = null;
     let base = null;
     let req = 0;
-    const CONTENT = ['name', 'description', 'image', 'video', 'weight', 'badge', 'energyAmount', 'fiberAmount', 'fatAmount', 'carbohydrateAmount'];
+    const CONTENT = ['name', 'description', 'image', 'video', 'weight', 'badge', 'cardSize', 'energyAmount', 'fiberAmount', 'fatAmount', 'carbohydrateAmount'];
     async function ensure(slug) {
       if (loadedFor === slug && base) return;
       S.restaurant = slug;

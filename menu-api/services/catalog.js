@@ -206,7 +206,7 @@ export async function getOverrides(restaurantId) {
 }
 
 // Поля карточки из админки — общие для блюда, где бы оно ни было (скрытие и стоп — свои у каждой точки)
-const CONTENT_FIELDS = ['name', 'description', 'image_url', 'video_url', 'weight', 'energy', 'proteins', 'fats', 'carbs', 'allergens', 'badge', 'is_recommended', 'priority'];
+const CONTENT_FIELDS = ['name', 'description', 'image_url', 'video_url', 'weight', 'energy', 'proteins', 'fats', 'carbs', 'allergens', 'badge', 'card_size', 'is_recommended', 'priority'];
 
 /**
  * Карточки из админки по названию блюда — запасная привязка, когда ID блюда в iiko не совпал:
@@ -238,6 +238,12 @@ export async function getContentByName(restaurantId) {
   return map;
 }
 
+/** Картинки разделов из админки: ключ названия раздела → ссылка. */
+export async function getCategoryImages() {
+  const { rows } = await pool.query('SELECT key, image_url FROM category_content WHERE image_url IS NOT NULL');
+  return new Map(rows.map((r) => [r.key, r.image_url]));
+}
+
 function normalizeLegacyStopList(stopList, terminalId) {
   const ids = new Set();
   for (const s of stopList || []) {
@@ -265,6 +271,7 @@ function applyOverride(product, o) {
   if (o.badge) p.badge = o.badge;
   if (o.priority) p.priority = Number(o.priority);
   if (o.video_url) p.video = o.video_url;
+  if (o.card_size) p.cardSize = o.card_size;
   return p;
 }
 
@@ -274,11 +281,12 @@ function applyOverride(product, o) {
  */
 export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
   const raw = await loadRawCatalog(restaurant, { force });
-  const [overrides, byName, iikoStop, balances] = await Promise.all([
+  const [overrides, byName, iikoStop, balances, catImages] = await Promise.all([
     getOverrides(restaurant.id),
     getContentByName(restaurant.id).catch(() => new Map()),
     loadIikoStopList(restaurant),
     getStopBalances(restaurant.id).catch(() => new Map()),
+    getCategoryImages().catch(() => new Map()),
   ]);
 
   const stop = normalizeLegacyStopList(raw.data.stopList, restaurant.terminal_id);
@@ -313,7 +321,9 @@ export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
     .sort((a, b) => a.order - b.order);
   return {
     ...raw.data,
-    groups: orderGroups(raw.data.groups, barGroups(ranked)),
+    // Картинка раздела из админки главнее картинки из iiko
+    groups: orderGroups(raw.data.groups, barGroups(ranked))
+      .map((g) => (catImages.get(menuKey(g.name)) ? { ...g, image: catImages.get(menuKey(g.name)) } : g)),
     products: ranked,
     stopList: [...stop],
     source: raw.source,
