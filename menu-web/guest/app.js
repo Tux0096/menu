@@ -81,23 +81,46 @@
     return (GROUP_EMOJI.find(([k]) => hay.includes(k)) || [null, '🍽'])[1];
   };
   // Фото из iiko — через /img: сервер отдаёт WebP нужной ширины (в 20–50 раз легче оригинала)
+  // Фото iiko и загруженные в админке (/media) идут через /img: сервер отдаёт WebP нужной ширины
+  const proxied = (src) => /^https?:\/\//.test(src) || /^\/media\//.test(src);
   const imgSrc = (src, w = 480) => {
     if (!src) return null;
-    if (/^https?:\/\//.test(src)) return `/img?w=${w}&u=${encodeURIComponent(src)}`;
+    if (proxied(src)) return `/img?w=${w}&u=${encodeURIComponent(src)}`;
     if (src.startsWith('/')) return src;
     return `/${src}`;
   };
+  /**
+   * Размеры фото под экран (srcset): телефон сам берёт нужную ширину — чётко на экранах 3x и легко на обычных.
+   * Список: клетка 144 px → 320/480; большая карточка и фото блюда — во всю ширину → 720/960/1280; корзина — 48 px.
+   */
+  let eagerBudget = 0; // первые фото меню грузятся сразу, остальные — по мере прокрутки
   const imgHtml = (p, cls = 'dish__img', w = 320) => {
     const src = imgSrc(p.image, w);
     const hero = cls === 'product-hero';
-    const lazy = hero ? 'fetchpriority="high"' : 'loading="lazy"';
+    const wide = w >= 720;
+    const thumb = cls === 'cart-line__img';
+    const eager = hero || (cls === 'dish__img' && eagerBudget > 0 && eagerBudget--);
+    const lazy = hero ? 'fetchpriority="high"' : eager ? 'loading="eager"' : 'loading="lazy"';
+    const widths = thumb ? [160] : wide ? [720, 960, 1280] : [320, 480];
+    const sizes = thumb ? '48px' : wide ? '(max-width: 480px) 100vw, 480px' : '(max-width: 370px) 120px, 144px';
+    const srcset = p.image && proxied(p.image) ? ` srcset="${esc(widths.map((x) => `${imgSrc(p.image, x)} ${x}w`).join(', '))}" sizes="${sizes}"` : '';
     // «Живое» меню: короткое видео без звука по кругу; фото — обложка, пока видео грузится.
     // Видео не качается заранее (preload="none") и играет только на экране — список не подвисает.
     if (p.video) {
       return `<div class="${cls} has-video"><video src="${esc(p.video)}" ${src ? `poster="${esc(src)}"` : ''} muted loop playsinline
         preload="${hero ? 'auto' : 'none'}" data-live disablepictureinpicture disableremoteplayback aria-hidden="true"></video></div>`;
     }
-    return `<div class="${cls}">${src ? `<img src="${esc(src)}" alt="" ${lazy} decoding="async" onerror="this.remove()">` : ''}${src ? '' : emojiFor(p)}</div>`;
+    // Фото проявляется плавно один раз; загруженные и битые адреса запоминаются, чтобы перерисовка не мигала
+    const ok = src && !IMG_BROKEN.has(src);
+    return `<div class="${cls}">${ok ? `<img src="${esc(src)}"${srcset} alt="" ${lazy} decoding="async" class="${IMG_LOADED.has(src) ? 'is-loaded' : ''}" onload="fujiImgLoaded(this)" onerror="fujiImgFailed(this)">` : emojiFor(p)}</div>`;
+  };
+  const IMG_LOADED = new Set();
+  const IMG_BROKEN = new Set();
+  window.fujiImgLoaded = (img) => { IMG_LOADED.add(img.getAttribute('src')); img.classList.add('is-loaded'); };
+  window.fujiImgFailed = (img) => {
+    IMG_BROKEN.add(img.getAttribute('src'));
+    const box = img.parentNode; img.remove();
+    if (box && !box.textContent) box.textContent = '🍽';
   };
   // Играют только видео, которые видно на экране
   const liveSeen = new WeakSet();
@@ -203,6 +226,8 @@
     .filter((i) => i.isLocked && (String(i.productId) === String(pid) || String(i.iikoProductId) === String(pid)))
     .reduce((s, i) => s + i.quantity, 0);
   const pendingCount = () => cartLines().reduce((s, l) => s + Math.max(0, l.qty - lockedQty(l.product.id)), 0);
+  // Визит окончен: оплачен или официант закрыл стол — заказывать в него нельзя
+  const visitOver = (s = S.session) => Boolean(s && (s.isPaid || s.status === 'closed'));
   const isStopped = (p) => p.isInStopList || (S.catalog?.stopList || []).includes(String(p.id));
 
   function findProduct(id) {
@@ -227,7 +252,7 @@
   function changeQty(product, delta) {
     // Меню открыто без стола/входа — сначала стол и телефон, потом положим блюдо в корзину
     if (delta > 0 && !S.session) { openSeatSheet(() => changeQty(product, delta)); return; }
-    if (S.session?.isPaid) { toast('Счёт уже оплачен. Отсканируйте QR, чтобы начать новый заказ'); return; }
+    if (visitOver()) { toast(S.session.isPaid ? 'Счёт уже оплачен. Отсканируйте QR, чтобы начать новый заказ' : 'Визит закрыт. Отсканируйте QR, чтобы начать новый заказ'); return; }
     const key = String(product.id);
     const line = S.cart[key] || { qty: 0, product };
     const next = line.qty + delta;
@@ -247,8 +272,11 @@
   }
 
   let saveTimer;
+  // Версия корзины: ответ сервера на старое сохранение или опрос не перетирает свежие нажатия гостя
+  let cartVer = 0;
   function scheduleCartSave() {
     S.cartDirty = true;
+    cartVer += 1;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(saveCart, 700);
   }
@@ -258,15 +286,23 @@
   }));
   async function saveCart() {
     if (!S.sessionId) return;
+    const v = cartVer;
     try {
       const session = await api('POST', '/api/v1/table-order/cart', { sessionId: S.sessionId, items: payloadItems() });
-      S.cartDirty = false;
+      if (v === cartVer) S.cartDirty = false;
       applySession(session, { keepCart: true });
+      render();
     } catch (e) {
-      if (e.status === 403) { toast(e.message, true); await refreshSession(true); }
-      else if (e.network) toast('Корзина сохранена на телефоне — отправим, когда появится связь', true);
+      if (e.network) { toast('Корзина сохранена на телефоне — отправим, когда появится связь', true); return; }
+      // Сервер не принял корзину (блюдо уже готовится, визит закрыт, позицию нельзя заказать):
+      // показываем причину и берём корзину с сервера — иначе опрос статусов встал бы
+      S.cartDirty = false;
+      toast(e.message, true);
+      await refreshSession(true);
     }
   }
+  /** Несохранённая корзина уходит на сервер, как только появилась связь. */
+  function flushCart() { if (S.cartDirty && S.sessionId) { clearTimeout(saveTimer); saveCart(); } }
 
   // ── Сессия стола ───────────────────────────────────────────
   function applySession(session, { keepCart = false } = {}) {
@@ -345,8 +381,11 @@
 
   async function refreshSession(force = false) {
     if (!S.sessionId || (S.cartDirty && !force)) return;
+    const v = cartVer;
     try {
-      applySession(await api('GET', `/api/v1/table/session/${S.sessionId}`));
+      const session = await api('GET', `/api/v1/table/session/${S.sessionId}`);
+      if (v !== cartVer || S.cartDirty) return; // гость успел изменить корзину — ответ устарел
+      applySession(session);
       render();
     } catch (e) {
       if (e.status === 404 || e.code === 'NOT_AT_TABLE') { S.sessionId = null; S.session = null; store.del('sessionId'); await enterTable().catch(() => {}); render(); }
@@ -415,6 +454,7 @@
     cooking: ['cooking', 'status-cooking.svg', 'Готовится'],
     done: ['done', 'status-done.svg', 'Подано'],
     paid: ['done', 'status-done.svg', 'Оплачено'],
+    closed: ['done', 'status-done.svg', 'Визит закрыт'],
     bill: ['info', 'status-waiter.svg', 'Несём счёт'],
     table: ['info', 'status-pin.svg', 'Выберите стол'],
     offline: ['error', 'status-disconnected.svg', 'Нет связи'],
@@ -422,7 +462,8 @@
   function pillKind(s) {
     if (S.offline) return 'offline';
     if (!s) return 'table';
-    if (s.isPaid || s.workflowStatus === 'paid' || s.workflowStatus === 'closed') return 'paid';
+    if (s.isPaid || s.workflowStatus === 'paid') return 'paid';
+    if (s.status === 'closed' || s.workflowStatus === 'closed') return 'closed';
     if (Date.now() < S.helpUntil) return 'help';
     if (s.workflowStatus === 'bill_requested') return 'bill';
     if (['cart_ready', 'waiter_review', 'reorder_pending'].includes(s.workflowStatus)) return 'waiter';
@@ -483,12 +524,12 @@
     const sub = reason || p.description || '';
     const count = qty && !stopped ? `<span class="dish__count" data-key="count-${qty}" aria-label="В заказе ${qty}">${qty}</span>` : '';
     if (p.cardSize === 'big' && !reason) {
-      return `<article class="dish dish--big ${stopped ? 'is-stopped' : ''} ${qty && !stopped ? 'has-qty' : ''}" data-product="${esc(p.id)}">
+      return `<article class="dish dish--big ${stopped ? 'is-stopped' : ''} ${qty && !stopped ? 'has-qty' : ''} ${S.previewFocus === String(p.id) ? 'is-focus' : ''}" data-product="${esc(p.id)}">
         <div class="dish__photo">${imgHtml(p, 'dish__img', 720)}${tagsHtml(p)}${count}</div>
         <div class="dish__overlay"><div class="dish__name">${esc(p.name)}</div>${pricePill(p, qty, stopped, 'price-pill price-pill--big')}</div>
       </article>`;
     }
-    return `<article class="dish ${stopped ? 'is-stopped' : ''} ${qty && !stopped ? 'has-qty' : ''}" data-product="${esc(p.id)}">
+    return `<article class="dish ${stopped ? 'is-stopped' : ''} ${qty && !stopped ? 'has-qty' : ''} ${S.previewFocus === String(p.id) ? 'is-focus' : ''}" data-product="${esc(p.id)}">
       <div class="dish__photo">${imgHtml(p)}${tagsHtml(p)}${count}</div>
       <div class="dish__body">
         <div class="dish__name">${esc(p.name)}</div>
@@ -584,7 +625,7 @@
         if (table === String(S.table)) { closeSheet(); return; }
         const btn = e.submitter || $('#place-form button[type=submit]', sheet);
         btn.disabled = true;
-        try { await switchTable(table); closeSheet(); toast(`Стол №${S.table}: можно заказывать`); render(); } catch (e2) {
+        try { if (await switchTable(table)) { closeSheet(); toast(`Стол №${S.table}: можно заказывать`); render(); } } catch (e2) {
           btn.disabled = false; err.textContent = e2.message;
         }
       });
@@ -598,30 +639,33 @@
       const q = Math.max(0, l.qty - lockedQty(l.product.id));
       if (q) carry[String(l.product.id)] = { ...l, qty: q };
     }
+    const hasCarry = Object.keys(carry).length > 0;
     clearTimeout(saveTimer);
     const oldSession = S.sessionId;
     const oldTable = S.table;
-    if (oldSession && Object.keys(carry).length) {
-      await api('POST', '/api/v1/table-order/cart', { sessionId: oldSession, items: [] }).catch(() => {});
-    }
     const oldKey = S.qrKey;
+    const oldCart = S.cart;
+    // Неотправленное уходит со старого стола только после того, как гость сел за новый
+    const moveCart = async () => {
+      if (oldSession && hasCarry) await api('POST', '/api/v1/table-order/cart', { sessionId: oldSession, items: [] }).catch(() => {});
+      if (hasCarry) { S.cart = carry; persistCart(); scheduleCartSave(); render(); }
+    };
     S.table = table; S.sessionId = null; S.session = null; S.cart = {}; S.qrKey = null;
     store.del('sessionId'); store.set('table', table); store.del('qrKey');
     try {
-      const ok = await enterTable({
-        then: () => { if (Object.keys(carry).length) { S.cart = carry; persistCart(); scheduleCartSave(); render(); } },
-      });
-      if (!ok) return; // стол занят — гость присоединится через шторку
+      const ok = await enterTable({ then: moveCart });
+      if (!ok) return false; // стол занят — гость присоединится через шторку, корзина переедет после этого
     } catch (e) {
-      // Стол не найден — возвращаемся за прежний
+      // Стол не найден — возвращаемся за прежний, корзина как была
       S.table = oldTable; store.set('table', oldTable);
       S.qrKey = oldKey; if (oldKey) store.set('qrKey', oldKey);
       if (oldSession) { S.sessionId = oldSession; store.set('sessionId', oldSession); await enterTable().catch(() => {}); }
-      if (Object.keys(carry).length) { S.cart = { ...S.cart, ...carry }; persistCart(); scheduleCartSave(); }
+      S.cart = oldCart; persistCart();
       throw e;
     }
-    if (Object.keys(carry).length) { S.cart = carry; persistCart(); scheduleCartSave(); }
+    await moveCart();
     startPolling();
+    return true;
   }
 
   /** Смена ресторана: QR выбирает его автоматически, но гость может переключиться вручную. */
@@ -712,23 +756,26 @@
       <div class="ai-bottom">
         <div class="chips">${chips}</div>
         <form class="ai-input" id="ai-form">
-          <input id="ai-input" type="text" enterkeyhint="send" maxlength="300" placeholder="${hasResults ? 'Повторить поиск' : 'Поиск блюда с помощью ИИ'}" value="${esc(query)}" aria-label="Запрос к AI">
+          <input id="ai-input" type="text" enterkeyhint="send" maxlength="300" placeholder="${hasResults ? 'Повторить поиск' : 'Поиск блюда с помощью ИИ'}" value="${esc(S.ai.draft ?? query)}" aria-label="Запрос к AI">
           <button type="submit" aria-label="Спросить"><img src="${UI('ai-send.svg')}" alt=""></button>
         </form>
-        ${cartCount() && !S.session?.isPaid ? submitBlock() : ''}
+        ${cartCount() && !visitOver() ? submitBlock() : ''}
       </div>
     </main>`;
   }
 
+  let aiReq = 0;
   async function askAi(query, isChip = false) {
     const q = String(query || '').trim();
     if (!q) return;
-    S.ai = { ...S.ai, query: q, loading: true, error: null };
+    const my = ++aiReq; // ответ на прежний запрос (гость уже спросил другое) не показываем
+    S.ai = { ...S.ai, query: q, draft: null, loading: true, error: null };
     render();
     try {
       const res = await api('POST', '/api/v1/ai/suggest', {
         restaurantSlug: S.restaurant, query: q, chip: isChip, cart: cartLines().map((l) => l.product.name),
       }, { timeout: 9000 });
+      if (my !== aiReq) return;
       S.aiFresh = true;
       S.ai = { ...S.ai, results: res.suggestions, loading: false, engine: res.engine, label: res.answer || (res.suggestions.length ? 'Вот что я подобрал:' : '') };
       if (!res.suggestions.length) {
@@ -741,6 +788,7 @@
       // Fallback по ТЗ: без пустого экрана — показываем популярное
       let fallback = [];
       try { fallback = (await api('GET', `/api/v1/ai/welcome?restaurant=${encodeURIComponent(S.restaurant || '')}`, null, { timeout: 4000 })).suggestions; } catch { /* offline */ }
+      if (my !== aiReq) return;
       S.ai = { ...S.ai, loading: false, results: fallback, label: fallback.length ? 'AI сейчас недоступен — вот популярные блюда:' : '', error: fallback.length ? null : e.message };
     }
     render();
@@ -766,6 +814,9 @@
     if (!pending) return '';
     // Уже передано и с тех пор не менялось — повторно отправлять нечего
     if (WAITING_WAITER.includes(S.session?.workflowStatus) && !S.changedSinceSubmit) return '';
+    if (S.submitting) {
+      return `<button class="btn btn--dark submit-btn btn--center" disabled><span class="spinner"></span>Передаём официанту…</button>`;
+    }
     const blocked = blockedLines();
     if (blocked.length) {
       return `<button class="btn btn--dark submit-btn" disabled>
@@ -836,6 +887,7 @@
     }
     if (!S.catalog) return `${topbar()}<main class="screen"><div class="skeleton skeleton--search"></div><div class="skeleton skeleton--cats"></div><div class="list">${'<div class="skeleton"></div>'.repeat(4)}</div></main>`;
     const sections = menuSections();
+    eagerBudget = 4;
     return `${topbar()}<main class="screen">
       <form class="search ${S.menu.search ? 'is-active' : ''}" id="search-form" onsubmit="return false">
         <input id="search" type="search" placeholder="Поиск по меню" value="${esc(S.menu.search)}" aria-label="Поиск">
@@ -865,7 +917,7 @@
   ];
   function orderStep(s) {
     if (!s) return 0;
-    if (s.isPaid || s.kitchenStatus === 'Served' || s.kitchenStatus === 'CookingCompleted') return 3;
+    if (visitOver(s) || s.kitchenStatus === 'Served' || s.kitchenStatus === 'CookingCompleted') return 3;
     if (['in_production', 'bill_requested', 'paid', 'closed'].includes(s.workflowStatus)) return 2;
     if (['cart_ready', 'waiter_review', 'reorder_pending'].includes(s.workflowStatus)) return 1;
     return 0;
@@ -896,12 +948,12 @@
   function renderOrder() {
     const s = S.session;
     const lines = cartLines();
-    const paid = s?.isPaid;
+    const paid = visitOver(s);
     // Корзина — то, что ещё не ушло официанту; отправленное — блоком выше, по гостям
     const fresh = lines.map((l) => ({ l, q: l.qty - lockedQty(l.product.id) })).filter((x) => x.q > 0);
     const cartHtml = fresh.map(({ l, q }) => {
       const problem = lineProblem(l, q);
-      return `<div class="cart-line ${problem ? 'is-problem' : ''}" data-key="cart-${esc(l.product.id)}">
+      return `<div class="cart-line ${problem ? 'is-problem' : ''} ${S.openLine === String(l.product.id) ? 'is-open' : ''}" data-key="cart-${esc(l.product.id)}">
         <div class="cart-line__row" data-swipe-del="${esc(l.product.id)}">
           ${thumb(findProduct(l.product.id) || l.product)}
           <div class="cart-line__main"><div class="cart-line__name">${esc(l.product.name)}</div><div class="cart-line__price">${rub(l.product.price)}</div>${problem ? `<span class="st st--stop">${esc(problem)}</span>` : ''}</div>
@@ -935,20 +987,22 @@
       </div>`).join('');
 
     const canClear = fresh.length > 0;
+    // Итого — по отправленному (все гости); неотправленное считается отдельно, «В корзине»
+    const sentSum = (s?.items || []).filter((i) => i.isLocked).reduce((n, i) => n + (Number(i.lineTotal) || 0), 0);
     const row = (attr, label, icon = '') => `<button class="menu-row" ${attr}>${icon}<span>${label}</span><img src="${UI('chevron.svg')}" alt=""></button>`;
     return `${topbar()}<main class="screen screen--order">
       ${orderStepper(s)}
       ${bannersHtml('order')}
       ${sentHtml ? `<section class="order-card">${sentHtml}
-        ${s?.total > 0 ? `<div class="total-row"><span>${multi ? 'Весь стол' : 'Итого'}</span><b>${rub(s.total)}</b></div>` : ''}</section>` : ''}
+        ${sentSum > 0 ? `<div class="total-row"><span>${multi ? 'Весь стол' : 'Итого'}</span><b>${rub(sentSum)}</b></div>` : ''}</section>` : ''}
       ${cartHtml ? `<section class="order-card">${cartHtml}
         <div class="total-row"><span>В корзине</span><b>${rub(fresh.reduce((n, x) => n + x.q * (Number(x.l.product.price) || 0), 0))}</b></div></section>`
     : sentHtml ? '' : '<section class="order-empty">Корзина пуста</section>'}
       <div class="actions">
         ${paid ? `<button class="btn btn--dark" data-action="new-visit"><span>Начать новый заказ</span><span class="round-btn">${ICONS.arrowRight}</span></button>
-          ${s.feedbackLeft ? '' : row('data-action="feedback"', 'Оценить визит')}`
+          ${s.feedbackLeft || !s.isPaid ? '' : row('data-action="feedback"', 'Оценить визит')}`
     : `${submitBlock()}
-        ${s?.items?.some((i) => i.isLocked) && s.total > 0 && (s.canRequestBill || S.config?.onlinePay) ? `<button class="btn ${pendingCount() ? 'btn--outline' : 'btn--dark'}" data-action="bill"><span>Оплатить счёт<span class="btn__sub">${rub(s.total)}</span></span><span class="round-btn">${ICONS.arrowRight}</span></button>` : ''}
+        ${sentSum > 0 && (s.canRequestBill || S.config?.onlinePay) ? `<button class="btn ${pendingCount() ? 'btn--outline' : 'btn--dark'}" data-action="bill"><span>Оплатить счёт<span class="btn__sub">${rub(sentSum)}</span></span><span class="round-btn">${ICONS.arrowRight}</span></button>` : ''}
         ${lines.length ? row('data-go="menu"', 'Дополнить из меню') : ''}
         ${row('data-action="call"', 'Позвать официанта', `<img class="menu-row__icon" src="${UI('status-help.svg')}" alt="">`)}
         ${canClear ? row('data-action="clear"', 'Очистить корзину') : ''}`}
@@ -959,6 +1013,7 @@
   // ── Шторки ─────────────────────────────────────────────────
   function openSheet(html, onMount, { cls = '' } = {}) {
     const root = $('#sheet-root');
+    root.firstElementChild?.abort?.();
     root.innerHTML = `<div class="sheet-backdrop" data-close><div class="sheet ${cls}" role="dialog" aria-modal="true"><div class="sheet__grip"></div>${html}</div></div>`;
     const backdrop = root.firstElementChild;
     const sheet = backdrop.querySelector('.sheet');
@@ -974,6 +1029,7 @@
     const backdrop = root.firstElementChild;
     if (!backdrop) return;
     const sheet = backdrop.querySelector('.sheet');
+    backdrop.abort?.();
     backdrop.classList.add('is-closing');
     document.documentElement.classList.remove('sheet-open');
     sheet.style.transition = 'transform .22s ease-in';
@@ -985,9 +1041,12 @@
   /** Смахнуть шторку вниз пальцем (как в приложениях): тянется за пальцем, отпустил — закрылась или вернулась. */
   function enableSheetDrag(backdrop, sheet) {
     let y0 = null; let dy = 0; let t0 = 0; let dragging = false;
+    const scrolled = (el) => { for (let n = el; n && n !== backdrop; n = n.parentElement) if (n.scrollTop > 0) return true; return false; };
     const start = (y, target) => {
-      if (target.closest('input, textarea, select') || sheet.scrollTop > 0) return;
-      y0 = y; dy = 0; t0 = Date.now(); dragging = false;
+      dragging = false;
+      // Тянуть шторку можно, только когда она и вложенный список (рестораны) прокручены к началу
+      if (target.closest('input, textarea, select') || scrolled(target)) return;
+      y0 = y; dy = 0; t0 = Date.now();
     };
     const move = (y, e) => {
       if (y0 == null) return;
@@ -997,7 +1056,7 @@
       if (e?.cancelable) e.preventDefault(); // не прокручиваем страницу, пока тянем шторку
       const d = Math.max(0, dy);
       sheet.style.transform = `translateY(${d}px)`;
-      backdrop.style.backgroundColor = `rgba(9, 16, 39, ${Math.max(0, 0.28 * (1 - d / 400))})`;
+      backdrop.style.backgroundColor = `rgba(41, 41, 41, ${Math.max(0, 0.28 * (1 - d / 400))})`;
     };
     const end = () => {
       if (y0 == null) return;
@@ -1008,20 +1067,24 @@
       sheet.style.transition = 'transform .3s cubic-bezier(.2,.9,.3,1.2)';
       sheet.style.transform = 'translateY(0)';
       backdrop.style.backgroundColor = '';
+      setTimeout(() => { dragging = false; }, 0); // касание не даёт click — флаг не должен съесть следующее нажатие
     };
     sheet.addEventListener('touchstart', (e) => start(e.touches[0].clientY, e.target), { passive: true });
     sheet.addEventListener('touchmove', (e) => move(e.touches[0].clientY, e), { passive: false });
     sheet.addEventListener('touchend', end);
     sheet.addEventListener('touchcancel', end);
     sheet.addEventListener('mousedown', (e) => start(e.clientY, e.target));
-    addEventListener('mousemove', (e) => move(e.clientY, e));
-    addEventListener('mouseup', end);
+    // Слушатели окна живут, пока шторка открыта (без утечки на каждое открытие)
+    const ctrl = new AbortController();
+    backdrop.abort = () => ctrl.abort();
+    addEventListener('mousemove', (e) => move(e.clientY, e), { signal: ctrl.signal });
+    addEventListener('mouseup', end, { signal: ctrl.signal });
     // Клик после перетаскивания не должен нажимать кнопку под пальцем
     sheet.addEventListener('click', (e) => { if (dragging) { e.stopPropagation(); e.preventDefault(); dragging = false; } }, true);
   }
 
   function openCallSheet() {
-    const hasItems = (S.session?.items || []).some((i) => i.isLocked) && !S.session?.isPaid; // счёт — когда заказ уже на кухне
+    const hasItems = (S.session?.items || []).some((i) => i.isLocked) && !visitOver(); // счёт — когда заказ уже на кухне
     const opt = (reason, label) => `<button class="menu-row" data-reason="${reason}"><span>${label}</span><img src="${UI('chevron.svg')}" alt=""></button>`;
     openSheet(`<h2>Позвать официанта</h2><p class="sheet__hint">Официант увидит стол №${esc(S.table)} и причину вызова</p>
       <div class="menu-rows">${opt('general', 'Нужна помощь')}${opt('order', 'Дозаказ')}${hasItems ? opt('bill', 'Попросить счёт') : ''}${opt('question', 'Вопрос по блюдам')}</div>
@@ -1081,7 +1144,9 @@
   }
 
   function openProduct(id) {
-    const p = findProduct(id);
+    // Подсказка AI может быть блюдом, которого уже нет в загруженном меню, — карточка из её данных
+    const r = findProduct(id) ? null : (S.ai.results || []).find((x) => String(x.productId) === String(id));
+    const p = findProduct(id) || (r && { id: r.productId, iikoId: r.iikoId, name: r.name, price: r.price, image: r.image, weight: r.weight, description: r.description });
     if (!p) return;
     const draw = () => productDetailHtml(p);
     openSheet(`<div id="product-sheet">${draw()}</div>`, (sheet) => {
@@ -1110,22 +1175,23 @@
   async function runOnlinePay(tip, guestIds = null) {
     const p = await api('POST', '/api/v1/table/pay/start', { sessionId: S.sessionId, tipAmount: tip, guestIds });
     await loadCpWidget();
-    await new Promise((resolve) => {
+    const outcome = await new Promise((resolve) => {
       const widget = new window.cp.CloudPayments({ language: 'ru-RU' });
       widget.pay('charge', {
         publicId: p.publicId, description: p.description, amount: p.amount, currency: 'RUB',
         invoiceId: p.invoiceId, accountId: p.accountId, skin: 'mini',
-      }, { onSuccess: resolve, onFail: resolve, onComplete: () => {} });
+      }, { onSuccess: () => resolve({ ok: true }), onFail: (reason) => resolve({ ok: false, reason }), onComplete: () => {} });
     });
-    // Статус спрашиваем у сервера несколько раз: банку нужно пару секунд
-    for (let i = 0; i < 8; i++) {
+    // Гость закрыл окно или банк отказал: один раз сверяемся с сервером и не ждём зря
+    const tries = outcome.ok ? 8 : 1;
+    for (let i = 0; i < tries; i++) {
       const r = await api('POST', '/api/v1/table/pay/confirm', { sessionId: S.sessionId, invoiceId: p.invoiceId });
       if (r.session) applySession(r.session);
       if (r.status === 'completed') return 'ok';
       if (r.status === 'failed') throw new Error(r.reason ? `Оплата не прошла: ${r.reason}` : 'Оплата не прошла');
-      await new Promise((res) => setTimeout(res, 2000));
+      if (i < tries - 1) await new Promise((res) => setTimeout(res, 2000));
     }
-    return 'pending';
+    return outcome.ok ? 'pending' : 'cancelled';
   }
 
   function openPaySheet() {
@@ -1170,6 +1236,7 @@
               const res = await runOnlinePay(tipAmount());
               render();
               if (res === 'ok') { toast('Оплачено, спасибо!'); openFeedbackSheet(); return; }
+              if (res === 'cancelled') { st.paying = false; box.innerHTML = draw(); toast('Оплата отменена'); return; }
               toast('Проверяем оплату — статус обновится в течение минуты');
               closeSheet(); refreshSession(true); return;
             }
@@ -1213,9 +1280,10 @@
   }
 
   // ── Действия ───────────────────────────────────────────────
-  async function submitToWaiter(btn) {
+  async function submitToWaiter() {
     if (!pendingCount()) { toast('Корзина пуста — добавьте блюда', true); return; }
-    if (btn) { btn.disabled = true; btn.classList?.add('is-busy'); }
+    if (S.submitting) return; // повторное нажатие, пока заказ уходит
+    S.submitting = true; render();
     clearTimeout(saveTimer);
     try {
       const session = await api('POST', '/api/v1/table/submit-to-waiter', { sessionId: S.sessionId, items: payloadItems() });
@@ -1226,7 +1294,8 @@
       go('order');
     } catch (e) {
       toast(e.network ? 'Нет связи. Корзина сохранена — попробуйте ещё раз' : e.message, true);
-      if (btn) { btn.disabled = false; btn.classList?.remove('is-busy', 'is-done'); }
+    } finally {
+      S.submitting = false; render();
     }
   }
 
@@ -1257,15 +1326,17 @@
     const tips = S.config?.tipPresets || [0, 10, 15, 20];
     const st = { method: online ? 'online' : 'card', tipPct: 0, busy: false };
     const inScope = (i) => !multi || picked.size === guests.length || picked.has(String(i.guestId));
+    // В счёт — только переданное на кухню; черновики корзин не оплачиваются
+    const sent = (s.items || []).filter((i) => i.isLocked);
     const sum = (list) => list.reduce((n, i) => n + i.lineTotal, 0);
     const amounts = () => {
-      const items = (s.items || []).filter(inScope);
+      const items = sent.filter(inScope);
       const kitchen = sum(items.filter((i) => !isBar(i) && !covered(i)));
       const bar = sum(items.filter(isBar));
       return { kitchen, bar, all: sum(items.filter((i) => isBar(i) || !covered(i))) };
     };
-    const sumOf = (id) => sum((s.items || []).filter((i) => String(i.guestId) === String(id)));
-    const noGuest = sum((s.items || []).filter((i) => !i.guestId));
+    const sumOf = (id) => sum(sent.filter((i) => String(i.guestId) === String(id)));
+    const noGuest = sum(sent.filter((i) => !i.guestId));
     const tipAmount = (base) => Math.round((base * st.tipPct) / 100);
     const methodsHtml = () => {
       const list = [...(online ? [['online', 'Онлайн']] : []), ['card', 'Картой официанту'], ['cash', 'Наличными']];
@@ -1315,6 +1386,7 @@
       st.busy = true; box.innerHTML = draw();
       try {
         const res = await runOnlinePay(tipAmount(a.kitchen), ids);
+        if (res === 'cancelled') { st.busy = false; box.innerHTML = draw(); toast('Оплата отменена'); return; }
         if (a.bar > 0) await sendBillRequest(ids, 'card', 'bar', true);
         render();
         if (res === 'ok') {
@@ -1452,12 +1524,14 @@
   }
 
   // ── Свайп влево по строке корзины — кнопка «удалить» (как в макете) ──
+  // Открытая строка хранится в состоянии (S.openLine): перерисовка экрана её не закрывает
   let sw = null;
   addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.cart-line__del')) return; // нажатие на «удалить» — строка остаётся открытой
     const row = e.target.closest('[data-swipe-del]');
-    document.querySelectorAll('.cart-line.is-open').forEach((l) => { if (!row || l !== row.parentElement) l.classList.remove('is-open'); });
+    if (!row && S.openLine) { S.openLine = null; render(); }
     if (!row || e.target.closest('button')) return;
-    sw = { row, x0: e.clientX, y0: e.clientY, dx: 0, open: row.parentElement.classList.contains('is-open'), active: false };
+    sw = { row, id: row.dataset.swipeDel, x0: e.clientX, y0: e.clientY, dx: 0, open: S.openLine === row.dataset.swipeDel, active: false };
   });
   addEventListener('pointermove', (e) => {
     if (!sw) return;
@@ -1472,15 +1546,15 @@
   });
   const endSwipe = () => {
     if (!sw) return;
-    const { row, dx, active } = sw;
+    const { row, id, dx, active, open } = sw;
     sw = null; S.dragging = false;
-    if (!active) return;
-    row.style.transition = ''; row.style.transform = '';
-    row.parentElement.classList.toggle('is-open', dx < -40);
+    if (active) { row.style.transition = ''; row.style.transform = ''; S.openLine = dx < -40 ? id : null; }
+    else if (open) S.openLine = null; // касание открытой строки — закрыть
+    render(); // в том числе то, что пришло с сервера, пока палец тянул строку
   };
   addEventListener('pointerup', endSwipe);
   addEventListener('pointercancel', endSwipe);
-  addEventListener('online', () => { S.offline = false; render(); });
+  addEventListener('online', () => { S.offline = false; render(); flushCart(); loadCatalog({ quiet: true }); });
   addEventListener('offline', () => { S.offline = true; render(); });
 
   // ── Рендер ─────────────────────────────────────────────────
@@ -1613,7 +1687,7 @@
     else if (action === 'place') openPlaceSheet();
     else if (action === 'exit-fullscreen') exitFullscreen();
     else if (action === 'call') { if (S.session) openCallSheet(); else openSeatSheet(openCallSheet); }
-    else if (action === 'submit') submitToWaiter(t.closest('button'));
+    else if (action === 'submit') submitToWaiter();
     else if (action === 'pay') openPaySheet();
     else if (action === 'bill') requestBill();
     else if (action === 'all-cats') openCategoriesSheet();
@@ -1641,6 +1715,7 @@
       clearTimeout(searchTimer);
       searchTimer = setTimeout(render, 150);
     }
+    if (e.target.id === 'ai-input') S.ai.draft = e.target.value; // набранное не теряется при перерисовке
   });
 
   // ── Старт ──────────────────────────────────────────────────
@@ -1661,13 +1736,29 @@
       const fresh = await api('GET', `/api/v1/restaurants/${encodeURIComponent(S.restaurant || '')}/catalog`, null, { timeout: 20000 });
       S.catalog = fresh;
       S.catalogError = null;
-      if (fresh.products?.length) store.set(catalogKey(), fresh); else store.del(catalogKey());
+      saveCatalogCopy(fresh);
       syncCartProducts();
       render();
     } catch (e) {
       if (!S.catalog) { S.catalogError = e.message || 'Не удалось загрузить меню'; render(); }
       else if (!quiet) toast('Нет связи — показываем сохранённое меню', true);
     } finally { catalogBusy = false; }
+  }
+  /**
+   * Копия меню на телефоне — только текущего ресторана, перезапись лишь при изменении.
+   * Не хватило места — копия не пишется, а вход, корзина и стол (они важнее) не страдают.
+   */
+  let savedSig = '';
+  function saveCatalogCopy(cat) {
+    const key = `fm:${catalogKey()}`;
+    try {
+      for (const k of Object.keys(localStorage)) if (k.startsWith('fm:catalog:') && k !== key) localStorage.removeItem(k);
+      if (!cat.products?.length) { localStorage.removeItem(key); return; }
+      const sig = `${cat.fetchedAt}|${cat.products.length}|${(cat.stopList || []).join(',')}`;
+      if (sig === savedSig) return;
+      localStorage.setItem(key, JSON.stringify(cat));
+      savedSig = sig;
+    } catch { try { localStorage.removeItem(key); } catch { /* приватный режим */ } }
   }
   /** Товары в корзине — актуальными данными меню (цена, стоп, остаток). */
   function syncCartProducts() {
@@ -1684,7 +1775,7 @@
   function startPolling() {
     if (polling) return;
     polling = true;
-    setInterval(() => { if (!document.hidden) refreshSession(); }, 10000);
+    setInterval(() => { if (document.hidden) return; if (S.cartDirty) flushCart(); else refreshSession(); }, 10000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshSession(); });
   }
 
@@ -1702,18 +1793,30 @@
   }
 
   async function boot() {
+    // Быстрый старт: ресторан известен из QR — настройки и меню грузятся параллельно,
+    // а копия с прошлого визита показывается сразу (и без сети)
+    const cachedConfig = S.restaurant ? store.get(`config:${S.restaurant}`) : null;
+    if (cachedConfig?.restaurant) { S.config = cachedConfig; render(); }
+    const catalogFirst = S.restaurant ? loadCatalog() : null;
     try {
-      S.config = await api('GET', `/api/v1/config?restaurant=${encodeURIComponent(S.restaurant || '')}`);
-      S.restaurant = S.config.restaurant.slug;
+      const config = await api('GET', `/api/v1/config?restaurant=${encodeURIComponent(S.restaurant || '')}`);
+      const slugChanged = config.restaurant.slug !== S.restaurant;
+      S.config = config;
+      S.restaurant = config.restaurant.slug;
       store.set('restaurant', S.restaurant);
+      store.set(`config:${S.restaurant}`, config);
+      if (slugChanged) { S.catalog = null; await catalogFirst; loadCatalog(); }
     } catch (e) {
-      $('#app').innerHTML = `<div class="auth"><div class="auth__main"><div class="logo">ФУДЖИ</div><p style="text-align:center">${esc(e.message)}</p>
-        <button class="btn btn--dark btn--center" onclick="location.reload()">Повторить</button></div></div>`;
-      return;
+      if (!S.config) {
+        $('#app').innerHTML = `<div class="auth"><div class="auth__main"><div class="logo">ФУДЖИ</div><p style="text-align:center">${esc(e.message)}</p>
+          <button class="btn btn--dark btn--center" onclick="location.reload()">Повторить</button></div></div>`;
+        return;
+      }
+      S.offline = Boolean(e.network) || S.offline; // работаем по сохранённой копии
     }
     // Меню видно сразу, без входа и выбора стола
     render();
-    loadCatalog();
+    if (!catalogFirst) loadCatalog();
     startCatalogRefresh();
 
     const fujiToken = params.get('fujiToken');
@@ -1763,6 +1866,8 @@
       // Пустое поле формы — «как в iiko»: оставляем то, что уже в меню точки
       for (const k of CONTENT) if (product[k] != null && product[k] !== '') merged[k] = product[k];
       if (product.allergensText?.length) merged.allergensText = product.allergensText;
+      // Метки и размер карточки приходят всегда: пусто — «сняты» в форме
+      for (const k of ['badge', 'cardSize']) if (k in product) merged[k] = product[k] || null;
       if (idx >= 0) list[idx] = merged; else list.unshift(merged);
       S.catalog = { ...base, products: list };
       S.menu.search = '';
@@ -1773,8 +1878,9 @@
       lastHtml = '';
       render();
       document.body.classList.toggle('preview-list', view === 'list');
+      S.previewFocus = String(merged.id); // класс рисует dishCard — перерисовка его не снимет
+      render();
       const el = document.querySelector(`.dish[data-product="${CSS.escape(String(merged.id))}"]`);
-      el?.classList.add('is-focus');
       el?.scrollIntoView({ block: 'center' });
       if (view !== 'list') {
         openProduct(merged.id);

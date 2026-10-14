@@ -234,7 +234,7 @@ export function mapSession({ session, restaurant, items, guests = [] }, extra = 
     kitchenStatus: session.kitchen_status || null,
     kitchenLabel: KITCHEN_LABELS[session.kitchen_status] || null,
     kitchenStatusAt: session.iiko_status_at || null,
-    canRequestBill: !isPaid && mapped.length > 0 && wf !== WORKFLOW.BILL_REQUESTED,
+    canRequestBill: !isPaid && mapped.some((i) => i.isLocked) && wf !== WORKFLOW.BILL_REQUESTED,
     isPaid,
     items: mapped,
     ...extra,
@@ -606,14 +606,16 @@ export async function requestBill(sessionId, { guest = null, guestIds = null, me
   const ctx = await requireContext(sessionId);
   if (ctx.session.payment_status === 'paid') throw httpError(409, 'Счёт уже оплачен');
   assertOpen(ctx.session);
-  if (!ctx.items.length) throw httpError(400, 'В заказе пока нет блюд');
+  // В счёт — только то, что уже передано на кухню: черновики корзин гостей не оплачиваются
+  const sent = ctx.items.filter((i) => i.is_locked);
+  if (!sent.length) throw httpError(400, 'В заказе пока нет блюд, переданных на кухню');
   const guests = tableGuests(ctx);
   const ids = Array.isArray(guestIds) ? [...new Set(guestIds.map(String))].filter((id) => guests.some((g) => String(g.id) === id)) : [];
   const whole = !ids.length || ids.length >= guests.length;
   const barOnly = part === 'bar';
   const pay = BILL_METHODS[method] ? method : null;
-  const lines = ctx.items.filter((i) => (!barOnly || (i.source || 'main') !== 'main') && (whole || ids.includes(String(i.guest_id))));
-  const amount = !barOnly && whole ? parseFloat(ctx.session.total || 0) : lines.reduce((n, i) => n + parseFloat(i.line_total || 0), 0);
+  const lines = sent.filter((i) => (!barOnly || (i.source || 'main') !== 'main') && (whole || ids.includes(String(i.guest_id))));
+  const amount = lines.reduce((n, i) => n + parseFloat(i.line_total || 0), 0);
   const names = whole ? [] : ids.map((id) => guests.find((g) => String(g.id) === id)?.name || 'Гость');
   const by = guest ? (guests.find((g) => String(g.id) === String(guest.id))?.name || guest.name || 'Гость') : null;
   const request = {

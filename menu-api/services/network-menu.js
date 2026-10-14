@@ -8,7 +8,7 @@
  */
 import pool from '../db/pool.js';
 import { accessibleOrgIds } from '../iiko-client.js';
-import { getRestaurantCatalog, invalidateCatalogCache } from './catalog.js';
+import { getRestaurantCatalog } from './catalog.js';
 import { getStopListIds } from './stoplist.js';
 import { cleanMenuName, menuKey } from '../lib/menu-key.js';
 
@@ -119,7 +119,7 @@ export async function getNetworkMenu(restaurants) {
     `SELECT DISTINCT ON (lower(o.product_name)) o.product_name, o.name, o.image_url, o.description, o.badge, o.card_size
        FROM menu_overrides o
       WHERE o.product_name IS NOT NULL AND (o.restaurant_id IS NULL OR o.restaurant_id = ANY($1::uuid[]))
-        AND (o.image_url IS NOT NULL OR o.description IS NOT NULL OR o.name IS NOT NULL OR o.badge IS NOT NULL)
+        AND (o.image_url IS NOT NULL OR o.description IS NOT NULL OR o.name IS NOT NULL OR NULLIF(o.badge, '') IS NOT NULL)
       ORDER BY lower(o.product_name), o.updated_at DESC`,
     [[...connected]],
   );
@@ -152,14 +152,16 @@ export async function getCategoryList(restaurants) {
   const { rows } = await pool.query('SELECT key, image_url FROM category_content');
   const images = new Map(rows.map((r) => [r.key, r.image_url]));
   const list = new Map();
-  for (const r of restaurants) {
-    const catalog = await getRestaurantCatalog(r);
+  const catalogs = await Promise.all(restaurants.map((r) => getRestaurantCatalog(r)));
+  for (const catalog of catalogs) {
     const used = new Map();
     for (const p of catalog.products || []) used.set(String(p.parentGroup), (used.get(String(p.parentGroup)) || 0) + 1);
     for (const g of catalog.groups || []) {
       const key = menuKey(g.name);
       if (!key || !used.get(String(g.id))) continue;
-      const cur = list.get(key) || { key, name: g.name, image: images.get(key) || null, isBar: Boolean(g.isBar), points: 0, items: 0 };
+      // iikoImage — картинка раздела из iiko: гость видит её, пока своей нет
+      const cur = list.get(key) || { key, name: g.name, image: images.get(key) || null, iikoImage: null, isBar: Boolean(g.isBar), points: 0, items: 0 };
+      if (!cur.iikoImage && g.image && g.image !== cur.image) cur.iikoImage = g.image;
       cur.points += 1;
       cur.items = Math.max(cur.items, used.get(String(g.id)));
       list.set(key, cur);
@@ -170,13 +172,12 @@ export async function getCategoryList(restaurants) {
 
 /** Картинка раздела (пусто — стандартная по названию). Ключ — название раздела без регистра и пометок iiko. */
 export async function setCategoryImage(name, imageUrl) {
-  const key = menuKey(name);
+  const key = menuKey(String(name).slice(0, 200)).slice(0, 200);
   if (!key) return null;
   await pool.query(
     `INSERT INTO category_content (key, name, image_url, updated_at) VALUES ($1, $2, $3, NOW())
      ON CONFLICT (key) DO UPDATE SET name = EXCLUDED.name, image_url = EXCLUDED.image_url, updated_at = NOW()`,
     [key, String(name).slice(0, 200), imageUrl || null],
   );
-  invalidateCatalogCache();
   return { key, image: imageUrl || null };
 }

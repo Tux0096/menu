@@ -5,6 +5,9 @@ export function useNotify() {
     success(title: string, description?: string) {
       toast.add({ title, description, color: 'green', icon: 'i-heroicons-check-circle' });
     },
+    warning(title: string, description?: string) {
+      toast.add({ title, description, color: 'amber', icon: 'i-heroicons-exclamation-circle', timeout: 9000 });
+    },
     error(error: unknown, title = 'Ошибка') {
       toast.add({
         title,

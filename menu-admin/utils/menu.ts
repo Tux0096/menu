@@ -22,9 +22,8 @@ export const badgeList = (v: string | null | undefined) => String(v || '').split
 export const SOURCE_LABELS: Record<string, string> = { main: 'Кухня', bar: 'Бар' };
 export const sourceLabel = (code: string | null | undefined) => SOURCE_LABELS[code || 'main'] ?? code ?? '';
 
-/** Картинки iiko — мегабайты: в списке берём уменьшенную копию через /img */
+/** Картинки iiko и загруженные в админке — мегабайты: в списке берём уменьшенную копию через /img (WebP) */
 export function thumbUrl(url: string | null | undefined, width = 320): string | undefined {
   if (!url) return undefined;
-  if (url.startsWith('/media/')) return url;
-  return url.startsWith("http") ? `/img?u=${encodeURIComponent(url)}&w=${width}` : url;
+  return url.startsWith('http') || url.startsWith('/media/') ? `/img?u=${encodeURIComponent(url)}&w=${width}` : url;
 }
