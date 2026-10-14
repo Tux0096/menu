@@ -29,14 +29,15 @@ router.get('/health', h(async () => ({
 
 router.get('/api/v1/restaurants', h(async () => {
   const { rows } = await pool.query(
-    `SELECT r.id, r.name, r.address, r.slug, r.phone, r.tables_count, r.organization_id,
+    `SELECT r.id, r.name, r.address, r.slug, r.phone, r.tables_count, r.organization_id, r.hours_text,
             EXISTS (SELECT 1 FROM products p WHERE p.restaurant_id = r.id AND p.is_published) AS has_products
      FROM restaurants r WHERE r.is_disabled = FALSE ORDER BY r.sort_order, r.name`,
   );
   // Доступен для заказа: есть меню и точка подключена к API-логину iiko
   const allowed = await accessibleOrgIds();
-  return rows.map(({ organization_id: orgId, has_products: hasProducts, ...r }) => ({
+  return rows.map(({ organization_id: orgId, has_products: hasProducts, hours_text: workHours, ...r }) => ({
     ...r,
+    workHours: workHours || null,
     hasMenu: hasProducts && (!allowed || allowed.has(orgId)),
   }));
 }));
@@ -59,7 +60,7 @@ router.get('/api/v1/config', h(async (req) => {
   const live = promos.filter((p) => (!p.restaurant_id || p.restaurant_id === r.id)
     && (!p.starts_at || new Date(p.starts_at).getTime() <= now) && (!p.ends_at || new Date(p.ends_at).getTime() > now));
   return {
-    restaurant: { name: r.name, address: r.address, slug: r.slug, phone: r.phone },
+    restaurant: { name: r.name, address: r.address, slug: r.slug, phone: r.phone, workHours: r.hours_text || null },
     chips: chips.map((c) => ({ id: c.id, label: c.label, query: c.query, emoji: c.emoji })),
     promos: live.map((p) => ({
       id: p.id, title: p.title, text: p.text, image: p.image_url, placement: p.placement || 'menu',

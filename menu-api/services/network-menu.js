@@ -8,7 +8,7 @@
  */
 import pool from '../db/pool.js';
 import { accessibleOrgIds } from '../iiko-client.js';
-import { getRestaurantCatalog } from './catalog.js';
+import { getRestaurantCatalog, invalidateCatalogCache } from './catalog.js';
 import { getStopListIds } from './stoplist.js';
 import { cleanMenuName, menuKey } from '../lib/menu-key.js';
 
@@ -52,13 +52,14 @@ export async function getNetworkMenu(restaurants) {
     const base = menuKey(extra.iikoName || name);
     if (!base) return;
     const key = cell.source && cell.source !== 'main' ? `${base}|${cell.source}` : base;
-    if (!items.has(key)) items.set(key, { key, name, iikoName: cleanMenuName(extra.iikoName || name), group: null, image: null, description: null, badge: null, points: {} });
+    if (!items.has(key)) items.set(key, { key, name, iikoName: cleanMenuName(extra.iikoName || name), group: null, image: null, description: null, badge: null, cardSize: null, points: {} });
     const it = items.get(key);
     it.points[slug] = cell;
     if (!it.group && extra.group) it.group = extra.group;
     if (!it.image && extra.image) it.image = extra.image;
     if (!it.description && extra.description) it.description = extra.description;
     if (!it.badge && extra.badge) it.badge = extra.badge;
+    if (!it.cardSize && extra.cardSize) it.cardSize = extra.cardSize;
   };
 
   const catalogs = new Map();
@@ -88,6 +89,7 @@ export async function getNetworkMenu(restaurants) {
         image: p.image || null,
         description: p.description || null,
         badge: p.badge || null,
+        cardSize: p.cardSize || null,
       });
     }
     // Скрытые в админке (в каталоге их нет): берём цену и раздел из выгрузки iiko
@@ -114,7 +116,7 @@ export async function getNetworkMenu(restaurants) {
   // контент не теряется — блюдо вернут в iiko, и карточка снова заработает
   const connected = new Set(points.filter((p) => p.connected).map((p) => p.id));
   const { rows: cards } = await pool.query(
-    `SELECT DISTINCT ON (lower(o.product_name)) o.product_name, o.name, o.image_url, o.description, o.badge
+    `SELECT DISTINCT ON (lower(o.product_name)) o.product_name, o.name, o.image_url, o.description, o.badge, o.card_size
        FROM menu_overrides o
       WHERE o.product_name IS NOT NULL AND (o.restaurant_id IS NULL OR o.restaurant_id = ANY($1::uuid[]))
         AND (o.image_url IS NOT NULL OR o.description IS NOT NULL OR o.name IS NOT NULL OR o.badge IS NOT NULL)
@@ -128,7 +130,7 @@ export async function getNetworkMenu(restaurants) {
     present.add(key);
     items.set(key, {
       key, name: c.name || cleanMenuName(c.product_name), iikoName: cleanMenuName(c.product_name), gone: true,
-      group: null, image: c.image_url, description: c.description, badge: c.badge, points: {},
+      group: null, image: c.image_url, description: c.description, badge: c.badge, cardSize: c.card_size, points: {},
     });
   }
 
@@ -143,4 +145,38 @@ export async function getNetworkMenuPoints(restaurants) {
   const points = [];
   for (const r of restaurants) points.push(await pointInfo(r, allowed, await getRestaurantCatalog(r)));
   return { points };
+}
+
+/** Разделы меню подключённых точек с картинками из админки (шторка «Меню» у гостя). */
+export async function getCategoryList(restaurants) {
+  const { rows } = await pool.query('SELECT key, image_url FROM category_content');
+  const images = new Map(rows.map((r) => [r.key, r.image_url]));
+  const list = new Map();
+  for (const r of restaurants) {
+    const catalog = await getRestaurantCatalog(r);
+    const used = new Map();
+    for (const p of catalog.products || []) used.set(String(p.parentGroup), (used.get(String(p.parentGroup)) || 0) + 1);
+    for (const g of catalog.groups || []) {
+      const key = menuKey(g.name);
+      if (!key || !used.get(String(g.id))) continue;
+      const cur = list.get(key) || { key, name: g.name, image: images.get(key) || null, isBar: Boolean(g.isBar), points: 0, items: 0 };
+      cur.points += 1;
+      cur.items = Math.max(cur.items, used.get(String(g.id)));
+      list.set(key, cur);
+    }
+  }
+  return [...list.values()].sort((a, b) => Number(a.isBar) - Number(b.isBar) || a.name.localeCompare(b.name, 'ru'));
+}
+
+/** Картинка раздела (пусто — стандартная по названию). Ключ — название раздела без регистра и пометок iiko. */
+export async function setCategoryImage(name, imageUrl) {
+  const key = menuKey(name);
+  if (!key) return null;
+  await pool.query(
+    `INSERT INTO category_content (key, name, image_url, updated_at) VALUES ($1, $2, $3, NOW())
+     ON CONFLICT (key) DO UPDATE SET name = EXCLUDED.name, image_url = EXCLUDED.image_url, updated_at = NOW()`,
+    [key, String(name).slice(0, 200), imageUrl || null],
+  );
+  invalidateCatalogCache();
+  return { key, image: imageUrl || null };
 }

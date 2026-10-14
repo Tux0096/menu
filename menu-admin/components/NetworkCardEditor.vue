@@ -27,7 +27,7 @@ const targets = ref<string[]>([]);
 
 const blank = () => ({
   name: '', image_url: '', video_url: '', description: '', badge: '', weight: '',
-  energy: '', proteins: '', fats: '', carbs: '', allergens: '', is_recommended: false,
+  energy: '', proteins: '', fats: '', carbs: '', allergens: '', is_recommended: false, card_size: '',
 });
 const form = reactive(blank());
 const initial = ref<Record<string, unknown>>({});
@@ -40,7 +40,7 @@ watch(
     tab.value = props.tab ?? 'card';
     previewSlug.value = '';
     // Своё название — только если отличается от названия в iiko; пусто — гость видит название из iiko
-    Object.assign(form, blank(), { name: it.iikoName && it.name !== it.iikoName ? it.name : '', image_url: it.image ?? '', description: it.description ?? '', badge: it.badge ?? '' });
+    Object.assign(form, blank(), { name: it.iikoName && it.name !== it.iikoName ? it.name : '', image_url: it.image ?? '', description: it.description ?? '', badge: it.badge ?? '', card_size: it.cardSize ?? '' });
     initial.value = { ...form };
     targets.value = available.value.map((p) => p.slug);
     takeSnapshot();
@@ -90,6 +90,17 @@ async function save() {
   } finally {
     saving.value = false;
   }
+}
+
+// Метки — коды через запятую (hit,new…); выбранные в порядке набора из макета
+const tags = computed(() => badgeList(form.badge));
+const legacyTags = computed(() => tags.value.filter((b) => !TAGS.some((t) => t.value === b)));
+function toggleTag(v: string) {
+  const set = new Set(tags.value);
+  if (set.has(v)) set.delete(v);
+  else set.add(v);
+  const known = TAGS.map((t) => t.value).filter((x) => set.has(x));
+  form.badge = [...known, ...[...set].filter((x) => !known.includes(x))].join(',');
 }
 
 function onVideo(url: string, file: File) {
@@ -144,6 +155,7 @@ function previewProduct() {
     video,
     weight: form.weight.trim() || null,
     badge: form.badge || null,
+    cardSize: form.card_size || null,
     energyAmount: numOrNull(form.energy),
     fiberAmount: numOrNull(form.proteins),
     fatAmount: numOrNull(form.fats),
@@ -299,10 +311,41 @@ async function setAll(visible: boolean) {
             <UTextarea v-model="form.description" :rows="3" :maxlength="400" autoresize />
           </UFormGroup>
           <div class="grid gap-4 sm:grid-cols-2">
-            <UFormGroup label="Метка на фото"><USelect v-model="form.badge" :options="BADGE_OPTIONS" /></UFormGroup>
-            <UFormGroup label="Вес / объём"><UInput v-model="form.weight" placeholder="не менять" /></UFormGroup>
+            <UFormGroup label="Вес / объём" help="Например «235 г» — по нему считается КБЖУ на порцию"><UInput v-model="form.weight" placeholder="не менять" /></UFormGroup>
           </div>
-          <label class="flex items-center gap-3 text-sm"><UToggle v-model="form.is_recommended" /> Рекомендуем</label>
+          <UFormGroup label="Метки на фото" help="Можно несколько. Гость видит значки в списке и подписи в карточке блюда.">
+            <div class="flex flex-wrap gap-2">
+              <button
+                v-for="t in TAGS"
+                :key="t.value"
+                type="button"
+                class="rounded-full px-3 py-1 text-xs font-semibold ring-2 transition"
+                :class="tags.includes(t.value) ? 'ring-brand-500' : 'opacity-60 ring-transparent hover:opacity-100'"
+                :style="{ background: t.bg, color: t.color }"
+                :aria-pressed="tags.includes(t.value)"
+                @click="toggleTag(t.value)"
+              >
+                {{ t.label }}
+              </button>
+              <button
+                v-for="b in legacyTags"
+                :key="b"
+                type="button"
+                class="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600 ring-2 ring-brand-500"
+                title="Прежняя метка — нажмите, чтобы убрать"
+                @click="toggleTag(b)"
+              >
+                {{ BADGES[b] || b }} ×
+              </button>
+            </div>
+          </UFormGroup>
+          <div class="flex flex-wrap gap-x-6 gap-y-2">
+            <label class="flex items-center gap-3 text-sm"><UToggle v-model="form.is_recommended" /> Рекомендуем (AI советует чаще)</label>
+            <label class="flex items-center gap-3 text-sm">
+              <UToggle :model-value="form.card_size === 'big'" @update:model-value="(v: boolean) => (form.card_size = v ? 'big' : '')" />
+              Большая карточка в списке (фото на всю ширину)
+            </label>
+          </div>
         </section>
 
         <section class="space-y-4">

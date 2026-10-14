@@ -393,6 +393,18 @@ const SCHEMA = `
   ALTER TABLE table_payments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
   CREATE UNIQUE INDEX IF NOT EXISTS idx_table_payments_invoice ON table_payments (invoice_id) WHERE invoice_id IS NOT NULL;
   ALTER TABLE table_payments ADD COLUMN IF NOT EXISTS guest_ids JSONB;
+  -- Макет меню: несколько меток у блюда (через запятую), большая карточка в списке
+  ALTER TABLE menu_overrides ALTER COLUMN badge TYPE VARCHAR(120);
+  ALTER TABLE menu_overrides ADD COLUMN IF NOT EXISTS card_size VARCHAR(10);
+  -- Время работы точки — в выборе ресторана у гостя
+  ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS hours_text VARCHAR(60);
+  -- Картинки разделов меню (шторка «Меню»): общие для сети, по названию раздела; выгрузка iiko их не трогает
+  CREATE TABLE IF NOT EXISTS category_content (
+    key VARCHAR(200) PRIMARY KEY,
+    name VARCHAR(200) NOT NULL,
+    image_url TEXT,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+  );
   -- Ключи онлайн-оплаты по ресторанам (задаёт администратор в админке «Оплата»)
   CREATE TABLE IF NOT EXISTS restaurant_payment_settings (
     restaurant_id UUID PRIMARY KEY REFERENCES restaurants(id) ON DELETE CASCADE,

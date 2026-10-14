@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { IikoSetup, NetworkPoint } from '~/types/api';
+import type { IikoSetup, NetworkPoint, PointInfo } from '~/types/api';
 import { useRestaurantStore } from '~/stores/restaurant';
 
 // Карточка точки: сколько iiko — одна (кухня и бар в одной iiko) или две (бар в отдельной iiko со своим ключом).
@@ -23,15 +23,26 @@ const setup = ref<IikoSetup | null>(null);
 const loadError = ref('');
 const mode = ref<'one' | 'two'>('one');
 const form = reactive({ creds: '', organizationId: '', externalMenuId: '' });
+// Для гостя: адрес и время работы — в выборе ресторана
+const info = ref<PointInfo | null>(null);
+const infoForm = reactive({ address: '', workHours: '' });
+const infoChanged = computed(() => Boolean(info.value)
+  && (infoForm.address.trim() !== info.value!.address || infoForm.workHours.trim() !== info.value!.workHours));
 
 watch(
   () => props.point,
   async (p) => {
     setup.value = null;
+    info.value = null;
     loadError.value = '';
     if (!p) return;
     try {
-      const s = await useAuthFetch<IikoSetup>('/admin/iiko-setup', q(), { restaurant: false });
+      const [s, i] = await Promise.all([
+        useAuthFetch<IikoSetup>('/admin/iiko-setup', q(), { restaurant: false }),
+        useAuthFetch<PointInfo>('/admin/point-info', q(), { restaurant: false }),
+      ]);
+      info.value = i;
+      Object.assign(infoForm, { address: i.address, workHours: i.workHours });
       setup.value = s;
       mode.value = s.mode;
       Object.assign(form, { creds: s.bar?.creds ?? '', organizationId: s.bar?.organizationId ?? '', externalMenuId: s.bar?.externalMenuId ?? '' });
@@ -80,7 +91,7 @@ const menuOptions = computed(() => [
 ]);
 const credsOptions = computed(() => (setup.value?.creds ?? []).map((c) => ({ value: c.code, label: c.label })));
 
-const changed = computed(() => {
+const iikoChanged = computed(() => {
   const s = setup.value;
   if (!s) return false;
   if (mode.value !== s.mode) return true;
@@ -88,9 +99,30 @@ const changed = computed(() => {
   return form.creds !== (s.bar?.creds ?? '') || form.organizationId !== (s.bar?.organizationId ?? '') || form.externalMenuId !== (s.bar?.externalMenuId ?? '');
 });
 
+const changed = computed(() => iikoChanged.value || infoChanged.value);
+
 const saving = ref(false);
 async function save() {
   if (!props.point || !setup.value) return;
+  if (infoChanged.value) {
+    saving.value = true;
+    try {
+      info.value = await useAuthFetch<PointInfo>('/admin/point-info', {
+        method: 'POST', ...q(), body: { address: infoForm.address.trim(), workHours: infoForm.workHours.trim() },
+      }, { restaurant: false });
+      if (!iikoChanged.value) {
+        notify.success('Карточка точки сохранена');
+        emit('saved');
+        emit('close');
+        return;
+      }
+    } catch (e) {
+      notify.error(e, 'Не удалось сохранить адрес и время работы');
+      return;
+    } finally {
+      saving.value = false;
+    }
+  }
   if (mode.value === 'two' && !form.organizationId) {
     notify.error('Выберите организацию бара в iiko');
     return;
@@ -144,6 +176,16 @@ const shortName = (p: NetworkPoint) => p.name.replace(/^Фуджи\s+/i, '');
         <LoadError v-if="loadError" :message="loadError" />
         <TableSkeleton v-else-if="!setup" :rows="3" />
         <template v-else>
+          <section class="space-y-3">
+            <h3 class="panel-section-title">Для гостей</h3>
+            <UFormGroup label="Адрес" help="Под названием точки в выборе ресторана и в окне входа за стол">
+              <UInput v-model="infoForm.address" maxlength="300" placeholder="Ленинградская, 60" />
+            </UFormGroup>
+            <UFormGroup label="Время работы" help="Например «9:00 – 23:30». Пусто — строка не показывается">
+              <UInput v-model="infoForm.workHours" maxlength="60" placeholder="9:00 – 23:30" />
+            </UFormGroup>
+          </section>
+
           <section class="space-y-3">
             <h3 class="panel-section-title">Сколько iiko на точке</h3>
             <button
