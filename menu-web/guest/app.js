@@ -232,6 +232,9 @@
     const line = S.cart[key] || { qty: 0, product };
     const next = line.qty + delta;
     if (delta > 0 && isStopped(product)) { toast('Эта позиция сейчас недоступна', true); return; }
+    // Ограниченный остаток в iiko: больше, чем осталось, официант на кухню не отправит
+    const left = Number((findProduct(key) || product).stopBalance) || 0;
+    if (delta > 0 && left && next - lockedQty(key) > left) { toast(`Осталось только ${left} шт.`, true); return; }
     if (delta < 0 && next < lockedQty(key)) { toast('Это блюдо уже готовится — убрать можно через официанта', true); return; }
     if (next <= 0) delete S.cart[key]; else S.cart[key] = { ...line, qty: next, product };
     persistCart();
@@ -454,7 +457,7 @@
       const icon = key === 'ai' ? `<img src="${UI('nav-ai.png')}" alt="" class="nav__orb">`
         : `<img src="${UI(`nav-${iconName}${active ? '-active' : ''}.svg`)}" alt="">`;
       return `<button class="nav__item ${active ? 'is-active' : ''}" ${attr} aria-label="${label}">
-        <span class="nav__icon nav__icon--${key}">${icon}${key === 'order' && count ? `<span class="badge">${count}</span>` : ''}</span><span class="nav__label">${label}</span></button>`;
+        <span class="nav__icon nav__icon--${key}">${icon}${key === 'order' && count ? `<span class="badge" data-key="badge-${count}">${count}</span>` : ''}</span><span class="nav__label">${label}</span></button>`;
     };
     return `<nav class="nav" aria-label="Навигация">
       ${item('menu', 'Главная', 'data-go="menu"', 'home')}
@@ -478,7 +481,7 @@
     const qty = S.cart[String(p.id)]?.qty || 0;
     const stopped = isStopped(p);
     const sub = reason || p.description || '';
-    const count = qty && !stopped ? `<span class="dish__count" aria-label="В заказе ${qty}">${qty}</span>` : '';
+    const count = qty && !stopped ? `<span class="dish__count" data-key="count-${qty}" aria-label="В заказе ${qty}">${qty}</span>` : '';
     if (p.cardSize === 'big' && !reason) {
       return `<article class="dish dish--big ${stopped ? 'is-stopped' : ''} ${qty && !stopped ? 'has-qty' : ''}" data-product="${esc(p.id)}">
         <div class="dish__photo">${imgHtml(p, 'dish__img', 720)}${tagsHtml(p)}${count}</div>
@@ -490,7 +493,7 @@
       <div class="dish__body">
         <div class="dish__name">${esc(p.name)}</div>
         ${sub ? `<div class="dish__desc">${esc(sub)}</div>` : ''}
-        <div class="dish__foot"><span class="dish__weight">${esc(p.weight || '')}</span>${pricePill(p, qty, stopped)}</div>
+        <div class="dish__foot"><span class="dish__weight">${esc(p.weight || '')}${p.stopBalance && !stopped ? `<i class="dish__left">осталось ${Number(p.stopBalance)}</i>` : ''}</span>${pricePill(p, qty, stopped)}</div>
       </div>
     </article>`;
   }
@@ -744,12 +747,30 @@
   }
 
   const WAITING_WAITER = ['cart_ready', 'waiter_review', 'reorder_pending'];
+  /** Почему неотправленную позицию нельзя передать: блюдо на стопе или больше остатка в iiko. */
+  function lineProblem(l, freshQty) {
+    const p = findProduct(l.product.id) || l.product;
+    const id = String(l.product.id);
+    const stoppedOnServer = (S.session?.items || []).some((i) => !i.isLocked && i.isStopped
+      && (String(i.productId) === id || String(i.iikoProductId) === id));
+    if (isStopped(p) || stoppedOnServer) return 'Закончился — уберите из заказа';
+    const left = Number(p.stopBalance) || 0;
+    if (left && freshQty > left) return `Осталось ${left} шт. — уменьшите количество`;
+    return null;
+  }
+  const blockedLines = () => cartLines()
+    .map((l) => ({ l, q: l.qty - lockedQty(l.product.id) })).filter((x) => x.q > 0 && lineProblem(x.l, x.q));
   function submitBlock() {
     const pending = pendingCount();
     const reorder = (S.session?.items || []).some((i) => i.isLocked);
     if (!pending) return '';
     // Уже передано и с тех пор не менялось — повторно отправлять нечего
     if (WAITING_WAITER.includes(S.session?.workflowStatus) && !S.changedSinceSubmit) return '';
+    const blocked = blockedLines();
+    if (blocked.length) {
+      return `<button class="btn btn--dark submit-btn" disabled>
+        <span>Уберите недоступные блюда<span class="btn__sub">${esc(blocked.map((x) => x.l.product.name).join(', ').slice(0, 80))}</span></span></button>`;
+    }
     return `<button class="btn btn--dark submit-btn" data-action="submit">
       <span>${reorder ? 'Передать дозаказ официанту' : 'Передать заказ официанту'}<span class="btn__sub">${pending} ${plural(pending, ['позиция', 'позиции', 'позиций'])} · ${rub(cartTotal())}</span></span>
       <span class="round-btn">${ICONS.arrowRight}</span></button>`;
@@ -808,7 +829,12 @@
   }
 
   function renderMenu() {
-    if (!S.catalog) return `${topbar()}<main class="screen"><div class="list"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div></main>`;
+    if (!S.catalog && S.catalogError) {
+      return `${topbar()}<main class="screen"><div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.png')}" alt="">
+        <div class="empty__title">Меню не загрузилось</div><div>${esc(S.catalogError)}</div>
+        <button class="btn btn--dark btn--center empty__btn" data-action="reload-catalog">Повторить</button></div></main>`;
+    }
+    if (!S.catalog) return `${topbar()}<main class="screen"><div class="skeleton skeleton--search"></div><div class="skeleton skeleton--cats"></div><div class="list">${'<div class="skeleton"></div>'.repeat(4)}</div></main>`;
     const sections = menuSections();
     return `${topbar()}<main class="screen">
       <form class="search ${S.menu.search ? 'is-active' : ''}" id="search-form" onsubmit="return false">
@@ -822,7 +848,9 @@
       ${sections.length ? sections.map((s, i) => `<h2 class="section-title" id="cat-${esc(s.id)}">${esc(s.name)}</h2>
         <div class="list ${i === sections.length - 1 && !S.menu.search ? 'list--last' : ''}">${s.items.map((p) => dishCard(p)).join('')}</div>`).join('')
     : S.catalog.products?.length
-      ? `<div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.png')}" alt="">Ничего не нашлось. Спросите AI — он подберёт похожее.</div>`
+      ? `<div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.png')}" alt="">
+          <div class="empty__title">Ничего не нашлось</div><div>Спросите Fudji AI — он подберёт похожее</div>
+          <button class="btn btn--dark btn--center empty__btn" data-action="ask-ai-search">Спросить AI: «${esc(S.menu.search.trim().slice(0, 40))}»</button></div>`
       : `<div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.png')}" alt="">Меню ресторана ещё загружается из iiko.<br>Загляните чуть позже или позовите официанта.</div>`}
     </main>`;
   }
@@ -871,16 +899,19 @@
     const paid = s?.isPaid;
     // Корзина — то, что ещё не ушло официанту; отправленное — блоком выше, по гостям
     const fresh = lines.map((l) => ({ l, q: l.qty - lockedQty(l.product.id) })).filter((x) => x.q > 0);
-    const cartHtml = fresh.map(({ l, q }) => `<div class="cart-line" data-key="cart-${esc(l.product.id)}">
+    const cartHtml = fresh.map(({ l, q }) => {
+      const problem = lineProblem(l, q);
+      return `<div class="cart-line ${problem ? 'is-problem' : ''}" data-key="cart-${esc(l.product.id)}">
         <div class="cart-line__row" data-swipe-del="${esc(l.product.id)}">
           ${thumb(findProduct(l.product.id) || l.product)}
-          <div class="cart-line__main"><div class="cart-line__name">${esc(l.product.name)}</div><div class="cart-line__price">${rub(l.product.price)}</div></div>
+          <div class="cart-line__main"><div class="cart-line__name">${esc(l.product.name)}</div><div class="cart-line__price">${rub(l.product.price)}</div>${problem ? `<span class="st st--stop">${esc(problem)}</span>` : ''}</div>
           ${paid ? '' : `<div class="stepper-mini">
             <button data-dec="${esc(l.product.id)}" aria-label="Убрать">${ICONS.minus}</button><b>${q}</b>
             <button data-inc="${esc(l.product.id)}" aria-label="Добавить">${ICONS.plus}</button></div>`}
         </div>
         <button class="cart-line__del" data-remove="${esc(l.product.id)}" aria-label="Удалить"><img src="${UI('trash.svg')}" alt=""></button>
-      </div>`).join('');
+      </div>`;
+    }).join('');
 
     // Отправленное: мои блюда («Вы») и остальные гости за столом
     const me = S.guest?.id || null;
@@ -917,7 +948,7 @@
         ${paid ? `<button class="btn btn--dark" data-action="new-visit"><span>Начать новый заказ</span><span class="round-btn">${ICONS.arrowRight}</span></button>
           ${s.feedbackLeft ? '' : row('data-action="feedback"', 'Оценить визит')}`
     : `${submitBlock()}
-        ${s?.items?.length && s.total > 0 && (s.canRequestBill || S.config?.onlinePay) ? `<button class="btn ${pendingCount() ? 'btn--outline' : 'btn--dark'}" data-action="bill"><span>Оплатить счёт<span class="btn__sub">${rub(s.total)}</span></span><span class="round-btn">${ICONS.arrowRight}</span></button>` : ''}
+        ${s?.items?.some((i) => i.isLocked) && s.total > 0 && (s.canRequestBill || S.config?.onlinePay) ? `<button class="btn ${pendingCount() ? 'btn--outline' : 'btn--dark'}" data-action="bill"><span>Оплатить счёт<span class="btn__sub">${rub(s.total)}</span></span><span class="round-btn">${ICONS.arrowRight}</span></button>` : ''}
         ${lines.length ? row('data-go="menu"', 'Дополнить из меню') : ''}
         ${row('data-action="call"', 'Позвать официанта', `<img class="menu-row__icon" src="${UI('status-help.svg')}" alt="">`)}
         ${canClear ? row('data-action="clear"', 'Очистить корзину') : ''}`}
@@ -931,6 +962,7 @@
     root.innerHTML = `<div class="sheet-backdrop" data-close><div class="sheet ${cls}" role="dialog" aria-modal="true"><div class="sheet__grip"></div>${html}</div></div>`;
     const backdrop = root.firstElementChild;
     const sheet = backdrop.querySelector('.sheet');
+    document.documentElement.classList.add('sheet-open'); // страница под шторкой не прокручивается
     backdrop.addEventListener('click', (e) => { if (e.target === backdrop || e.target.closest('[data-sheet-close]')) closeSheet(); });
     enableSheetDrag(backdrop, sheet);
     onMount?.(sheet);
@@ -943,10 +975,13 @@
     if (!backdrop) return;
     const sheet = backdrop.querySelector('.sheet');
     backdrop.classList.add('is-closing');
+    document.documentElement.classList.remove('sheet-open');
     sheet.style.transition = 'transform .22s ease-in';
     sheet.style.transform = 'translateY(105%)';
     setTimeout(() => { if (root.firstElementChild === backdrop) root.innerHTML = ''; }, 220);
   }
+  addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('#sheet-root').firstElementChild) closeSheet(); });
+
   /** Смахнуть шторку вниз пальцем (как в приложениях): тянется за пальцем, отпустил — закрылась или вернулась. */
   function enableSheetDrag(backdrop, sheet) {
     let y0 = null; let dy = 0; let t0 = 0; let dragging = false;
@@ -986,7 +1021,7 @@
   }
 
   function openCallSheet() {
-    const hasItems = (S.session?.items || []).length > 0 && !S.session?.isPaid;
+    const hasItems = (S.session?.items || []).some((i) => i.isLocked) && !S.session?.isPaid; // счёт — когда заказ уже на кухне
     const opt = (reason, label) => `<button class="menu-row" data-reason="${reason}"><span>${label}</span><img src="${UI('chevron.svg')}" alt=""></button>`;
     openSheet(`<h2>Позвать официанта</h2><p class="sheet__hint">Официант увидит стол №${esc(S.table)} и причину вызова</p>
       <div class="menu-rows">${opt('general', 'Нужна помощь')}${opt('order', 'Дозаказ')}${hasItems ? opt('bill', 'Попросить счёт') : ''}${opt('question', 'Вопрос по блюдам')}</div>
@@ -1031,7 +1066,7 @@
       <div class="product__info">
         ${tagsHtml(p, { text: true })}
         <h2 class="product__name">${esc(p.name)}</h2>
-        ${p.weight ? `<div class="product__weight">${esc(p.weight)}</div>` : ''}
+        ${p.weight || p.stopBalance ? `<div class="product__weight">${esc(p.weight || '')}${p.stopBalance && !stopped ? `${p.weight ? ' · ' : ''}осталось ${Number(p.stopBalance)} шт.` : ''}</div>` : ''}
         ${p.description ? `<div class="product__block"><div class="product__label">Описание</div><p>${esc(p.description)}</p></div>` : ''}
         ${nutri.length ? `<div class="product__block"><div class="product__label product__label--row">Пищевая ценность${toggle}</div>
           <div class="nutri">${nutri.map(([label, v]) => `<div><b>${fmt(v)}</b>${label}</div>`).join('')}</div></div>` : ''}
@@ -1384,6 +1419,13 @@
   }
   addEventListener('scrollend', () => { spyLockUntil = 0; });
 
+  // Шапка компактнее, когда меню прокручено (как в макете)
+  // Порог с запасом (60 / 8 px): шапка меняет высоту, и без запаса на границе она бы мигала
+  addEventListener('scroll', () => {
+    const html = document.documentElement;
+    if (scrollY > 60) html.classList.add('is-scrolled'); else if (scrollY < 8) html.classList.remove('is-scrolled');
+  }, { passive: true });
+
   // Подсветка раздела при прокрутке: активная категория видна в строке
   let spyFrame = 0;
   addEventListener('scroll', () => {
@@ -1542,16 +1584,6 @@
       if (line) changeQty(line.product, lockedQty(key) - line.qty);
       return;
     }
-    const courseBtn = t.closest('[data-course]');
-    if (courseBtn) {
-      const line = S.cart[courseBtn.dataset.course];
-      if (line) {
-        line.course = courseBtn.dataset.c ? Number(courseBtn.dataset.c) : null;
-        persistCart(); S.changedSinceSubmit = true; store.set('changedSinceSubmit', true);
-        scheduleCartSave(); render();
-      }
-      return;
-    }
     const banner = t.closest('[data-banner]');
     if (banner) { openBanner(banner.dataset.banner); return; }
     const chip = t.closest('[data-chip]');
@@ -1586,6 +1618,8 @@
     else if (action === 'bill') requestBill();
     else if (action === 'all-cats') openCategoriesSheet();
     else if (action === 'clear-search') { S.menu.search = ''; render(); $('#search')?.focus(); }
+    else if (action === 'reload-catalog') { S.catalogError = null; render(); loadCatalog(); }
+    else if (action === 'ask-ai-search') { const q = S.menu.search; S.menu.search = ''; go('ai'); askAi(q); }
     else if (action === 'feedback') openFeedbackSheet();
     else if (action === 'new-visit') newVisit();
     else if (action === 'clear') {
@@ -1610,13 +1644,40 @@
   });
 
   // ── Старт ──────────────────────────────────────────────────
-  async function loadCatalog() {
+  /**
+   * Меню точки: сразу из копии на телефоне (открывается мгновенно и без сети), затем свежее с сервера.
+   * Во время визита меню перезапрашивается раз в минуту — гость видит стоп-лист и цены без перезагрузки.
+   */
+  const catalogKey = () => `catalog:${S.restaurant || ''}`;
+  let catalogBusy = false;
+  async function loadCatalog({ quiet = false } = {}) {
+    if (catalogBusy) return;
+    if (!S.catalog) {
+      const cached = store.get(catalogKey());
+      if (cached?.products?.length) { S.catalog = cached; syncCartProducts(); render(); }
+    }
+    catalogBusy = true;
     try {
-      S.catalog = await api('GET', `/api/v1/restaurants/${encodeURIComponent(S.restaurant || '')}/catalog`, null, { timeout: 20000 });
-      // Обновить товары в корзине актуальными данными меню
-      for (const [k, l] of Object.entries(S.cart)) { const p = findProduct(k); if (p) S.cart[k] = { ...l, product: p }; }
+      const fresh = await api('GET', `/api/v1/restaurants/${encodeURIComponent(S.restaurant || '')}/catalog`, null, { timeout: 20000 });
+      S.catalog = fresh;
+      S.catalogError = null;
+      if (fresh.products?.length) store.set(catalogKey(), fresh); else store.del(catalogKey());
+      syncCartProducts();
       render();
-    } catch (e) { toast('Не удалось загрузить меню — проверьте интернет', true); }
+    } catch (e) {
+      if (!S.catalog) { S.catalogError = e.message || 'Не удалось загрузить меню'; render(); }
+      else if (!quiet) toast('Нет связи — показываем сохранённое меню', true);
+    } finally { catalogBusy = false; }
+  }
+  /** Товары в корзине — актуальными данными меню (цена, стоп, остаток). */
+  function syncCartProducts() {
+    for (const [k, l] of Object.entries(S.cart)) { const p = findProduct(k); if (p) S.cart[k] = { ...l, product: p }; }
+  }
+  let catalogTimer = null;
+  function startCatalogRefresh() {
+    if (catalogTimer) return;
+    catalogTimer = setInterval(() => { if (!document.hidden && !S.dragging) loadCatalog({ quiet: true }); }, 60_000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) loadCatalog({ quiet: true }); });
   }
 
   let polling = false;
@@ -1653,6 +1714,7 @@
     // Меню видно сразу, без входа и выбора стола
     render();
     loadCatalog();
+    startCatalogRefresh();
 
     const fujiToken = params.get('fujiToken');
     if (fujiToken) {
@@ -1707,7 +1769,7 @@
       S.menu.section = barGroupIds().has(String(merged.parentGroup)) ? 'bar' : 'kitchen';
       S.activeCat = merged.parentGroup;
       S.tab = 'menu';
-      $('#sheet-root').innerHTML = '';
+      $('#sheet-root').innerHTML = ''; document.documentElement.classList.remove('sheet-open');
       lastHtml = '';
       render();
       document.body.classList.toggle('preview-list', view === 'list');

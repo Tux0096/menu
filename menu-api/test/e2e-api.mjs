@@ -145,6 +145,45 @@ assert.ok(cat2.products.find((p) => p.id === p1.id).isInStopList);
 ok(await api('POST', '/api/v1/admin/menu/override?restaurant=novo-sadovaya', { productId: p1.id, is_stopped: false }, A), 'unstop');
 step('стоп-лист из админки: позиция видна, но недоступна');
 
+// Карточка сети по макету: несколько меток (мусор отсекается), большая карточка; выгрузка их не трогает
+ok(await api('POST', '/api/v1/admin/network-menu/card', {
+  productName: p2.iikoName || p2.name,
+  targets: [{ restaurant: 'novo-sadovaya', productId: p2.id }],
+  fields: { badge: 'spicy,new,<script>,NEW', card_size: 'big' },
+}, A), 'card tags');
+let p2c = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog3').products.find((p) => p.id === p2.id);
+assert.equal(p2c.badge, 'spicy,new'); assert.equal(p2c.cardSize, 'big');
+ok(await api('POST', '/api/v1/admin/network-menu/card', {
+  productName: p2.iikoName || p2.name, targets: [{ restaurant: 'novo-sadovaya', productId: p2.id }], fields: { badge: '', card_size: '' },
+}, A), 'card tags reset');
+p2c = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog4').products.find((p) => p.id === p2.id);
+assert.ok(!p2c.badge && !p2c.cardSize);
+step('метки блюда: несколько через запятую, лишнее отсекается; большая карточка включается и выключается');
+
+// Картинка раздела — по названию раздела, у гостя приходит в groups
+const group = catalog.groups.find((g) => g.id === p1.parentGroup);
+r = await api('POST', '/api/v1/admin/network-menu/categories', { name: group.name, image: 'javascript:alert(1)' }, A);
+assert.equal(r.status, 400, 'чужие ссылки на картинку не принимаются');
+ok(await api('POST', '/api/v1/admin/network-menu/categories', { name: group.name, image: '/media/e2e.png' }, A), 'cat image');
+let g2 = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog5').groups.find((g) => g.id === group.id);
+assert.equal(g2.image, '/media/e2e.png');
+const cats = ok(await api('GET', '/api/v1/admin/network-menu/categories', null, A), 'cats');
+assert.ok(cats.some((c) => c.name === group.name && c.image === '/media/e2e.png'));
+ok(await api('POST', '/api/v1/admin/network-menu/categories', { name: group.name, image: null }, A), 'cat image reset');
+g2 = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog6').groups.find((g) => g.id === group.id);
+assert.ok(!g2.image || g2.image !== '/media/e2e.png');
+step('картинка раздела: сохраняется, видна гостю, сбрасывается на стандартную');
+
+// Адрес и время работы точки — у гостя в выборе ресторана
+const info0 = ok(await api('GET', '/api/v1/admin/point-info?restaurant=novo-sadovaya', null, A), 'info');
+ok(await api('POST', '/api/v1/admin/point-info?restaurant=novo-sadovaya', { address: info0.address, workHours: '9:00 – 23:30' }, A), 'info save');
+const rests = ok(await api('GET', '/api/v1/restaurants'), 'rests');
+assert.equal(rests.find((x) => x.slug === 'novo-sadovaya').workHours, '9:00 – 23:30');
+ok(await api('POST', '/api/v1/admin/point-info?restaurant=novo-sadovaya', { address: info0.address, workHours: info0.workHours }, A), 'info restore');
+r = await api('POST', '/api/v1/admin/point-info?restaurant=novo-sadovaya', { workHours: '9-23' }, W);
+assert.ok(r.status === 401 || r.status === 403, 'официант не меняет карточку точки');
+step('адрес и время работы точки: сохраняются админом, гость видит, официанту нельзя');
+
 // Безопасность: AI-отзыв — только от гостя, заголовки безопасности, внутренние адреса в /img
 r = await api('POST', '/api/v1/ai/feedback', { query: 'x', productId: p1.id });
 assert.equal(r.status, 401); step('отзыв о подсказке AI без входа гостя не принимается (401)');

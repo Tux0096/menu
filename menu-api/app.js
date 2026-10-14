@@ -58,6 +58,8 @@ app.get(['/admin', '/admin/*'], (req, res) => {
   return res.sendFile(join(ADMIN_WEB_DIR, page));
 });
 app.get('/waiter', (req, res) => res.redirect('/staff/'));
+// Иконки и картинки интерфейса меняются только с релизом — телефон гостя хранит их неделю
+app.use('/ui', express.static(join(WEB_DIR, 'guest', 'ui'), { maxAge: '7d', fallthrough: false }));
 app.use(express.static(join(WEB_DIR, 'guest'), { index: 'index.html' }));
 app.get('*', (req, res) => res.sendFile(join(WEB_DIR, 'guest', 'index.html')));
 

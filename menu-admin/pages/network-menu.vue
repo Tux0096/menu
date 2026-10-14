@@ -152,6 +152,12 @@ async function syncPoint(p: NetworkPoint) {
     syncing.value = '';
   }
 }
+// Метки блюда в строке — те же цвета, что у гостя
+const tagStyle = (b: string) => {
+  const t = TAGS.find((x) => x.value === b);
+  return t ? { background: t.bg, color: t.color } : { background: '#F1F5F9', color: '#475569' };
+};
+const tagLabel = (b: string) => (BADGES[b] || b).replace(/\s*\(.*\)$/, '');
 const setupPoint = ref<NetworkPoint | null>(null);
 const categoriesOpen = ref(false);
 
@@ -273,6 +279,13 @@ function openItem(it: NetworkItem, tab: 'card' | 'availability' = 'card') {
                   <div class="flex items-center gap-1.5 truncate text-xs text-slate-500">
                     <span class="truncate">{{ it.group || 'Без раздела' }}</span>
                     <UBadge v-if="isBar(it)" color="amber" variant="subtle" size="xs">бар</UBadge>
+                    <span
+                      v-for="b in badgeList(it.badge)"
+                      :key="b"
+                      class="shrink-0 rounded-full px-1.5 text-[10px] font-semibold"
+                      :style="tagStyle(b)"
+                    >{{ tagLabel(b) }}</span>
+                    <UBadge v-if="it.cardSize === 'big'" color="primary" variant="subtle" size="xs">большая</UBadge>
                   </div>
                 </div>
               </div>

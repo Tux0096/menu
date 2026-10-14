@@ -119,8 +119,9 @@ html { scroll-behavior: smooth; }
 .search__clear svg { width: 16px; height: 16px; }
 
 .cats {
-  position: sticky; top: var(--topbar-h, calc(64px + var(--safe-t))); z-index: 15; margin: 0 -8px; padding: 8px 8px;
+  position: sticky; top: calc(var(--topbar-h, calc(64px + var(--safe-t))) - 1px); z-index: 15; margin: 0 -8px; padding: 8px 8px 10px;
   display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; background: var(--bg);
+  border-radius: 0 0 16px 16px; box-shadow: 0 6px 12px -8px rgba(0, 0, 0, .08);
 }
 .cats::-webkit-scrollbar { display: none; }
 .cats button {
@@ -404,8 +405,10 @@ html { scroll-behavior: smooth; }
 .sheet--product { padding: 0 0 0; background: #FAF8FB; }
 .sheet--product .sheet__grip { position: absolute; top: 8px; left: 50%; margin: 0 0 0 -18px; z-index: 3; background: rgba(255, 255, 255, .7); }
 .product__photo { position: relative; background: #fff; }
-.product-hero { width: 100%; height: 360px; display: grid; place-items: center; font-size: 96px; overflow: hidden; }
-.product-hero img, .product-hero video { width: 100%; height: 100%; object-fit: cover; }
+/* Фото блюда целиком, без обрезки: вписано в квадрат на белом */
+.product-hero { width: 100%; height: min(100vw, 400px, 50vh); display: grid; place-items: center; font-size: 96px; overflow: hidden; background: #fff; padding: 8px 0 20px; }
+.product-hero img { width: 100%; height: 100%; object-fit: contain; }
+.product-hero video { width: 100%; height: 100%; object-fit: cover; }
 .product__close {
   position: absolute; top: 16px; right: 16px; z-index: 3; width: 32px; height: 32px; border-radius: 50%;
   background: rgba(41, 41, 41, .22); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); display: grid; place-items: center;
@@ -413,7 +416,7 @@ html { scroll-behavior: smooth; }
 .product__close img { width: 20px; height: 20px; }
 .dish__count--hero { font-size: 96px; }
 .product__info {
-  position: relative; margin-top: -24px; padding: 16px 20px 8px; background: #FAF8FB; border-radius: 24px 24px 0 0;
+  position: relative; margin-top: -16px; padding: 16px 20px 8px; background: #FAF8FB; border-radius: 24px 24px 0 0;
   box-shadow: 0 -4px 14px rgba(0, 0, 0, .05);
 }
 .sheet h2.product__name { color: var(--ink); font-size: 16px; margin: 0; }
@@ -520,3 +523,40 @@ body.is-preview ::-webkit-scrollbar { display: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition: none !important; }
 }
+
+/* ── Состояния и мелочи ─────────────────────────────────── */
+:focus-visible { outline: 2px solid var(--purple); outline-offset: 2px; }
+input:focus-visible, textarea:focus-visible { outline: 0; }
+html.sheet-open, html.sheet-open body { overflow: hidden; }
+.is-scrolled .topbar { padding-top: calc(8px + var(--safe-t)); padding-bottom: 8px; box-shadow: 0 4px 14px rgba(0, 0, 0, .04); }
+.is-scrolled .topbar:has(~ main #cats) { box-shadow: none; }
+.topbar { transition: padding .2s ease, box-shadow .2s ease; }
+.empty__title { font-size: 16px; font-weight: 500; color: var(--ink); margin-bottom: 6px; }
+.empty__btn { margin: 20px auto 0; max-width: 320px; }
+.skeleton--search { height: 42px; margin: 2px 8px 12px; border-radius: 16px; }
+.skeleton--cats { height: 40px; margin: 0 0 12px; border-radius: 8px; }
+.list .skeleton { height: 168px; }
+.dish__left { display: block; font-style: normal; font-size: 10px; font-weight: 500; color: #D25E20; margin-top: 2px; }
+.st--stop { background: #FDE4E4; color: #710F0F; }
+.cart-line.is-problem .cart-line__img { filter: grayscale(1); opacity: .6; }
+.cart-line.is-problem .cart-line__name { color: rgba(41, 41, 41, .6); }
+.submit-btn:disabled { background: #B9B9B9; border-color: #B9B9B9; opacity: 1; }
+
+/* Анимации: количество на фото, счётчик корзины, нажатия */
+@keyframes pop { 0% { transform: scale(.4); opacity: 0; } 70% { transform: scale(1.12); } 100% { transform: scale(1); opacity: 1; } }
+@keyframes fade-in { from { opacity: 0; } }
+.dish__count { animation: fade-in .2s ease both; }
+.badge { animation: pop .3s cubic-bezier(.2, .9, .3, 1.4) both; }
+.price-pill, .stepper-mini button, .chip, .cats button, .nav__item, .cat-grid button, .rest-item, .product__close { transition: transform .15s ease, background-color .2s, color .2s, opacity .2s; }
+.price-pill:active, .chip:active, .cats button:active, .cat-grid button:active, .rest-item:active:not([disabled]) { transform: scale(.96); }
+.price-pill--qty button:active, .stepper-mini button:active { transform: scale(.85); }
+.nav__item:active .nav__icon { transform: scale(.92); }
+.nav__icon { transition: background-color .25s, box-shadow .25s, transform .15s; }
+.stepper__bar { transition: background-color .4s ease; }
+/* Иконка шага: анимируем scale, а не transform — transform держит её по центру линии */
+@keyframes pop-scale { 0% { scale: .4; opacity: 0; } 70% { scale: 1.12; } 100% { scale: 1; opacity: 1; } }
+.stepper__bar img { animation: pop-scale .35s cubic-bezier(.2, .9, .3, 1.4) both; }
+.dish, .cart-line, .sent-line { animation: fade-in .25s ease both; }
+.cat-grid button { animation: rise .3s ease both; }
+.cart-line__del { transition: opacity .2s; opacity: 0; }
+.cart-line.is-open .cart-line__del { opacity: 1; }
