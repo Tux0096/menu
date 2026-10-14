@@ -6,6 +6,7 @@ import { join } from 'path';
 import { existsSync } from 'fs';
 import { httpError, securityHeaders, sendError } from './lib/http.js';
 import { ADMIN_WEB_DIR, MEDIA_DIR, WEB_DIR } from './lib/paths.js';
+import { guestPage } from './lib/guest-page.js';
 import { isIikoDemo } from './iiko-client.js';
 import { isLlmEnabled } from './services/ai-llm.js';
 import { startBackgroundJobs } from './services/background-jobs.js';
@@ -60,8 +61,11 @@ app.get(['/admin', '/admin/*'], (req, res) => {
 app.get('/waiter', (req, res) => res.redirect('/staff/'));
 // Иконки и картинки интерфейса меняются только с релизом — телефон гостя хранит их неделю
 app.use('/ui', express.static(join(WEB_DIR, 'guest', 'ui'), { maxAge: '7d', fallthrough: false }));
-app.use(express.static(join(WEB_DIR, 'guest'), { index: 'index.html' }));
-app.get('*', (req, res) => res.sendFile(join(WEB_DIR, 'guest', 'index.html')));
+const guest = guestPage(join(WEB_DIR, 'guest'));
+app.get(['/', '/index.html'], guest.page);
+app.get(['/app.js', '/app.css'], guest.asset);
+app.use(express.static(join(WEB_DIR, 'guest'), { index: false }));
+app.get('*', guest.page);
 
 // Последний обработчик ошибок: битый JSON, слишком большой файл и т. п. — JSON без стека и путей сервера
 // eslint-disable-next-line no-unused-vars

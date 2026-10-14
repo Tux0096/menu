@@ -85,8 +85,8 @@ html { scroll-behavior: smooth; }
 .nav {
   position: fixed; left: 50%; bottom: 0; transform: translateX(-50%); z-index: 30; width: 100%; max-width: 480px;
   display: flex; justify-content: space-between; padding: 12px 20px calc(18px + var(--safe-b));
-  background: rgba(249, 249, 249, .96); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
-  border-top: 1px solid rgba(203, 203, 203, .3);
+  background: var(--bg); border-top: 1px solid rgba(203, 203, 203, .3);
+  transform: translateX(-50%) translateZ(0);
 }
 .nav__item { width: 66px; display: flex; flex-direction: column; align-items: center; gap: 6px; }
 .nav__icon {
@@ -132,7 +132,11 @@ html { scroll-behavior: smooth; }
 .cats button.is-active::after {
   content: ''; position: absolute; left: 50%; bottom: 6px; width: 24px; height: 1px; margin-left: -12px; background: rgba(153, 60, 166, .5);
 }
-.cats .cats__all { display: flex; align-items: center; gap: 6px; background: var(--purple-soft); color: var(--purple); }
+/* «Меню» закреплено у левого края строки разделов (как в макете) */
+.cats .cats__all {
+  position: sticky; left: 0; z-index: 2; display: flex; align-items: center; gap: 6px; background: var(--purple-soft); color: var(--purple);
+  box-shadow: -8px 0 0 0 var(--bg), 8px 0 10px -4px var(--bg);
+}
 .cats .cats__all svg { width: 16px; height: 16px; }
 .section-title { font-weight: 500; font-size: 24px; color: var(--purple); margin: 16px 10px 12px; scroll-margin-top: 130px; }
 .list { display: flex; flex-direction: column; gap: 8px; }
@@ -146,8 +150,10 @@ html { scroll-behavior: smooth; }
 }
 .dish.has-qty { background: var(--purple-tint); }
 .dish__photo { position: relative; flex-shrink: 0; width: 144px; height: 144px; border-radius: 8px; overflow: hidden; }
-.dish__img { width: 100%; height: 100%; display: grid; place-items: center; font-size: 48px; background: #fff; }
-.dish__img img { width: 100%; height: 100%; object-fit: contain; }
+/* Фото вписано в рамку абсолютно: какой бы ни была картинка (широкая, высокая, крупная), она целиком в рамке
+   и не раздвигает её — иначе низ фото обрезался бы (было на экранах 430 px) */
+.dish__img { position: relative; width: 100%; height: 100%; display: grid; place-items: center; font-size: 48px; background: #fff; }
+.dish__img img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .dish__count {
   position: absolute; inset: 0; display: grid; place-items: center; background: rgba(153, 60, 166, .3);
   color: #fff; font-size: 32px; font-weight: 500; pointer-events: none;
@@ -344,7 +350,8 @@ html { scroll-behavior: smooth; }
 }
 .cart-line__del img { width: 20px; height: 20px; }
 .cart-line__img { width: 48px; height: 48px; border-radius: 8px; overflow: hidden; flex-shrink: 0; display: grid; place-items: center; font-size: 22px; background: #fff; }
-.cart-line__img img, .cart-line__img video { width: 100%; height: 100%; object-fit: contain; }
+.cart-line__img { position: relative; }
+.cart-line__img img, .cart-line__img video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
 .cart-line__main { flex: 1; min-width: 0; }
 .cart-line__name { font-size: 14px; color: #031928; line-height: 1.15; }
 .cart-line__price { font-size: 12px; margin-top: 6px; }
@@ -406,9 +413,9 @@ html { scroll-behavior: smooth; }
 .sheet--product .sheet__grip { position: absolute; top: 8px; left: 50%; margin: 0 0 0 -18px; z-index: 3; background: rgba(255, 255, 255, .7); }
 .product__photo { position: relative; background: #fff; }
 /* Фото блюда целиком, без обрезки: вписано в квадрат на белом */
-.product-hero { width: 100%; height: min(100vw, 400px, 50vh); display: grid; place-items: center; font-size: 96px; overflow: hidden; background: #fff; padding: 8px 0 20px; }
-.product-hero img { width: 100%; height: 100%; object-fit: contain; }
-.product-hero video { width: 100%; height: 100%; object-fit: cover; }
+.product-hero { position: relative; width: 100%; height: min(100vw, 380px, 46vh); display: grid; place-items: center; font-size: 96px; overflow: hidden; background: #fff; }
+.product-hero img { position: absolute; top: 12px; left: 16px; width: calc(100% - 32px); height: calc(100% - 20px); object-fit: contain; }
+.product-hero video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
 .product__close {
   position: absolute; top: 16px; right: 16px; z-index: 3; width: 32px; height: 32px; border-radius: 50%;
   background: rgba(41, 41, 41, .22); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); display: grid; place-items: center;
@@ -416,8 +423,8 @@ html { scroll-behavior: smooth; }
 .product__close img { width: 20px; height: 20px; }
 .dish__count--hero { font-size: 96px; }
 .product__info {
-  position: relative; margin-top: -16px; padding: 16px 20px 8px; background: #FAF8FB; border-radius: 24px 24px 0 0;
-  box-shadow: 0 -4px 14px rgba(0, 0, 0, .05);
+  position: relative; padding: 16px 20px 8px; background: #FAF8FB; border-radius: 24px 24px 0 0;
+  box-shadow: 0 -4px 14px rgba(0, 0, 0, .04);
 }
 .sheet h2.product__name { color: var(--ink); font-size: 16px; margin: 0; }
 .product__weight { font-size: 12px; color: rgba(41, 41, 41, .6); margin-top: 4px; }
@@ -528,9 +535,9 @@ body.is-preview ::-webkit-scrollbar { display: none; }
 :focus-visible { outline: 2px solid var(--purple); outline-offset: 2px; }
 input:focus-visible, textarea:focus-visible { outline: 0; }
 html.sheet-open, html.sheet-open body { overflow: hidden; }
-.is-scrolled .topbar { padding-top: calc(8px + var(--safe-t)); padding-bottom: 8px; box-shadow: 0 4px 14px rgba(0, 0, 0, .04); }
+.is-scrolled .topbar { box-shadow: 0 4px 14px rgba(0, 0, 0, .04); }
 .is-scrolled .topbar:has(~ main #cats) { box-shadow: none; }
-.topbar { transition: padding .2s ease, box-shadow .2s ease; }
+.topbar { transition: box-shadow .2s ease; }
 .empty__title { font-size: 16px; font-weight: 500; color: var(--ink); margin-bottom: 6px; }
 .empty__btn { margin: 20px auto 0; max-width: 320px; }
 .skeleton--search { height: 42px; margin: 2px 8px 12px; border-radius: 16px; }
@@ -556,7 +563,20 @@ html.sheet-open, html.sheet-open body { overflow: hidden; }
 /* Иконка шага: анимируем scale, а не transform — transform держит её по центру линии */
 @keyframes pop-scale { 0% { scale: .4; opacity: 0; } 70% { scale: 1.12; } 100% { scale: 1; opacity: 1; } }
 .stepper__bar img { animation: pop-scale .35s cubic-bezier(.2, .9, .3, 1.4) both; }
-.dish, .cart-line, .sent-line { animation: fade-in .25s ease both; }
-.cat-grid button { animation: rise .3s ease both; }
+/* Фото проявляется один раз, когда загрузилось (перерисовка его не трогает) */
+.dish__img img, .cart-line__img img, .product-hero img { opacity: 0; transition: opacity .3s ease; }
+.dish__img img.is-loaded, .cart-line__img img.is-loaded, .product-hero img.is-loaded { opacity: 1; }
 .cart-line__del { transition: opacity .2s; opacity: 0; }
 .cart-line.is-open .cart-line__del { opacity: 1; }
+
+/* Передаём заказ — кнопка остаётся фиолетовой со спиннером */
+.submit-btn:disabled:has(.spinner) { background: var(--purple); border-color: var(--purple); opacity: .85; }
+/* Узкие телефоны (320–370 px): «− цена +» и вес помещаются в карточку */
+@media (max-width: 370px) {
+  .price-pill--qty { gap: 0; padding: 0 2px; }
+  .price-pill--qty button { width: 26px; }
+  .dish__weight { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .dish__foot { gap: 4px; }
+  .dish__body { gap: 6px; }
+  .dish__desc { -webkit-line-clamp: 3; }
+}

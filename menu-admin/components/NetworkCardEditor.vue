@@ -154,8 +154,9 @@ function previewProduct() {
     image: form.image_url || null,
     video,
     weight: form.weight.trim() || null,
-    badge: form.badge || null,
-    cardSize: form.card_size || null,
+    // Пустые метки и выключенная большая карточка — явно, иначе превью показало бы прежние из меню
+    badge: form.badge,
+    cardSize: form.card_size === 'big' ? 'big' : '',
     energyAmount: numOrNull(form.energy),
     fiberAmount: numOrNull(form.proteins),
     fatAmount: numOrNull(form.fats),

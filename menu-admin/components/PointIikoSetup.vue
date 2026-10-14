@@ -104,30 +104,18 @@ const changed = computed(() => iikoChanged.value || infoChanged.value);
 const saving = ref(false);
 async function save() {
   if (!props.point || !setup.value) return;
-  if (infoChanged.value) {
-    saving.value = true;
-    try {
-      info.value = await useAuthFetch<PointInfo>('/admin/point-info', {
-        method: 'POST', ...q(), body: { address: infoForm.address.trim(), workHours: infoForm.workHours.trim() },
-      }, { restaurant: false });
-      if (!iikoChanged.value) {
-        notify.success('Карточка точки сохранена');
-        emit('saved');
-        emit('close');
-        return;
-      }
-    } catch (e) {
-      notify.error(e, 'Не удалось сохранить адрес и время работы');
-      return;
-    } finally {
-      saving.value = false;
-    }
+  const doIiko = iikoChanged.value;
+  const doInfo = infoChanged.value;
+  // Сначала все проверки и подтверждения — потом запись, чтобы не сохранить половину
+  if (doInfo && !infoForm.address.trim()) {
+    notify.error('Укажите адрес точки');
+    return;
   }
-  if (mode.value === 'two' && !form.organizationId) {
+  if (doIiko && mode.value === 'two' && !form.organizationId) {
     notify.error('Выберите организацию бара в iiko');
     return;
   }
-  if (mode.value === 'one' && setup.value.mode === 'two') {
+  if (doIiko && mode.value === 'one' && setup.value.mode === 'two') {
     const ok = await confirm({
       title: 'Оставить одну iiko?',
       description: 'Меню бара из второй iiko уберётся из QR-меню точки. Если у бара своя касса в той же iiko — выберите её в разделе «Кассы».',
@@ -137,17 +125,26 @@ async function save() {
     if (!ok) return;
   }
   saving.value = true;
+  let infoSaved = false;
   try {
-    const s = await useAuthFetch<IikoSetup>('/admin/iiko-setup', {
-      method: 'POST', ...q(),
-      body: { mode: mode.value, creds: form.creds, organizationId: form.organizationId || null, externalMenuId: form.externalMenuId || null },
-    }, { restaurant: false });
-    setup.value = s;
-    notify.success('Сохранено, меню точки перевыгружено из iiko');
+    if (doInfo) {
+      info.value = await useAuthFetch<PointInfo>('/admin/point-info', {
+        method: 'POST', ...q(), body: { address: infoForm.address.trim(), workHours: infoForm.workHours.trim() },
+      }, { restaurant: false });
+      infoSaved = true;
+    }
+    if (doIiko) {
+      setup.value = await useAuthFetch<IikoSetup>('/admin/iiko-setup', {
+        method: 'POST', ...q(),
+        body: { mode: mode.value, creds: form.creds, organizationId: form.organizationId || null, externalMenuId: form.externalMenuId || null },
+      }, { restaurant: false });
+    }
+    notify.success(doIiko ? 'Сохранено, меню точки перевыгружено из iiko' : 'Карточка точки сохранена');
     emit('saved');
     emit('close');
   } catch (e) {
-    notify.error(e, 'Не удалось сохранить');
+    notify.error(e, infoSaved ? 'Адрес и время работы сохранены, настройки iiko — нет' : 'Не удалось сохранить');
+    if (infoSaved) emit('saved');
   } finally {
     saving.value = false;
   }

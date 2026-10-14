@@ -268,10 +268,10 @@ function applyOverride(product, o) {
   if (o.carbs != null) p.carbohydrateAmount = parseFloat(o.carbs);
   if (o.allergens?.length) p.allergensText = o.allergens;
   if (o.is_recommended) p.isRecommended = true;
-  if (o.badge) p.badge = o.badge;
+  if (o.badge != null) p.badge = o.badge || null; // '' — метки сняты в админке
   if (o.priority) p.priority = Number(o.priority);
   if (o.video_url) p.video = o.video_url;
-  if (o.card_size) p.cardSize = o.card_size;
+  if (o.card_size != null) p.cardSize = o.card_size === 'big' ? 'big' : null; // 'normal' — большая выключена
   return p;
 }
 

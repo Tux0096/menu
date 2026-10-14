@@ -51,7 +51,13 @@
     return pick.length ? pick : all;
   }
   const PLACEMENTS = { menu: 'Меню — карусель сверху', ai: 'Экран AI', order: 'Экран заказа' };
-  const BADGES = { hit: 'Хит', new: 'Новинка', spicy: 'Острое', veg: 'Вег', sale: 'Выгодно', chef: 'Шеф рекомендует' };
+  // Метки как в «Меню сети» админки; у блюда их может быть несколько (через запятую) — тогда здесь только показ
+  const BADGES = {
+    mild: 'Остро (зелёный)', spicy: 'Остро', new: 'Новинка', hit: 'Хит', kids: 'Детям', gift: 'Подарок', nosugar: 'Без сахара',
+    veg: 'Вег', sale: 'Выгодно', chef: 'Шеф рекомендует',
+  };
+  const badgeList = (v) => String(v || '').split(',').map((b) => b.trim()).filter(Boolean);
+  const badgeText = (v) => badgeList(v).map((b) => BADGES[b] || b).join(', ');
   const STATUS = {
     browsing: ['Изучает меню', ''], building_cart: ['Выбирает блюда', ''], cart_ready: ['Ждёт официанта', 'wait'],
     waiter_review: ['Уточняется', 'work'], in_production: ['На кухне', 'work'], reorder_pending: ['Дозаказ', 'wait'],
@@ -625,9 +631,9 @@
         <tr><th></th><th>Блюдо</th><th>Категория</th><th>Цена</th><th>Метка</th><th title="Больше — выше в разделе; 0 — как в iiko">Приоритет</th>${canStop ? '<th>Стоп-лист</th>' : ''}<th>Скрыть</th><th>Рекомендуем</th><th></th></tr>
         ${rows.map((p) => `<tr>
           <td>${p.image ? `<img class="thumb" src="${esc(p.image)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">` : '<div class="thumb">🍽</div>'}</td>
-          <td><b>${esc(p.name)}</b>${p.badge ? ` <span class="pill" data-tone="ok">${esc(BADGES[p.badge] || p.badge)}</span>` : ''}${p.video ? ' <span class="pill" data-tone="work">▶ видео</span>' : ''}<div class="muted" style="font-size:12px">${p.sku ? `арт. ${esc(p.sku)} · ` : ''}${esc(p.weight || '')}${p.energy ? ` · ${Math.round(p.energy)} ккал` : ''}${p.allergens?.length ? ` · аллергены: ${esc(p.allergens.join(', '))}` : ''}</div></td>
+          <td><b>${esc(p.name)}</b>${p.badge ? ` <span class="pill" data-tone="ok">${esc(badgeText(p.badge))}</span>` : ''}${p.video ? ' <span class="pill" data-tone="work">▶ видео</span>' : ''}<div class="muted" style="font-size:12px">${p.sku ? `арт. ${esc(p.sku)} · ` : ''}${esc(p.weight || '')}${p.energy ? ` · ${Math.round(p.energy)} ккал` : ''}${p.allergens?.length ? ` · аллергены: ${esc(p.allergens.join(', '))}` : ''}</div></td>
           <td class="muted" data-label="Категория">${esc(p.group)}</td><td data-label="Цена">${p.price ? rub(p.price) : ''}</td>
-          <td data-label="Метка">${p.isHidden ? '' : `<select class="sel sel--sm sel--badge" data-badge-set="${esc(p.id)}" aria-label="Метка блюда"><option value="">—</option>${Object.entries(BADGES).map(([k, l]) => `<option value="${k}" ${p.badge === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`}</td>
+          <td data-label="Метка">${p.isHidden ? '' : badgeList(p.badge).length > 1 ? `<span class="muted" title="Несколько меток — меняются в «Меню сети»">${esc(badgeText(p.badge))}</span>` : `<select class="sel sel--sm sel--badge" data-badge-set="${esc(p.id)}" aria-label="Метка блюда"><option value="">—</option>${Object.entries(BADGES).map(([k, l]) => `<option value="${k}" ${p.badge === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`}</td>
           <td data-label="Приоритет">${p.isHidden ? '' : `<input class="inp inp--prio" type="number" inputmode="numeric" min="-999" max="999" step="1" value="${Number(p.priority) || 0}" data-prio="${esc(p.id)}" aria-label="Приоритет показа">`}</td>
           ${canStop ? `<td data-label="Стоп-лист">${sw(p.isInStopList, `data-ov="${esc(p.id)}" data-field="is_stopped" data-val="${!p.isInStopList}"`, true)}</td>` : ''}
           <td data-label="Скрыть">${sw(p.isHidden, `data-ov="${esc(p.id)}" data-field="is_hidden" data-val="${!p.isHidden}"`)}</td>
@@ -666,7 +672,8 @@
         </div>
         <input type="hidden" name="video_url" value="${esc(p.video || '')}">
         <p class="muted" style="font-size:12px;margin:6px 4px 0">«Живое» меню: короткое видео без звука (3–6 с, до 25 МБ, лучше MP4 квадрат 720 px) играет вместо фото по кругу. Анимированный WebP/GIF — тоже можно. Фото остаётся обложкой, пока видео грузится.</p>
-        <div class="field" style="margin-top:10px"><label>Метка в меню</label><select class="sel" name="badge"><option value="">Без метки</option>${Object.entries(BADGES).map(([k, l]) => `<option value="${k}" ${p.badge === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        ${badgeList(p.badge).length > 1 ? `<div class="field" style="margin-top:10px"><label>Метки в меню</label><div class="muted">${esc(badgeText(p.badge))} — несколько меток меняются в «Меню сети»</div></div>`
+    : `<div class="field" style="margin-top:10px"><label>Метка в меню</label><select class="sel" name="badge"><option value="">Без метки</option>${Object.entries(BADGES).map(([k, l]) => `<option value="${k}" ${p.badge === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`}
         <div class="field" style="margin-top:10px"><label>Описание</label><textarea class="inp" name="description">${esc(p.description || '')}</textarea></div>
         <div class="form-grid" style="margin-top:10px">
           ${f('weight', 'Вес / объём', p.weight)}${f('energy', 'Ккал', p.energy, 'number')}${f('proteins', 'Белки', p.proteins, 'number')}
@@ -729,6 +736,7 @@
       $('#prod-form', root).addEventListener('submit', async (e) => {
         e.preventDefault();
         const fd = Object.fromEntries(new FormData(e.target));
+        if ((fd.badge ?? '') === (p.badge || '')) delete fd.badge; // метку не трогали — не перезаписываем
         fd.allergens = fd.allergens ? fd.allergens.split(',').map((a) => a.trim()).filter(Boolean) : [];
         try { await setOverride(p.id, fd); closeModal(); toast('Карточка сохранена'); } catch (err) { toast(err.message, true); }
       });

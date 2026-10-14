@@ -308,6 +308,8 @@ export interface MenuCategory {
   key: string;
   name: string;
   image: string | null;
+  /** Картинка раздела из iiko — гость видит её, пока своей нет */
+  iikoImage?: string | null;
   isBar: boolean;
   points: number;
   items: number;

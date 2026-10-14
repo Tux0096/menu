@@ -54,6 +54,8 @@ admin.get('/network-menu', h(async (req) => getNetworkMenu(await staffRestaurant
 // Картинки разделов меню (шторка «Меню» у гостя): общие для всех точек
 admin.get('/network-menu/categories', h(async (req) => getCategoryList(await staffRestaurants(req))));
 admin.post('/network-menu/categories', h(async (req) => {
+  // Картинка раздела одна на всю сеть — меняет только сотрудник без привязки к точке
+  if (req.staff.restaurantId) throw httpError(403, 'Картинки разделов общие для сети — их меняет сотрудник без привязки к точке');
   requireBody(req.body, 'name');
   const image = req.body.image ? String(req.body.image) : null;
   if (image && !/^(\/media\/|https:\/\/)/.test(image)) throw httpError(400, 'Картинка — загруженный файл или ссылка https://');
@@ -155,8 +157,10 @@ admin.get('/point-info', h(async (req) => {
 }));
 admin.post('/point-info', h(async (req) => {
   const r = await staffRestaurant(req);
+  // Не переданное поле не меняется; адрес гостю нужен — пустым не сохраняем
   const address = String(req.body?.address ?? r.address ?? '').trim().slice(0, 300);
-  const workHours = String(req.body?.workHours ?? '').trim().slice(0, 60);
+  const workHours = String(req.body?.workHours ?? r.hours_text ?? '').trim().slice(0, 60);
+  if (!address) throw httpError(400, 'Укажите адрес точки');
   const { rows } = await pool.query(
     'UPDATE restaurants SET address = $2, hours_text = $3 WHERE id = $1 RETURNING name, address, hours_text',
     [r.id, address, workHours || null],

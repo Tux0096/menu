@@ -45,6 +45,8 @@ const DEFAULTS: [string, string][] = [['новин', 'novinki'], ['хит', 'hit
   ['пицц', 'pizza'], ['бенто', 'bento'], ['wok', 'wok'], ['вок', 'wok'], ['лапш', 'wok'], ['бургер', 'burgery'], ['поке', 'poke'],
   ['салат', 'poke'], ['суп', 'supy'], ['горяч', 'goryachee'], ['закуск', 'zakuski'], ['десерт', 'deserty'], ['напит', 'napitki'],
   ['бар', 'napitki'], ['лимонад', 'napitki'], ['чай', 'napitki'], ['кофе', 'napitki'], ['соус', 'sousy']];
+// Что видит гость: своя картинка → из iiko → стандартная по названию
+const shown = (c: MenuCategory) => c.image || c.iikoImage || defaultImage(c.name);
 function defaultImage(name: string) {
   const n = name.toLowerCase();
   const hit = DEFAULTS.find(([k]) => n.includes(k));
@@ -73,14 +75,14 @@ function defaultImage(name: string) {
         <ul v-else class="divide-y divide-brand-50">
           <li v-for="c in list" :key="c.key" class="flex flex-wrap items-center gap-4 py-3">
             <div class="grid h-16 w-16 shrink-0 place-items-center overflow-hidden rounded-xl bg-white ring-1 ring-brand-100">
-              <img v-if="c.image || defaultImage(c.name)" :src="thumbUrl(c.image || defaultImage(c.name), 160)" alt="" class="h-14 w-14 object-contain" />
+              <img v-if="shown(c)" :src="thumbUrl(shown(c), 160)" alt="" class="h-14 w-14 object-contain" />
               <UIcon v-else name="i-heroicons-photo" class="h-6 w-6 text-slate-300" />
             </div>
             <div class="min-w-[160px] flex-1">
               <div class="font-semibold">{{ c.name }}</div>
               <div class="text-xs text-slate-500">
                 {{ c.isBar ? 'Бар' : 'Кухня' }} · точек: {{ c.points }} ·
-                {{ c.image ? 'своя картинка' : defaultImage(c.name) ? 'стандартная картинка' : 'без картинки' }}
+                {{ c.image ? 'своя картинка' : c.iikoImage ? 'картинка из iiko' : defaultImage(c.name) ? 'стандартная картинка' : 'без картинки' }}
               </div>
             </div>
             <div class="flex items-center gap-2">

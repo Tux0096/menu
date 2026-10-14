@@ -157,11 +157,17 @@ ok(await api('POST', '/api/v1/admin/network-menu/card', {
   productName: p2.iikoName || p2.name, targets: [{ restaurant: 'novo-sadovaya', productId: p2.id }], fields: { badge: '', card_size: '' },
 }, A), 'card tags reset');
 p2c = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog4').products.find((p) => p.id === p2.id);
-assert.ok(!p2c.badge && !p2c.cardSize);
+assert.ok(!p2c.badge && !p2c.cardSize, 'снятые метки и большая карточка не возвращаются из карточки по названию');
+// вернуть как было до теста
+ok(await api('POST', '/api/v1/admin/network-menu/card', {
+  productName: p2.iikoName || p2.name, targets: [{ restaurant: 'novo-sadovaya', productId: p2.id }],
+  fields: { badge: p2.badge || '', card_size: p2.cardSize || '' },
+}, A), 'card tags restore');
 step('метки блюда: несколько через запятую, лишнее отсекается; большая карточка включается и выключается');
 
 // Картинка раздела — по названию раздела, у гостя приходит в groups
 const group = catalog.groups.find((g) => g.id === p1.parentGroup);
+const groupImage0 = (ok(await api('GET', '/api/v1/admin/network-menu/categories', null, A), 'cats0').find((c) => c.name === group.name) || {}).image || null;
 r = await api('POST', '/api/v1/admin/network-menu/categories', { name: group.name, image: 'javascript:alert(1)' }, A);
 assert.equal(r.status, 400, 'чужие ссылки на картинку не принимаются');
 ok(await api('POST', '/api/v1/admin/network-menu/categories', { name: group.name, image: '/media/e2e.png' }, A), 'cat image');
@@ -172,6 +178,7 @@ assert.ok(cats.some((c) => c.name === group.name && c.image === '/media/e2e.png'
 ok(await api('POST', '/api/v1/admin/network-menu/categories', { name: group.name, image: null }, A), 'cat image reset');
 g2 = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog6').groups.find((g) => g.id === group.id);
 assert.ok(!g2.image || g2.image !== '/media/e2e.png');
+if (groupImage0) ok(await api('POST', '/api/v1/admin/network-menu/categories', { name: group.name, image: groupImage0 }, A), 'cat image restore');
 step('картинка раздела: сохраняется, видна гостю, сбрасывается на стандартную');
 
 // Адрес и время работы точки — у гостя в выборе ресторана

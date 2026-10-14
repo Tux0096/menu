@@ -12,9 +12,13 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import sharp from 'sharp';
 import pool from '../db/pool.js';
+import { MEDIA_DIR } from '../lib/paths.js';
 
 const CACHE_DIR = process.env.IMG_CACHE_DIR || join(dirname(fileURLToPath(import.meta.url)), '..', '.cache', 'img');
-export const IMG_WIDTHS = [160, 320, 480, 720, 960];
+// 480 — карточка списка на экранах 3x (144 px × 3), 1080/1280 — фото блюда на весь экран телефона
+export const IMG_WIDTHS = [160, 320, 480, 720, 960, 1280];
+// Загруженное в админке (/media/<uuid>.<ext>) — тоже уменьшается: оригинал бывает до 8 МБ
+const MEDIA_RE = /^\/media\/([a-f0-9-]{36}\.(?:jpg|jpeg|png|webp|gif))$/i;
 const MAX_SOURCE_BYTES = 25 * 1024 * 1024;
 
 let allowed = new Set();
@@ -86,7 +90,24 @@ export const pickWidth = (w) => IMG_WIDTHS.find((x) => x >= Number(w)) || IMG_WI
 
 const inflight = new Map();
 
-/** WebP нужной ширины: из кэша на диске или скачать оригинал и уменьшить. */
+/** Оригинал: файл из /media на диске или картинка по ссылке (только с публичных адресов). */
+async function sourceBytes(url) {
+  const local = url.match(MEDIA_RE);
+  if (local) return readFile(join(MEDIA_DIR, local[1]));
+  assertPublicUrl(url);
+  const { data } = await axios.get(url, {
+    responseType: 'arraybuffer',
+    timeout: 20000,
+    maxContentLength: MAX_SOURCE_BYTES,
+    maxRedirects: 3,
+    lookup: publicLookup,
+    // Редирект на IP-адрес минует DNS — проверяем каждый шаг
+    beforeRedirect: (opts) => assertPublicUrl(`${opts.protocol}//${opts.hostname}${opts.path || ''}`),
+  });
+  return Buffer.from(data);
+}
+
+/** WebP нужной ширины: из кэша на диске или скачать оригинал и уменьшить. Анимация (GIF/WebP) сохраняется. */
 export async function resizedImage(url, width) {
   const w = pickWidth(width);
   const file = join(CACHE_DIR, `${createHash('sha1').update(`${url}|${w}`).digest('hex')}.webp`);
@@ -96,17 +117,9 @@ export async function resizedImage(url, width) {
   const key = file;
   if (inflight.has(key)) return inflight.get(key);
   const job = (async () => {
-    assertPublicUrl(url);
-    const { data } = await axios.get(url, {
-      responseType: 'arraybuffer',
-      timeout: 20000,
-      maxContentLength: MAX_SOURCE_BYTES,
-      maxRedirects: 3,
-      lookup: publicLookup,
-      // Редирект на IP-адрес минует DNS — проверяем каждый шаг
-      beforeRedirect: (opts) => assertPublicUrl(`${opts.protocol}//${opts.hostname}${opts.path || ''}`),
-    });
-    const out = await sharp(Buffer.from(data), { failOn: 'none' })
+    const data = await sourceBytes(url);
+    const animated = /\.gif(\?|$)/i.test(url) || (await sharp(data, { failOn: 'none' }).metadata().catch(() => ({}))).pages > 1;
+    const out = await sharp(data, { failOn: 'none', animated })
       .rotate()
       .resize({ width: w, withoutEnlargement: true })
       .webp({ quality: 78, effort: 4 })
@@ -124,20 +137,22 @@ export async function resizedImage(url, width) {
 /** Express-обработчик GET /img?u=<url>&w=<ширина>. */
 export async function imageHandler(req, res) {
   const url = String(req.query.u || '');
-  if (!/^https?:\/\//i.test(url) || !(await isAllowed(url))) return res.status(404).end();
+  const ok = MEDIA_RE.test(url) || (/^https?:\/\//i.test(url) && (await isAllowed(url)));
+  if (!ok) return res.status(404).end();
   try {
     const buf = await resizedImage(url, req.query.w || 480);
     res.set({ 'Content-Type': 'image/webp', 'Cache-Control': 'public, max-age=2592000, immutable' });
     return res.send(buf);
   } catch (e) {
     console.warn('img:', url.slice(0, 120), e.message);
+    if (MEDIA_RE.test(url) && e.code === 'ENOENT') return res.status(404).end();
     return res.redirect(302, url);
   }
 }
 
 /** После запуска и выгрузки меню: заранее готовим картинки, чтобы первый гость не ждал. */
-export async function warmImages({ widths = [320, 720], concurrency = 3 } = {}) {
-  const urls = [...await allowedUrls()].filter((u) => /^https?:\/\//i.test(u));
+export async function warmImages({ widths = [320, 480, 720, 1280], concurrency = 3 } = {}) {
+  const urls = [...await allowedUrls()].filter((u) => /^https?:\/\//i.test(u) || MEDIA_RE.test(u));
   let i = 0;
   let done = 0;
   const worker = async () => {

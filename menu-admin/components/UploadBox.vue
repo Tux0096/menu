@@ -14,14 +14,28 @@ const input = ref<HTMLInputElement | null>(null);
 
 const acceptAttr = computed(() => (props.accept === 'image' ? IMAGE_TYPES : [...VIDEO_TYPES, 'image/gif', 'image/webp']).join(','));
 const defaultHint = computed(() =>
-  props.accept === 'image' ? 'JPG, PNG, WebP или GIF до 8 МБ' : 'MP4 3–6 секунд без звука, до 25 МБ (или анимированный WebP/GIF)',
+  props.accept === 'image' ? 'JPG, PNG, WebP или GIF до 8 МБ. Лучше квадрат от 1200 px, блюдо по центру на белом фоне' : 'MP4 3–6 секунд без звука, до 25 МБ (или анимированный WebP/GIF)',
 );
+
+/** Маленькое фото у гостя растягивается и мылится (экраны 3x) — предупреждаем сразу при загрузке */
+function warnIfSmall(file: File) {
+  const url = URL.createObjectURL(file);
+  const img = new Image();
+  img.onload = () => {
+    const side = Math.min(img.naturalWidth, img.naturalHeight);
+    if (side && side < 800) notify.warning(`Фото маленькое: ${img.naturalWidth}×${img.naturalHeight} px`, 'На телефоне будет нечётким. Лучше от 1200 px по меньшей стороне.');
+    URL.revokeObjectURL(url);
+  };
+  img.onerror = () => URL.revokeObjectURL(url);
+  img.src = url;
+}
 
 async function handle(files: FileList | null | undefined) {
   const file = files?.[0];
   if (!file) return;
   try {
     emit('uploaded', await upload(file), file);
+    if (file.type.startsWith('image/')) warnIfSmall(file);
   } catch (e) {
     notify.error(e, `Не удалось загрузить ${file.name}`);
   }

@@ -67,8 +67,9 @@ export async function saveOverride(restaurantId, productId, patch) {
     if (f === 'priority') v = Math.max(-999, Math.min(999, Math.round(Number(v) || 0)));
     if (['name', 'description', 'image_url', 'weight', 'product_name', 'badge', 'video_url'].includes(f)) v = v ? String(v) : null;
     // Метки: список через запятую, только латинские коды (hit, new, spicy…)
-    if (f === 'badge' && v) v = [...new Set(v.split(',').map((b) => b.trim().toLowerCase()).filter((b) => /^[a-z]{2,12}$/.test(b)))].slice(0, 6).join(',') || null;
-    if (f === 'card_size') v = v === 'big' ? 'big' : null;
+    // Пусто = «меток нет» явно (''), а не «не задано» (NULL): иначе карточка по названию вернула бы старые метки
+    if (f === 'badge' && patch[f] !== undefined) v = [...new Set(String(patch[f] || '').split(',').map((b) => b.trim().toLowerCase()).filter((b) => /^[a-z]{2,12}$/.test(b)))].slice(0, 6).join(',');
+    if (f === 'card_size') v = v === 'big' ? 'big' : 'normal';
     if (f === 'allergens') v = Array.isArray(v) ? v.map((a) => String(a).trim()).filter(Boolean) : null;
     if (f.startsWith('is_')) v = Boolean(v);
     values[f] = v;
