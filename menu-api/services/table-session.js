@@ -7,7 +7,7 @@
  */
 import { uuidOrNull } from '../lib/uuid.js';
 import pool from '../db/pool.js';
-import { isValidQrKey, QR_RESTAURANT_SLUG, QR_SIGNED_REQUIRED } from '../lib/qr-config.js';
+import { isValidQrKey, QR_RESTAURANT_SLUG, qrSignedRequired } from '../lib/qr-config.js';
 import {
   IDLE_REMINDER_MS,
   NOTIFY_TYPES,
@@ -312,6 +312,10 @@ function normalizeTable(tableNumber, restaurant) {
   const t = String(tableNumber || '').trim();
   if (!/^[0-9A-Za-zА-Яа-я-]{1,10}$/.test(t)) throw httpError(400, 'Некорректный номер стола');
   const n = Number(t);
+  if (/^\d+$/.test(t)) {
+    if (restaurant.tables_count && (n < 1 || n > restaurant.tables_count)) throw httpError(404, `Стол №${t} не найден в ресторане`);
+    return String(n); // «07» и «7» — один стол (одна сессия, одна подпись QR)
+  }
   if (Number.isInteger(n) && restaurant.tables_count && (n < 1 || n > restaurant.tables_count)) {
     throw httpError(404, `Стол №${t} не найден в ресторане`);
   }
@@ -342,7 +346,7 @@ export async function enterTable({
   // ТЗ: гость не видит чужой стол без QR. С QR_SIGNED_REQUIRED за стол садятся только по подписанному QR;
   // гость, который уже сидит за этим столом (перезагрузил страницу), входит без подписи.
   const seated = Boolean(guest && session && (session.guest_ids || []).includes(guest.id) && session.payment_status !== 'paid');
-  if (QR_SIGNED_REQUIRED && !seated && !isValidQrKey(restaurant.slug, table, qrKey)) {
+  if (!seated && !isValidQrKey(restaurant.slug, table, qrKey) && await qrSignedRequired()) {
     throw httpError(403, 'Отсканируйте QR-код на столе, чтобы открыть заказ', { code: 'QR_REQUIRED' });
   }
   if (session && session.payment_status === 'paid') {
@@ -391,25 +395,26 @@ export async function enterTable({
       }
     }
     if (!known) {
-      // Каждый присоединившийся — ещё один гость в заказе
-      await pool.query(
+      // Каждый присоединившийся — ещё один гость в заказе. Атомарно: при двойном нажатии второй запрос
+      // не найдёт строку (гость уже в guest_ids) и не продублирует гостя, визит и уведомление
+      const { rowCount: joined } = await pool.query(
         `UPDATE table_sessions SET
            guest_id = COALESCE(guest_id, $2),
            guest_ids = array_append(guest_ids, $2),
            guest_count = GREATEST(guest_count, cardinality(guest_ids) + 1),
            last_guest_activity_at = NOW(),
            updated_at = NOW()
-         WHERE id = $1`,
+         WHERE id = $1 AND NOT ($2 = ANY(guest_ids))`,
         [session.id, guest.id],
       );
-      await pool.query(
+      if (joined) await pool.query(
         'UPDATE guests SET visits_count = visits_count + 1, last_visit_at = NOW() WHERE id = $1',
         [guest.id],
       );
       const isLead = !session.guest_id;
       const who = guest.name || 'Гость';
       const visits = guest.visitsCount ? ` · визитов: ${guest.visitsCount + 1}` : ' · первый визит';
-      await createWaiterNotification({
+      if (joined) await createWaiterNotification({
         restaurantId: restaurant.id,
         sessionId: session.id,
         tableNumber: table,
@@ -710,6 +715,12 @@ export async function requestBill(sessionId, { guest = null, guestIds = null, me
     at: new Date().toISOString(), by, byGuestId: guest?.id || null, scope: whole ? 'table' : 'guests',
     guestIds: whole ? [] : ids, names, amount, method: pay, part: barOnly ? 'bar' : 'all',
   };
+  const who = whole ? 'за весь стол' : names.length === 1 && names[0] === by ? `только ${by}` : names.join(' и ');
+  const what = barOnly ? 'бар (кухня оплачена онлайн)' : who;
+  const body = `${by ? `${by}: ` : ''}${barOnly && !whole ? `${who}, ` : ''}${what} — ${Math.round(amount)} ₽${pay ? `, ${BILL_METHODS[pay]}` : ''}`
+    + `${whole || barOnly ? '' : ` (весь стол ${Math.round(ctx.session.total)} ₽)`}`;
+  // Повторное нажатие «Попросить счёт» с тем же выбором — официант уже знает, второй раз не зовём
+  if (await recentlyNotified(sessionId, NOTIFY_TYPES.BILL_REQUESTED, body, CALL_COOLDOWN_SEC)) return getSessionView(sessionId);
   await pool.query(
     `UPDATE table_sessions SET workflow_status = $2, bill_requested_at = NOW(), wait_notified_at = NULL,
        bill_requests = COALESCE(bill_requests, '[]'::jsonb) || $3::jsonb,
@@ -717,19 +728,27 @@ export async function requestBill(sessionId, { guest = null, guestIds = null, me
      WHERE id = $1`,
     [sessionId, WORKFLOW.BILL_REQUESTED, JSON.stringify([request])],
   );
-  const who = whole ? 'за весь стол' : names.length === 1 && names[0] === by ? `только ${by}` : names.join(' и ');
-  const what = barOnly ? 'бар (кухня оплачена онлайн)' : who;
   await createWaiterNotification({
     restaurantId: ctx.restaurant.id,
     sessionId,
     tableNumber: ctx.session.table_number,
     type: NOTIFY_TYPES.BILL_REQUESTED,
     title: `Стол №${ctx.session.table_number} — счёт${pay ? ` ${BILL_METHODS[pay]}` : ''}`,
-    body: `${by ? `${by}: ` : ''}${barOnly && !whole ? `${who}, ` : ''}${what} — ${Math.round(amount)} ₽${pay ? `, ${BILL_METHODS[pay]}` : ''}`
-      + `${whole || barOnly ? '' : ` (весь стол ${Math.round(ctx.session.total)} ₽)`}`,
+    body,
     payload: { sessionId, total: parseFloat(ctx.session.total), amount, guestIds: request.guestIds, method: pay, part: request.part },
   });
   return getSessionView(sessionId);
+}
+
+/** Повтор вызова в пределах паузы: то же уведомление этого стола уже ушло официанту */
+const CALL_COOLDOWN_SEC = 60;
+async function recentlyNotified(sessionId, type, body, seconds) {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM waiter_notifications
+     WHERE session_id = $1 AND type = $2 AND body = $3 AND created_at > NOW() - ($4 || ' seconds')::interval LIMIT 1`,
+    [sessionId, type, body, String(seconds)],
+  );
+  return rows.length > 0;
 }
 
 export async function callWaiter(sessionId, reason = 'general', comment = '') {
@@ -738,13 +757,17 @@ export async function callWaiter(sessionId, reason = 'general', comment = '') {
     return { ok: true, message: 'Официант скоро принесёт счёт', session: await requestBill(sessionId) };
   }
   const text = CALL_REASONS[reason] || CALL_REASONS.general;
+  const body = comment ? `${text}: ${String(comment).slice(0, 200)}` : text;
+  if (await recentlyNotified(sessionId, NOTIFY_TYPES.CALL_WAITER, body, CALL_COOLDOWN_SEC)) {
+    return { ok: true, message: 'Официант уже вызван — скоро подойдёт', tableNumber: ctx.session.table_number, repeated: true };
+  }
   await createWaiterNotification({
     restaurantId: ctx.restaurant.id,
     sessionId,
     tableNumber: ctx.session.table_number,
     type: NOTIFY_TYPES.CALL_WAITER,
     title: `Стол №${ctx.session.table_number} — вызов`,
-    body: comment ? `${text}: ${String(comment).slice(0, 200)}` : text,
+    body,
     payload: { sessionId, reason, guestName: ctx.session.guest_name },
   });
   await pool.query('UPDATE table_sessions SET last_guest_activity_at = NOW() WHERE id = $1', [sessionId]);
@@ -826,6 +849,8 @@ export async function payBill(sessionId, { method = 'card', tipAmount = 0 } = {}
 
 export async function submitFeedback(sessionId, { rating, comment = '' }) {
   const ctx = await requireContext(sessionId);
+  // Отзыв — о визите: оставить его можно только после того, как заказ ушёл на кухню
+  if (!ctx.items.some((i) => i.is_locked)) throw httpError(400, 'Отзыв можно оставить после заказа');
   const r = Math.round(Number(rating));
   if (!(r >= 1 && r <= 5)) throw httpError(400, 'Оценка от 1 до 5');
   const { rowCount } = await pool.query(

@@ -99,8 +99,24 @@ const SYSTEM_RULES = `Ты — AI-официант японского ресто
  * @param {object[]} products — доступные блюда (без стоп-листа)
  * @returns {Promise<{answer: string, picks: {product, reason, score, qty}[]} | null>}
  */
+// Дневной бюджет платных вызовов модели: сверх него — мгновенный подбор без LLM (гость ответ всё равно получит)
+const DAILY_LIMIT = parseInt(process.env.AI_LLM_DAILY_LIMIT || '3000', 10);
+const budget = { day: '', used: 0 };
+function takeBudget() {
+  const day = new Date().toISOString().slice(0, 10);
+  if (budget.day !== day) { budget.day = day; budget.used = 0; }
+  if (budget.used >= DAILY_LIMIT) {
+    if (budget.used === DAILY_LIMIT) console.warn(`AI: дневной лимит ${DAILY_LIMIT} запросов к модели исчерпан — до полуночи UTC подбор без LLM`);
+    budget.used += 1;
+    return false;
+  }
+  budget.used += 1;
+  return true;
+}
+
 export async function llmSuggest(query, products, { limit = 5, guest = null } = {}) {
   if (!isLlmEnabled() || !products.length) return null;
+  if (!takeBudget()) return null;
   const { list, text } = buildMenu(products);
 
   const guestCtx = [

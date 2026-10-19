@@ -25,7 +25,17 @@ const PORT = process.env.PORT || 3101;
 app.set('trust proxy', 'loopback');
 app.disable('x-powered-by');
 app.use(securityHeaders);
-app.use(cors({ exposedHeaders: ['X-Staff-Token'] })); // новый токен персонала (скользящий вход) читает приложение официанта
+// CORS: браузер пускает к API только наши сайты (меню, админка, официант); запросы без Origin (приложение, сервер) — как раньше.
+// Свой список — CORS_ORIGINS через запятую
+const CORS_ORIGINS = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
+const corsAllowed = (origin) => !origin
+  || CORS_ORIGINS.includes(origin)
+  || /^https:\/\/([a-z0-9-]+\.)*franchise-fuji\.ru$/i.test(origin)
+  || (process.env.NODE_ENV !== 'production' && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin));
+app.use(cors({
+  origin: (origin, cb) => cb(null, corsAllowed(origin)),
+  exposedHeaders: ['X-Staff-Token'], // новый токен персонала (скользящий вход) читает приложение официанта
+}));
 app.use(express.json({ limit: '1mb' }));
 
 // Маршруты API по областям: публичное, вебхуки iiko, гость, персонал, админка

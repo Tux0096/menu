@@ -60,6 +60,38 @@ async function copy(url: string) {
   }
 }
 const print = () => window.print();
+
+// Вход за стол только по QR с подписью: номер стола в ссылке подобрать нельзя
+const qr = ref<{ signedRequired: boolean; envForced: boolean; canEdit: boolean } | null>(null);
+const qrSaving = ref(false);
+const confirm = useConfirm();
+onMounted(async () => {
+  try {
+    qr.value = await useAuthFetch('/admin/qr-settings');
+  } catch {
+    qr.value = null; // не админ сети — блок не показываем
+  }
+});
+async function setSigned(on: boolean) {
+  if (!qr.value) return;
+  if (on) {
+    const ok = await confirm({
+      title: 'Пускать за стол только по QR с наклейки?',
+      description: 'Включайте, когда новые наклейки из этой страницы уже на всех столах. Старые QR и ссылки без подписи перестанут открывать стол; гости, которые уже сидят за столом, не заметят.',
+      confirmLabel: 'Включить',
+    });
+    if (!ok) return;
+  }
+  qrSaving.value = true;
+  try {
+    qr.value = await useAuthFetch('/admin/qr-settings', { method: 'POST', body: { signedRequired: on } });
+    notify.success(on ? 'Вход только по QR на столе' : 'Проверка QR выключена');
+  } catch (e) {
+    notify.error(e, 'Не удалось сохранить');
+  } finally {
+    qrSaving.value = false;
+  }
+}
 </script>
 
 <template>
@@ -80,6 +112,18 @@ const print = () => window.print();
         <UButton color="white" :loading="saving" @click="saveCount">Сохранить</UButton>
         <p class="text-xs text-slate-500 sm:ml-2 sm:max-w-md">Столы нумеруются с 1. Номер на наклейке совпадает с номером стола в iiko — по нему заказ попадает на нужный стол.</p>
       </div>
+
+      <div v-if="qr" class="panel-box mb-4 flex flex-wrap items-center gap-3 p-3 sm:p-4">
+        <UToggle :model-value="qr.signedRequired" :disabled="qrSaving || qr.envForced || !qr.canEdit" aria-label="Вход только по QR на столе" @update:model-value="setSigned" />
+        <div class="min-w-0 flex-1">
+          <div class="text-sm font-semibold">Вход только по QR на столе</div>
+          <p class="text-xs text-slate-500">
+            {{ qr.envForced ? 'Включено в настройках сервера.' : qr.signedRequired
+              ? 'Стол открывается только по QR с этой страницы — номер стола в ссылке не подобрать.'
+              : 'Сейчас стол открывается и по ссылке без подписи. Включите, когда новые наклейки будут на столах.' }}
+          </p>
+        </div>
+      </div>
     </div>
 
     <LoadError v-if="loadError && !tables" :message="loadError" @retry="load" />
@@ -88,6 +132,7 @@ const print = () => window.print();
     </div>
     <div v-else class="qr-grid grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
       <div v-for="t in tables" :key="t.table" class="qr-card panel-box flex flex-col items-center p-4 text-center">
+        <div class="text-xs text-slate-500">{{ restaurants.current?.name }}</div>
         <div class="text-sm font-semibold">Стол №{{ t.table }}</div>
         <img :src="t.qr" :alt="`QR стол ${t.table}`" class="my-2 h-36 w-36" loading="lazy" />
         <div class="text-xs">Отсканируйте, чтобы открыть меню</div>

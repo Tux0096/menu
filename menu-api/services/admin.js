@@ -172,8 +172,15 @@ export async function listFeedback(restaurantId, limit = 100) {
   return rows;
 }
 
-export async function listAudit(limit = 200) {
-  const { rows } = await pool.query('SELECT * FROM audit_log ORDER BY created_at DESC LIMIT $1', [limit]);
+/** Журнал действий; сотруднику ресторана — только действия сотрудников этого ресторана */
+export async function listAudit(limit = 200, restaurantId = null) {
+  const { rows } = restaurantId
+    ? await pool.query(
+      `SELECT a.* FROM audit_log a JOIN staff_users u ON u.id = a.staff_id
+       WHERE u.restaurant_id = $2 ORDER BY a.created_at DESC LIMIT $1`,
+      [limit, restaurantId],
+    )
+    : await pool.query('SELECT * FROM audit_log ORDER BY created_at DESC LIMIT $1', [limit]);
   return rows;
 }
 

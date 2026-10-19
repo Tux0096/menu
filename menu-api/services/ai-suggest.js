@@ -101,6 +101,9 @@ export async function getWelcomeSuggestions(restaurant, limit = 4, guest = null)
   return picked.map(mapSuggestion);
 }
 
+const LLM_CACHE_MS = 10 * 60_000;
+const llmCache = new Map();
+
 /**
  * Подбор по запросу гостя (текст или чип).
  * LLM (OpenRouter) получает всё доступное меню с составом + запрос и контекст гостя;
@@ -114,6 +117,14 @@ export async function suggestForQuery(restaurant, query, limit = 6, guest = null
     getGuestFavorites(guest?.id),
   ]);
 
+  // Одинаковые запросы без личного контекста (чипы «Острое», «Без рыбы») — ответ модели из кэша на 10 минут
+  const anon = !guest && !cartNames.length;
+  const cacheKey = `${restaurant.slug}|${String(query).trim().toLowerCase()}`;
+  if (useLlm && anon) {
+    const hit = llmCache.get(cacheKey);
+    if (hit && Date.now() - hit.at < LLM_CACHE_MS) return hit.value;
+  }
+
   if (useLlm && isLlmEnabled()) {
     const available = await getAvailableProducts(restaurant);
     const favNames = available.filter((p) => favorites.has(String(p.iikoId || p.id))).map((p) => p.name).slice(0, 8);
@@ -125,11 +136,16 @@ export async function suggestForQuery(restaurant, query, limit = 6, guest = null
       const allowed = new Set(excludeAllergens(llm.picks.map((x) => x.product), guest?.allergens).map((p) => p.id));
       const picks = llm.picks.filter((x) => allowed.has(x.product.id));
       if (picks.length) {
-        return {
+        const value = {
           engine: 'llm',
           answer: llm.answer,
           suggestions: picks.map((x) => ({ ...mapSuggestion(x), qty: x.qty })),
         };
+        if (anon) {
+          if (llmCache.size > 500) llmCache.clear();
+          llmCache.set(cacheKey, { at: Date.now(), value });
+        }
+        return value;
       }
     }
   }
