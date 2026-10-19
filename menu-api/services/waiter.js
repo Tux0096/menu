@@ -199,7 +199,8 @@ async function sendToKitchenNow(sessionId, staff) {
   const pending = ctx.items.filter((i) => !i.is_locked);
   if (!pending.length) throw httpError(400, 'Нет новых позиций для отправки');
   // Стоп-лист проверяем в момент отправки: блюдо могло закончиться, пока гость собирал корзину
-  const problems = stopProblems(await menuIndex(restaurant), pending.map((i) => ({
+  const index = await menuIndex(restaurant);
+  const problems = stopProblems(index, pending.map((i) => ({
     key: i.iiko_product_id || i.product_id, quantity: i.quantity,
   })));
   if (problems.length) {
@@ -234,7 +235,8 @@ async function sendToKitchenNow(sessionId, staff) {
             productId: i.iiko_product_id,
             amount: i.quantity,
             // Размер и модификаторы гостя (из внешнего меню iiko): iiko сам считает их цену
-            productSizeId: i.size_id || undefined,
+            // Продаётся один размер из нескольких (пицца: «по умолчанию» без цены) — iiko нужен его ID
+            productSizeId: i.size_id || index.get(String(i.iiko_product_id))?.sizeId || undefined,
             modifiers: (i.modifiers || []).map((m) => ({ productId: m.id, amount: m.amount, productGroupId: m.groupId || undefined })),
             comment: [i.guest_name || null, i.seat_number ? `место ${i.seat_number}` : null, i.course ? `курс ${i.course}` : null]
               .filter(Boolean).join(', ') || undefined,

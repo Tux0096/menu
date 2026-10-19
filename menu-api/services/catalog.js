@@ -90,6 +90,7 @@ async function getCatalogFromDb(restaurantId) {
       modifierGroups: p.options?.groups || [],
       // Цена без выбора, если отличается от «от» (вок с платной основой: базовая 0, «от 459»)
       basePrice: Number.isFinite(Number(p.options?.base)) && p.options?.base != null ? Number(p.options.base) : null,
+      sizeId: p.options?.sizeId || null,
       groupModifiers: [],
       modifiers: [],
       filters: [],
