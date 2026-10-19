@@ -160,8 +160,8 @@ const tagStyle = (b: string) => {
 const tagLabel = (b: string) => (BADGES[b] || b).replace(/\s*\(.*\)$/, '');
 const setupPoint = ref<NetworkPoint | null>(null);
 // Подвкладки: блюда (общие карточки) и разделы меню (порядок, названия, картинки шторки «Меню»)
-const view = ref<'dishes' | 'sections'>(route.query.tab === 'sections' ? 'sections' : 'dishes');
-watch(view, (v) => navigateTo({ query: { ...route.query, tab: v === 'sections' ? 'sections' : undefined } }, { replace: true }));
+const view = ref<'dishes' | 'sections' | 'modifiers'>(route.query.tab === 'sections' || route.query.tab === 'modifiers' ? route.query.tab : 'dishes');
+watch(view, (v) => navigateTo({ query: { ...route.query, tab: v === 'dishes' ? undefined : v } }, { replace: true }));
 
 // ---------- общая карточка блюда
 const editItem = ref<NetworkItem | null>(null);
@@ -213,7 +213,7 @@ function openItem(it: NetworkItem, tab: 'card' | 'availability' = 'card') {
 
     <div class="mb-4 inline-flex rounded-xl bg-white p-1 ring-1 ring-brand-100" role="tablist" aria-label="Раздел меню сети">
       <button
-        v-for="t in [{ v: 'dishes', l: 'Блюда', i: 'i-heroicons-squares-2x2' }, { v: 'sections', l: 'Разделы меню', i: 'i-heroicons-bars-arrow-down' }] as const"
+        v-for="t in [{ v: 'dishes', l: 'Блюда', i: 'i-heroicons-squares-2x2' }, { v: 'sections', l: 'Разделы меню', i: 'i-heroicons-bars-arrow-down' }, { v: 'modifiers', l: 'Модификаторы', i: 'i-heroicons-adjustments-horizontal' }] as const"
         :key="t.v"
         type="button"
         role="tab"
@@ -227,6 +227,7 @@ function openItem(it: NetworkItem, tab: 'card' | 'availability' = 'card') {
     </div>
 
     <MenuSections v-if="view === 'sections'" />
+    <MenuModifiers v-else-if="view === 'modifiers'" />
 
     <template v-else>
     <div class="panel-box mb-4 space-y-3 p-3 sm:p-4">

@@ -8,7 +8,7 @@
  */
 import pool from '../db/pool.js';
 import { accessibleOrgIds } from '../iiko-client.js';
-import { getRestaurantCatalog } from './catalog.js';
+import { cleanModText, getRestaurantCatalog, groupTitle } from './catalog.js';
 import { getStopListIds } from './stoplist.js';
 import { cleanMenuName, menuKey } from '../lib/menu-key.js';
 
@@ -223,6 +223,83 @@ export async function setCategoryImage(name, imageUrl) {
   await pool.query(
     `INSERT INTO category_content (key, name, image_url, updated_at) VALUES ($1, $2, $3, NOW())
      ON CONFLICT (key) DO UPDATE SET name = EXCLUDED.name, image_url = EXCLUDED.image_url, updated_at = NOW()`,
+    [key, String(name).slice(0, 200), imageUrl || null],
+  );
+  return { key, image: imageUrl || null };
+}
+
+/**
+ * Модификаторы меню сети: группы (по названию в iiko) с вариантами — для настройки в админке.
+ * title — своё название из админки, auto — как увидит гость без своего; dishes — в каких блюдах встречается.
+ */
+export async function getModifierList(restaurants) {
+  const { rows } = await pool.query('SELECT kind, key, title, image_url FROM modifier_content');
+  const content = new Map(rows.map((r) => [`${r.kind}:${r.key}`, r]));
+  const groups = new Map();
+  const catalogs = await Promise.all(restaurants.map((r) => getRestaurantCatalog(r)));
+  for (const catalog of catalogs) {
+    for (const p of catalog.products || []) {
+      const all = [...(p.modifierGroups || []), ...(p.sizes || []).flatMap((z) => z.groups || [])];
+      for (const g of all) {
+        const gName = g.iikoName || g.name;
+        const gKey = menuKey(gName);
+        if (!gKey) continue;
+        if (!groups.has(gKey)) {
+          const cleanItems = (g.items || []).map((m) => ({ name: cleanModText(m.iikoName || m.name) }));
+          groups.set(gKey, {
+            key: gKey, iikoName: gName, title: content.get(`group:${gKey}`)?.title || '', auto: groupTitle(gName, cleanItems),
+            min: g.min, max: g.max, dishes: new Set(), items: new Map(),
+          });
+        }
+        const G = groups.get(gKey);
+        G.dishes.add(p.name);
+        for (const m of g.items || []) {
+          const mName = m.iikoName || m.name;
+          const mKey = menuKey(mName);
+          if (!mKey || G.items.has(mKey)) continue;
+          const c = content.get(`item:${mKey}`);
+          G.items.set(mKey, {
+            key: mKey, iikoName: mName, title: c?.title || '', auto: cleanModText(mName) || mName,
+            image: c?.image_url || null, iikoImage: c?.image_url ? null : m.image || null, price: m.price || 0,
+          });
+        }
+      }
+    }
+  }
+  return [...groups.values()]
+    .map((g) => ({ ...g, dishes: [...g.dishes].slice(0, 6), dishCount: g.dishes.size, items: [...g.items.values()] }))
+    .sort((a, b) => b.dishCount - a.dishCount || a.auto.localeCompare(b.auto, 'ru'));
+}
+
+/** Свои названия групп и вариантов модификаторов (пусто — как в iiko без служебных пометок). Картинки не трогаются. */
+export async function saveModifierTitles({ groups = [], items = [] } = {}) {
+  const list = [
+    ...(Array.isArray(groups) ? groups : []).map((x) => ['group', x]),
+    ...(Array.isArray(items) ? items : []).map((x) => ['item', x]),
+  ].slice(0, 2000);
+  let saved = 0;
+  for (const [kind, x] of list) {
+    const name = String(x?.iikoName || '').slice(0, 200);
+    const key = menuKey(name).slice(0, 200);
+    if (!key) continue;
+    const title = String(x?.title || '').trim().slice(0, 120) || null;
+    await pool.query(
+      `INSERT INTO modifier_content (kind, key, name, title, updated_at) VALUES ($1, $2, $3, $4, NOW())
+       ON CONFLICT (kind, key) DO UPDATE SET name = EXCLUDED.name, title = EXCLUDED.title, updated_at = NOW()`,
+      [kind, key, name, title],
+    );
+    saved += 1;
+  }
+  return { saved };
+}
+
+/** Картинка варианта модификатора (пусто — из iiko или первая буква). */
+export async function setModifierImage(name, imageUrl) {
+  const key = menuKey(String(name || '').slice(0, 200)).slice(0, 200);
+  if (!key) return null;
+  await pool.query(
+    `INSERT INTO modifier_content (kind, key, name, image_url, updated_at) VALUES ('item', $1, $2, $3, NOW())
+     ON CONFLICT (kind, key) DO UPDATE SET name = EXCLUDED.name, image_url = EXCLUDED.image_url, updated_at = NOW()`,
     [key, String(name).slice(0, 200), imageUrl || null],
   );
   return { key, image: imageUrl || null };

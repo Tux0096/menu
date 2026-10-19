@@ -121,6 +121,7 @@ const missingImages = computed(() => (list.value ?? []).filter((c) => !c.hidden 
 </script>
 
 <template>
+  <SyncReport />
   <div class="grid gap-4 xl:grid-cols-[1fr_360px]">
     <div class="panel-box overflow-hidden">
       <div class="flex flex-wrap items-center gap-3 border-b border-brand-50 px-4 py-3">
