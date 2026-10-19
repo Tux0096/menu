@@ -115,7 +115,11 @@ export const cleanModText = (t) => {
 export function groupTitle(name, items) {
   const n = cleanModText(name);
   const all = items.map((m) => m.name.toLowerCase()).join(' ');
-  if (n && !/^мод([.+\s]|$)/i.test(n)) return n;
+  // Размер пиццы модификатором: «На выбор» → «Большая / Средняя» или «30 см / 40 см»
+  const sizeLike = items.length > 1 && items.every((m) => /^(больш|средн|маленьк|\d+\s*(см|cm)(\s|$))/i.test(String(m.name).trim()));
+  const generic = !n || /^(на выбор|мод([.+\s]|$))/i.test(n);
+  if (sizeLike && generic) return 'Размер';
+  if (!generic) return n;
   if (/соус|heinz/.test(all) || /соус/i.test(n)) return 'Соус на выбор';
   if (/топпинг/.test(all)) return 'Топпинг';
   if (/ролл/i.test(n) || /ролл/.test(all)) return 'Ролл на выбор';
