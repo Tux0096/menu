@@ -20,7 +20,7 @@ async function getCatalogFromDb(restaurantId) {
   const { rows: products } = await pool.query(
     `SELECT p.id, p.iiko_id, p.name, p.slug, p.description, p.price, p.old_price,
             p.weight, p.image_url, p.category_id, p.sort_order, p.is_published,
-            p.energy, p.proteins, p.fats, p.carbs, p.source, p.sku, p.options
+            p.energy, p.proteins, p.fats, p.carbs, p.source, p.sku, p.options, p.also_in
      FROM products p
      WHERE p.restaurant_id = $1 AND p.is_published = TRUE AND p.price > 0
      ORDER BY p.sort_order`,
@@ -32,7 +32,9 @@ async function getCatalogFromDb(restaurantId) {
     `SELECT id, name, slug, parent_id, sort_order, image_url
      FROM categories WHERE is_visible = TRUE ORDER BY sort_order`,
   );
-  const used = new Set(products.map((p) => p.category_id));
+  // Блюдо и в других разделах (бизнес-ланч из блюд меню): [раздел, порядок] каждого дополнительного места
+  const extraPlaces = (p) => Object.values(p.also_in || {}).flat().filter((x) => x?.c && x.c !== p.category_id);
+  const used = new Set(products.flatMap((p) => [p.category_id, ...extraPlaces(p).map((x) => x.c)]));
   for (const cat of allCategories) {
     if (used.has(cat.id) && cat.parent_id) used.add(cat.parent_id);
   }
@@ -61,10 +63,7 @@ async function getCatalogFromDb(restaurantId) {
     // Меньше 10 — килограммы из номенклатуры; больше — число без единицы (её ставит каталог: бар — мл, кухня — г)
     return n < 10 ? `${Math.round(n * 1000)} г` : String(Math.round(n));
   };
-  return {
-    groups,
-    stopList: [],
-    products: products.map((p) => ({
+  const mapped = products.map((p) => ({
       id: p.iiko_id || p.id,
       iikoId: p.iiko_id || p.id,
       name: p.name,
@@ -101,8 +100,40 @@ async function getCatalogFromDb(restaurantId) {
       likesCount: 0,
       isLiked: false,
       minGroupMod: 0,
-    })),
-  };
+  }));
+  // Копия блюда в дополнительном разделе: тот же ID (цена, стоп-лист и заказ — общие), isAlias — не дублировать в поиске
+  const places = new Map(products.map((p) => [String(p.iiko_id || p.id), extraPlaces(p)]));
+  const withAliases = mapped.flatMap((p) => [p, ...(places.get(String(p.id)) || [])
+    .map((x) => ({ ...p, parentGroup: x.c, order: Number(x.o) || p.order, isAlias: true }))]);
+  return { groups, stopList: [], products: withAliases };
+}
+
+/**
+ * Одноимённые разделы (бизнес-ланч и в меню кухни, и в меню бара) — один раздел у гостя.
+ * Блюдо, попавшее в раздел дважды, — один раз.
+ */
+function mergeSameNamedGroups(groups, products) {
+  const canon = new Map();
+  const remap = new Map();
+  const out = [];
+  for (const g of groups || []) {
+    const key = menuKey(g.name);
+    const first = key && canon.get(key);
+    if (first && !g.parentGroup && !first.parentGroup) { remap.set(String(g.id), first.id); continue; }
+    if (key && !canon.has(key)) canon.set(key, g);
+    out.push(g);
+  }
+  if (!remap.size) return { groups: out, products };
+  const seen = new Set();
+  const list = [];
+  for (const p of products) {
+    const pg = remap.get(String(p.parentGroup)) ?? p.parentGroup;
+    const k = `${pg}|${p.id}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    list.push(pg === p.parentGroup ? p : { ...p, parentGroup: pg });
+  }
+  return { groups: out, products: list };
 }
 
 /**
@@ -390,9 +421,10 @@ async function buildRestaurantCatalog(restaurant, { force = false } = {}) {
   // Стоп из админки/старого формата — для любой кассы; стоп iiko — по кассе блюда и размеру
   const stopped = (src, pid, sizeId = null) => stop.has(String(pid)) || iikoStop.stopped(src, pid, sizeId);
 
-  const groupName = new Map((raw.data.groups || []).map((g) => [g.id, g.name]));
+  const merged = mergeSameNamedGroups(raw.data.groups, raw.data.products || []);
+  const groupName = new Map(merged.groups.map((g) => [g.id, g.name]));
   const products = [];
-  for (const product of raw.data.products || []) {
+  for (const product of merged.products) {
     // Своя карточка по ID блюда, недостающие поля — из карточки этого же блюда по названию
     const own = overrides.get(String(product.id)) || overrides.get(String(product.iikoId));
     const named = byName.get(menuKey(product.name));
@@ -432,7 +464,7 @@ async function buildRestaurantCatalog(restaurant, { force = false } = {}) {
   const ranked = products.map((p, i) => ({ ...p, order: (Number(p.order) || i) - (p.priority || 0) * 1e7 }))
     .sort((a, b) => a.order - b.order);
   // Разделы из админки главнее iiko: картинка, название, порядок, вкладка, скрытие
-  const sections = applyCategorySettings(orderGroups(raw.data.groups, barGroups(ranked)), ranked, catSettings);
+  const sections = applyCategorySettings(orderGroups(merged.groups, barGroups(ranked)), ranked, catSettings);
   // Вес без единицы (в iiko «порц»): напитки бара — в мл, остальное — в граммах
   const barIds = new Set(sections.groups.filter((g) => g.isBar).map((g) => String(g.id)));
   for (const p of sections.products) {
@@ -469,7 +501,7 @@ export async function getCatalogProducts(restaurant) {
   if (!restaurant) return [];
   const catalog = await getRestaurantCatalog(restaurant);
   return catalog.products.filter(
-    (p) => Number(p.price) > 0 && p.isPublished !== false && !p.isInStopList && isMainDish(p),
+    (p) => !p.isAlias && Number(p.price) > 0 && p.isPublished !== false && !p.isInStopList && isMainDish(p),
   );
 }
 
@@ -477,7 +509,7 @@ export async function getCatalogProducts(restaurant) {
 export async function getAvailableProducts(restaurant) {
   if (!restaurant) return [];
   const catalog = await getRestaurantCatalog(restaurant);
-  return catalog.products.filter((p) => Number(p.price) > 0 && p.isPublished !== false && !p.isInStopList);
+  return catalog.products.filter((p) => !p.isAlias && Number(p.price) > 0 && p.isPublished !== false && !p.isInStopList);
 }
 
 export function invalidateCatalogCache(restaurantId = null) {

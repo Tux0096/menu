@@ -150,8 +150,10 @@ html { scroll-behavior: smooth; }
   box-shadow: -8px 0 0 0 var(--bg), 8px 0 10px -4px var(--bg);
 }
 .cats .cats__all svg { width: 16px; height: 16px; }
-/* Переключатель «Напитки и бар / Кухня» — сразу после «Меню», заметный, но не активный раздел */
-.cats .cats__switch { border: 1px solid rgba(153, 60, 166, .35); color: var(--purple); background: #fff; font-weight: 600; }
+/* Кухня / Бар — два меню точки: выбранное залито, второе — рядом */
+.menu-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; margin: 0 0 8px; border-radius: 14px; background: #fff; box-shadow: var(--shadow); }
+.menu-tabs button { min-height: 40px; border-radius: 10px; font-size: 14px; font-weight: 600; color: rgba(41, 41, 41, .7); transition: background-color .2s, color .2s; }
+.menu-tabs button.is-on { background: var(--purple); color: #fff; }
 .section-switch { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; width: 100%; margin: 4px 0 calc(96px + var(--safe-b, 0px));
   padding: 18px 20px; border-radius: 16px; background: var(--purple-soft); color: var(--purple); text-align: left; font-size: 18px; font-weight: 600; }
 .section-switch small { font-size: 13px; font-weight: 400; color: rgba(41, 41, 41, .7); }

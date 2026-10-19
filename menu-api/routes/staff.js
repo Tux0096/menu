@@ -74,7 +74,7 @@ waiter.post('/notifications/:id/read', h(async (req) => { await markNotification
 waiter.get('/stop-list', h(async (req) => {
   const catalog = await getRestaurantCatalog(await staffRestaurant(req));
   const items = (catalog.products || [])
-    .filter((p) => Number(p.price) > 0 && (p.isInStopList || p.stopBalance))
+    .filter((p) => !p.isAlias && Number(p.price) > 0 && (p.isInStopList || p.stopBalance))
     .map((p) => ({
       id: String(p.id), iikoId: p.iikoId ? String(p.iikoId) : null, name: p.name, group: p.parentGroupName || null,
       stopped: Boolean(p.isInStopList), balance: p.isInStopList ? 0 : Number(p.stopBalance),

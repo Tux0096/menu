@@ -333,7 +333,7 @@
     const products = S.catalog?.products || [];
     const groups = (S.catalog?.groups || []).filter((g) => products.some((p) => p.parentGroup === g.id));
     if (!S.pickCat || !groups.some((g) => g.id === S.pickCat)) S.pickCat = groups[0]?.id || null;
-    const found = q ? products.filter((p) => p.name.toLowerCase().includes(q) || String(p.sku || '').toLowerCase().includes(q)).slice(0, 40) : products.filter((p) => p.parentGroup === S.pickCat);
+    const found = q ? products.filter((p) => !p.isAlias && p.name.toLowerCase().includes(q) || String(p.sku || '').toLowerCase().includes(q)).slice(0, 40) : products.filter((p) => p.parentGroup === S.pickCat);
     const inCart = (p) => S.edit.items.filter((i) => !i.isLocked && String(i.productId) === String(p.id) && (Number(i.seatNumber) || null) === (S.pickSeat || null)).reduce((n, i) => n + i.quantity, 0);
     return `<div class="pick-backdrop" data-close-picker>
       <div class="pick-sheet" role="dialog" aria-label="Добавить блюда">

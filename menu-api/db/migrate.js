@@ -421,6 +421,8 @@ const SCHEMA = `
   ALTER TABLE category_content ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN NOT NULL DEFAULT FALSE;
   -- Размеры и модификаторы блюда из внешнего меню iiko (с ценами точки): { sizes: [...] } или { groups: [...] }
   ALTER TABLE products ADD COLUMN IF NOT EXISTS options JSONB;
+  -- Блюдо стоит в нескольких разделах внешнего меню (бизнес-ланч из обычных блюд): { источник: [{ c: раздел, o: порядок }] }
+  ALTER TABLE products ADD COLUMN IF NOT EXISTS also_in JSONB;
   -- Выбор гостя в строке заказа: размер и модификаторы уходят в iiko (productSizeId, modifiers)
   ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS size_id VARCHAR(64);
   ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS size_name VARCHAR(100);

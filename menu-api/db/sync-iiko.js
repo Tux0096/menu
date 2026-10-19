@@ -468,7 +468,8 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
         [r.category.id, r.category.name, r.category.id, r.category.order],
       );
     }
-    // Меню каждого источника (кухня, бар…) перезаписывается отдельно
+    // Меню каждого источника (кухня, бар…) перезаписывается отдельно; его «тоже в разделе» у чужих строк — тоже
+    await client.query('UPDATE products SET also_in = NULLIF(also_in - $2, \'{}\'::jsonb) WHERE restaurant_id = $1 AND also_in ? $2', [restaurant.id, source]);
     await client.query('DELETE FROM products WHERE restaurant_id = $1 AND source = ANY($2::text[])', [restaurant.id, [source, ...splits.map((x) => x.code)]]);
     for (const r of rows) {
       await client.query(
@@ -476,10 +477,16 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
            (iiko_id, restaurant_id, name, slug, description, price, weight, image_url,
             category_id, sort_order, is_published, energy, proteins, fats, carbs, source, sku, options)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,$11,$12,$13,$14,$15,$16,$17)
-         ON CONFLICT (restaurant_id, iiko_id) DO NOTHING`,
+         ON CONFLICT (restaurant_id, iiko_id) DO UPDATE SET also_in = CASE
+           WHEN products.category_id = EXCLUDED.category_id THEN products.also_in
+           ELSE jsonb_set(COALESCE(products.also_in, '{}'::jsonb), ARRAY[$18::text],
+             COALESCE(products.also_in -> $18::text, '[]'::jsonb) || jsonb_build_array(jsonb_build_object('c', EXCLUDED.category_id, 'o', EXCLUDED.sort_order)))
+           END`,
+        // То же блюдо ещё в одном разделе (бизнес-ланч собран из блюд меню, или оно и в кухне, и в баре):
+        // строка одна (цена, стоп-лист, заказ — по ID iiko), раздел добавляется в also_in — гость видит блюдо в обоих
         [r.id, restaurant.id, r.name, r.name, r.description, r.price, r.weight, r.image,
           r.category.id, (source === 'main' ? 0 : 100000) + r.order, r.energy, r.proteins, r.fats, r.carbs, r.source || source,
-          r.sku ? String(r.sku).slice(0, 50) : null, r.options ? JSON.stringify(r.options) : null],
+          r.sku ? String(r.sku).slice(0, 50) : null, r.options ? JSON.stringify(r.options) : null, source],
       );
     }
     await client.query('COMMIT');
