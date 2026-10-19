@@ -7,7 +7,7 @@
 import pool from '../db/pool.js';
 import { cleanMenuName, menuKey } from '../lib/menu-key.js';
 import { orderGroups } from './menu-order.js';
-import { getStopBalances, getStopListIds } from './stoplist.js';
+import { getStopIndex } from './stoplist.js';
 
 const TTL_MS = parseInt(process.env.CATALOG_TTL_MS || '300000', 10);
 const rawCache = new Map(); // restaurantId -> { at, source, data }
@@ -231,10 +231,10 @@ export async function warmCatalogs() {
 async function loadIikoStopList(restaurant) {
   // Стоп-лист из БД/памяти: обновляется вебхуками iiko и фоновой сверкой, не в запросе гостя
   try {
-    return await getStopListIds(restaurant.id);
+    return await getStopIndex(restaurant.id);
   } catch (e) {
     console.warn(`stop-list ${restaurant.slug}:`, e.message);
-    return new Set();
+    return { stopped: () => false, balance: () => null };
   }
 }
 
@@ -365,17 +365,17 @@ function applyOverride(product, o) {
  */
 export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
   const raw = await loadRawCatalog(restaurant, { force });
-  const [overrides, byName, iikoStop, balances, catSettings, modContent] = await Promise.all([
+  const [overrides, byName, iikoStop, catSettings, modContent] = await Promise.all([
     getOverrides(restaurant.id),
     getContentByName(restaurant.id).catch(() => new Map()),
     loadIikoStopList(restaurant),
-    getStopBalances(restaurant.id).catch(() => new Map()),
     getCategorySettings().catch(() => new Map()),
     getModifierContent().catch(() => new Map()),
   ]);
 
   const stop = normalizeLegacyStopList(raw.data.stopList, restaurant.terminal_id);
-  for (const id of iikoStop) stop.add(id);
+  // Стоп из админки/старого формата — для любой кассы; стоп iiko — по кассе блюда и размеру
+  const stopped = (src, pid, sizeId = null) => stop.has(String(pid)) || iikoStop.stopped(src, pid, sizeId);
 
   const groupName = new Map((raw.data.groups || []).map((g) => [g.id, g.name]));
   const products = [];
@@ -393,17 +393,23 @@ export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
     const base = { ...product, iikoName: product.name, name: cleanMenuName(product.name) };
     const p = o ? applyOverride(base, o) : base;
     if (!p.parentGroupName) p.parentGroupName = groupName.get(p.parentGroup) || null;
-    p.isInStopList = stop.has(String(p.id)) || stop.has(String(p.iikoId));
+    const src = p.source || 'main';
+    p.isInStopList = stopped(src, p.id) || stopped(src, p.iikoId) || Boolean(p.sizeId && stopped(src, p.iikoId, p.sizeId));
     // Модификаторы на стопе в iiko не предлагаем; обязательный выбор без вариантов — блюдо недоступно
     if (p.sizes?.length || p.modifierGroups?.length) {
-      const prune = (groups) => decorateGroups(groups, modContent).map((g) => ({ ...g, items: g.items.filter((m) => !stop.has(String(m.id))) }));
-      p.sizes = (p.sizes || []).map((z) => ({ ...z, groups: prune(z.groups) }));
+      const prune = (groups) => decorateGroups(groups, modContent).map((g) => ({ ...g, items: g.items.filter((m) => !stopped(src, m.id)) }));
+      // Размер на стопе (пицца 40 см закончилась) — убираем только его
+      const hadSizes = (p.sizes || []).length;
+      p.sizes = (p.sizes || []).filter((z) => !(z.id && stopped(src, p.iikoId, z.id))).map((z) => ({ ...z, groups: prune(z.groups) }));
       p.modifierGroups = prune(p.modifierGroups);
       const blocked = (groups) => groups.some((g) => g.min > 0 && !g.items.length);
-      if (p.sizes.length ? p.sizes.every((z) => blocked(z.groups)) : blocked(p.modifierGroups)) p.isInStopList = true;
+      if (hadSizes && !p.sizes.length) p.isInStopList = true;
+      // Из нескольких размеров остался один — его ID нужен iiko в заказе (выбора у гостя уже нет)
+      if (hadSizes > 1 && p.sizes.length === 1 && p.sizes[0].id) p.sizeId = String(p.sizes[0].id);
+      else if (p.sizes.length ? p.sizes.every((z) => blocked(z.groups)) : blocked(p.modifierGroups)) p.isInStopList = true;
     }
     // Ограниченный остаток в iiko («осталось N») — официант видит, сколько ещё можно предложить
-    const left = p.isInStopList ? null : balances.get(String(p.id)) ?? balances.get(String(p.iikoId));
+    const left = p.isInStopList ? null : iikoStop.balance(src, p.id) ?? iikoStop.balance(src, p.iikoId);
     if (left) p.stopBalance = left;
     products.push(p);
   }

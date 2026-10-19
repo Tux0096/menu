@@ -72,6 +72,7 @@ class _HallScreenState extends State<HallScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _paused = state != AppLifecycleState.resumed;
     if (state == AppLifecycleState.resumed) _load(silent: true);
   }
 
@@ -80,7 +81,12 @@ class _HallScreenState extends State<HallScreen> with WidgetsBindingObserver {
     if (id.isNotEmpty) _openSession(id, (data['tableNumber'] ?? '').toString());
   }
 
+  bool _paused = false;
+  String? _openId;
+
   Future<void> _load({bool silent = false}) async {
+    // Открыт стол или приложение свёрнуто — зал не опрашиваем (экран стола опрашивает свой стол сам)
+    if (silent && (_paused || ModalRoute.of(context)?.isCurrent == false)) return;
     if (!silent) setState(() => _loading = true);
     try {
       final d = await Api.I.get('/api/v1/waiter/hall') as Map;
@@ -111,12 +117,16 @@ class _HallScreenState extends State<HallScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _openSession(String sessionId, String number) async {
+    // Стол уже открыт (push пришёл про него же) — второй экран не открываем
+    if (_openId == sessionId) return;
     HapticFeedback.selectionClick();
+    _openId = sessionId;
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => TableScreen(sessionId: sessionId, tableNumber: number),
       ),
     );
+    _openId = null;
     _load(silent: true);
   }
 

@@ -264,6 +264,29 @@ step('адрес и время работы точки: сохраняются �
   }
 }
 
+// Официант сохраняет корзину, не видя свежего блюда гостя — блюдо гостя остаётся (раньше молча стиралось)
+{
+  const g3 = { 'X-Guest-Token': login.token };
+  const sk = ok(await api('POST', '/api/v1/table/enter', { restaurantSlug: 'novo-sadovaya', tableNumber: `${TABLE}k` }, g3), 'enter k');
+  const [a, b] = catalog.products.filter((p) => !p.modifierGroups?.length && !p.sizes?.length && p.price > 0 && !p.isInStopList);
+  const ln = (p, q) => ({ productId: p.id, iikoProductId: p.iikoId || p.id, name: p.name, quantity: q });
+  ok(await api('POST', '/api/v1/table/submit-to-waiter', { sessionId: sk.sessionId, items: [ln(a, 1)] }, g3), 'submit k');
+  const seen = ok(await api('POST', `/api/v1/waiter/session/${sk.sessionId}/take`, {}, W), 'take k');
+  const rowA = seen.items.find((i) => !i.isLocked);
+  // гость тем временем добавил второе блюдо
+  ok(await api('POST', '/api/v1/table-order/cart', { sessionId: sk.sessionId, items: [ln(a, 1), ln(b, 1)] }, g3), 'guest adds');
+  // официант сохраняет то, что видел: a ×2
+  const saved = ok(await api('POST', `/api/v1/waiter/session/${sk.sessionId}/cart`, {
+    knownIds: [rowA.id], items: [{ id: rowA.id, productId: a.id, iikoProductId: a.iikoId || a.id, name: a.name, quantity: 2, seatNumber: 1 }],
+  }, W), 'waiter save k');
+  const qa = saved.items.filter((i) => String(i.iikoProductId) === String(a.iikoId || a.id)).reduce((n, i) => n + i.quantity, 0);
+  const qb = saved.items.filter((i) => String(i.iikoProductId) === String(b.iikoId || b.id)).reduce((n, i) => n + i.quantity, 0);
+  assert.equal(qa, 2, 'правка официанта применилась');
+  assert.equal(qb, 1, 'блюдо гостя, которого официант не видел, осталось');
+  ok(await api('POST', `/api/v1/waiter/session/${sk.sessionId}/close`, { force: true }, W), 'close k');
+  step('официант сохраняет свою правку и не стирает блюдо, которое гость добавил за это время');
+}
+
 // Модификаторы из админки: своё название группы и варианта, картинка — у гостя; официанту менять нельзя
 {
   const mods = ok(await api('GET', '/api/v1/admin/network-menu/modifiers', null, A), 'mods list');
@@ -299,7 +322,10 @@ r = await api('GET', `/api/v1/waiter/session/${s.sessionId}?token=${staff.token}
 assert.equal(r.status, 401); step('токен персонала в адресе не принимается (401)');
 
 // Официант закрывает стол; в закрытый визит гость больше ничего не добавляет
-ok(await api('POST', `/api/v1/waiter/session/${s.sessionId}/close`, {}, W), 'close');
+r = await api('POST', `/api/v1/waiter/session/${s.sessionId}/close`, {}, W);
+assert.equal(r.status, 409); assert.equal(r.data.code, 'UNPAID');
+assert.ok(r.data.details.unpaid > 0); step(`закрыть неоплаченный стол — сначала предупреждение (не оплачено ${r.data.details.unpaid} ₽)`);
+ok(await api('POST', `/api/v1/waiter/session/${s.sessionId}/close`, { force: true }, W), 'close');
 r = await api('POST', '/api/v1/table-order/cart', { sessionId: s.sessionId, items: [line(p1, 4)] }, G);
 assert.equal(r.status, 409); step('стол закрыт — гость не может дозаказать в закрытый визит (409)');
 

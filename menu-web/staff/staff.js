@@ -74,7 +74,7 @@
     });
     const data = await res.json().catch(() => ({}));
     if (res.status === 401 && S.token) { logout(); throw new Error('Сессия истекла — войдите снова'); }
-    if (!res.ok) { const e = new Error(data.error || `Ошибка ${res.status}`); e.status = res.status; throw e; }
+    if (!res.ok) { const e = new Error(data.error || `Ошибка ${res.status}`); e.status = res.status; e.code = data.code; throw e; }
     return data;
   }
 
@@ -174,7 +174,7 @@
     if (!S.lastUnreadIds.size) S.lastUnreadIds.add('__none__');
     S.notes = notes; S.sessions = sessions;
     const open = sessions.find((x) => x.sessionId === S.openId);
-    if (open && S.edit && !S.edit.dirty) S.edit = { items: open.items.map((i) => ({ ...i })), guestCount: open.guestCount, seatNames: { ...(open.seatNames || {}) }, dirty: false };
+    if (open && S.edit && !S.edit.dirty) S.edit = editFrom(open);
   }
 
   function statusPill(s) {
@@ -260,7 +260,7 @@
       <div class="tscreen__total"><span class="muted">Итого по столу</span><b>${rub(total)}</b></div>
       ${payBox(s, pending)}
       <div class="tbar">
-        <div class="tbar__status muted">${S.saving ? 'Сохраняем…' : e.dirty ? 'Есть несохранённые правки' : pendingQty ? `Новых: ${pendingQty} — ещё не на кухне` : 'Всё отправлено'}</div>
+        <div class="tbar__status muted">${S.saveFailed ? '<b style="color:var(--danger)">Не сохранено — нет связи, повторяем</b>' : S.saving ? 'Сохраняем…' : e.dirty ? 'Есть несохранённые правки' : pendingQty ? `Новых: ${pendingQty} — ещё не на кухне` : 'Всё отправлено'}</div>
         <div class="tbar__btns">
           <button class="btn" data-open-picker ${lockedByOther ? 'disabled' : ''}>+ Блюдо</button>
           <button class="btn btn--dark grow" data-send ${pending.length && !lockedByOther ? '' : 'disabled'}>В работу${pendingQty ? ` · ${pendingQty}` : ''}</button>
@@ -305,7 +305,7 @@
           ${q ? '' : `<div class="picker__cats">${groups.map((g) => `<button class="${g.id === S.pickCat ? 'is-active' : ''}" data-pick-cat="${esc(g.id)}">${esc(g.name)}</button>`).join('')}</div>`}
           <div class="pick-list">${found.map((p) => { const n = inCart(p); return `<button class="pick-item" data-add="${esc(p.id)}" ${p.isInStopList ? 'disabled' : ''}>
             <span class="pick-item__name">${esc(p.name)}${p.isInStopList ? ' <span class="pill" data-tone="bad">стоп</span>' : ''}${p.sku ? ` <span class="muted" style="font-size:11px">арт. ${esc(p.sku)}</span>` : ''}</span>
-            <span class="pick-item__price">${rub(p.price)}</span><span class="pick-item__add ${n ? 'has' : ''}">${n || '+'}</span></button>`; }).join('') || '<div class="muted" style="padding:12px">Ничего не найдено</div>'}</div>`
+            <span class="pick-item__price">${hasVariants(p) ? '<span class="pill" style="font-size:10px">выбор</span> от ' : ''}${rub(p.price)}</span><span class="pick-item__add ${n ? 'has' : ''}">${n || '+'}</span></button>`; }).join('') || '<div class="muted" style="padding:12px">Ничего не найдено</div>'}</div>`
     : '<div class="error-box">Меню этого ресторана пустое — выгрузите его из iiko (админка → «Меню и стоп-лист»).</div>'}
       </div>
     </div>`;
@@ -895,11 +895,11 @@
       const s = await api('POST', `/api/v1/waiter/session/${sessionId}/take`);
       const idx = S.sessions.findIndex((x) => x.sessionId === sessionId);
       if (idx >= 0) S.sessions[idx] = s; else S.sessions.unshift(s);
-      S.edit = { items: s.items.map((i) => ({ ...i })), guestCount: s.guestCount, seatNames: { ...(s.seatNames || {}) }, dirty: false };
+      S.edit = editFrom(s);
     } catch (e) {
       toast(e.message, true);
       const s = await api('GET', `/api/v1/waiter/session/${sessionId}`);
-      S.edit = { items: s.items.map((i) => ({ ...i })), guestCount: s.guestCount, seatNames: { ...(s.seatNames || {}) }, dirty: false };
+      S.edit = editFrom(s);
     }
     // Меню ресторана — свежее при каждом открытии стола (стоп-лист мог измениться)
     const slug = S.restaurant || S.restaurants[0]?.slug;
@@ -909,13 +909,117 @@
     if (matchMedia('(max-width: 900px)').matches) scrollTo({ top: 0 });
   }
 
+  /**
+   * Правки стола: knownIds — неотправленные строки, которые официант видел. Сервер заменяет только их, а блюда,
+   * которые гость добавил за это время, оставляет (раньше сохранение официанта их стирало).
+   */
+  function editFrom(s) {
+    return {
+      items: s.items.map((i) => ({ ...i })), guestCount: s.guestCount, seatNames: { ...(s.seatNames || {}) }, dirty: false,
+      knownIds: s.items.filter((i) => !i.isLocked && i.id).map((i) => String(i.id)),
+    };
+  }
+  // ID новой строки создаёт терминал: повторное сохранение заменяет ту же строку, а не добавляет вторую
+  const newRowId = () => (crypto.randomUUID ? crypto.randomUUID()
+    : '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (c) => (c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (c / 4)))).toString(16)));
+
+  const hasVariants = (p) => (p.sizes || []).length > 1 || (p.modifierGroups || []).length > 0;
+  // Выбор строки: «+» прибавляет только к строке с тем же выбором (вок без выбора не сливается с воком гостя «с говядиной»)
+  const variantOf = (i) => `${i.sizeId || ''}|${(i.modifiers || []).map((m) => `${m.id}:${m.amount || 1}`).sort().join(',')}`;
+  function addLine(p, seat, v) {
+    const key = v ? variantOf(v) : '|';
+    const existing = S.edit.items.find((i) => !i.isLocked && String(i.productId) === String(p.id)
+      && (Number(i.seatNumber) || null) === seat && variantOf(i) === key);
+    if (existing) existing.quantity += 1;
+    else {
+      S.edit.items.push({
+        id: newRowId(), local: true, productId: p.id, iikoProductId: p.iikoId || p.id,
+        name: v?.text ? `${p.name} (${v.text})` : p.name, price: v ? v.price : p.price, quantity: 1, isLocked: false,
+        seatNumber: seat, source: p.source, ...(v?.sizeId ? { sizeId: v.sizeId } : {}), ...(v?.modifiers?.length ? { modifiers: v.modifiers } : {}),
+      });
+    }
+    if (navigator.vibrate) try { navigator.vibrate(10); } catch { /* нет вибро */ }
+    changed();
+  }
+
+  /** Выбор официанта: размер и модификаторы по правилам iiko (минимум, максимум, бесплатные). Цену проверит сервер. */
+  function openVariantForm(p, seat) {
+    const sizes = (p.sizes || []).length > 1 ? p.sizes : [];
+    const st = { size: sizes.find((z) => z.isDefault) || sizes[0] || null, mods: new Map() };
+    const groupsOf = () => (st.size ? st.size.groups || [] : p.modifierGroups || []);
+    const total = (g) => g.items.reduce((n, m) => n + (st.mods.get(String(m.id)) || 0), 0);
+    const fill = () => {
+      st.mods = new Map();
+      for (const g of groupsOf()) {
+        let n = 0;
+        for (const m of g.items.filter((x) => x.def > 0)) { if (g.max > 0 && n + m.def > g.max) break; st.mods.set(String(m.id), m.def); n += m.def; }
+        for (const m of [...g.items].sort((a, b) => (a.price || 0) - (b.price || 0))) {
+          if (n >= g.min) break;
+          if (!st.mods.has(String(m.id))) { st.mods.set(String(m.id), 1); n += 1; }
+        }
+      }
+    };
+    const price = () => {
+      let sum = st.size ? Number(st.size.price) : Number(p.basePrice ?? p.price);
+      for (const g of groupsOf()) {
+        const units = g.items.flatMap((m) => Array(st.mods.get(String(m.id)) || 0).fill(Number(m.price) || 0)).sort((a, b) => a - b);
+        sum += units.slice(Math.min(g.free || 0, units.length)).reduce((a, b) => a + b, 0);
+      }
+      return Math.round(sum * 100) / 100;
+    };
+    const rule = (g) => [g.min > 0 && g.max === 1 ? 'выберите 1' : g.min > 0 ? `минимум ${g.min}` : 'по желанию', g.max > 1 ? `до ${g.max}` : ''].filter(Boolean).join(' · ');
+    fill();
+    const draw = (root) => {
+      const missing = groupsOf().filter((g) => total(g) < g.min).map((g) => g.name);
+      root.querySelector('.modal').innerHTML = `<div class="h3" style="margin:0 0 12px">${esc(p.name)}</div>
+        ${sizes.length ? `<div class="muted" style="margin:8px 0 6px"><b>Размер</b></div><div class="vchips">${sizes.map((z, i) => `<button class="vchip ${z === st.size ? 'is-on' : ''}" data-vsize="${i}">${esc(z.name)} · ${rub(z.price)}</button>`).join('')}</div>` : ''}
+        ${groupsOf().map((g, gi) => `<div class="muted" style="margin:12px 0 6px;display:flex;justify-content:space-between;gap:8px"><b>${esc(g.name)}</b><span style="${total(g) < g.min ? 'color:var(--danger)' : ''}">${rule(g)}</span></div>
+          <div class="vchips">${g.items.map((m) => `<button class="vchip ${st.mods.get(String(m.id)) ? 'is-on' : ''}" data-vmod="${gi}:${esc(m.id)}">${esc(m.name)}${m.price > 0 ? ` +${rub(m.price)}` : ''}</button>`).join('')}</div>`).join('')}
+        <div style="display:flex;gap:8px;margin-top:16px"><button class="btn" data-modal-close>Отмена</button>
+          <button class="btn btn--dark grow" data-vok ${missing.length ? 'disabled' : ''}>${missing.length ? `Выберите: ${esc(missing.join(', '))}` : `Добавить · ${rub(price())}`}</button></div>`;
+    };
+    modal('', (root) => {
+      draw(root);
+      // Слушаем само окно (оно создаётся заново), а не #modal-root — иначе обработчики копятся и блюдо добавляется дважды
+      root.firstElementChild.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-vsize],[data-vmod],[data-vok]');
+        if (!b) return;
+        if (b.dataset.vsize != null) { st.size = sizes[Number(b.dataset.vsize)]; fill(); }
+        else if (b.dataset.vmod) {
+          const [gi, id] = b.dataset.vmod.split(':');
+          const g = groupsOf()[Number(gi)];
+          const on = Boolean(st.mods.get(id));
+          if (g.max === 1) { for (const m of g.items) st.mods.delete(String(m.id)); if (!on || g.min > 0) st.mods.set(id, 1); }
+          else if (on) st.mods.delete(id);
+          else if (!g.max || total(g) < g.max) st.mods.set(id, 1);
+          else toast(`В «${g.name}» можно выбрать не больше ${g.max}`, true);
+        } else if (b.dataset.vok != null) {
+          const modifiers = []; const names = [];
+          for (const g of groupsOf()) for (const m of g.items) {
+            const n = st.mods.get(String(m.id)) || 0;
+            if (!n) continue;
+            modifiers.push({ id: String(m.id), groupId: g.id ?? null, amount: n, name: m.name });
+            names.push(n > 1 ? `${m.name} ×${n}` : m.name);
+          }
+          closeModal();
+          addLine(p, seat, { sizeId: st.size?.id ? String(st.size.id) : null, modifiers, price: price(), text: [st.size?.name, ...names].filter(Boolean).join(', ') });
+          return;
+        }
+        draw(root);
+      });
+    });
+  }
+
   async function saveEdit() {
     const version = S.editVersion || 0;
-    const s = await api('POST', `/api/v1/waiter/session/${S.openId}/cart`, { items: S.edit.items, guestCount: S.edit.guestCount, seatNames: S.edit.seatNames || {} });
+    const known = [...new Set([...(S.edit.knownIds || []), ...S.edit.items.filter((i) => i.local).map((i) => String(i.id))])];
+    const s = await api('POST', `/api/v1/waiter/session/${S.openId}/cart`, {
+      items: S.edit.items, guestCount: S.edit.guestCount, seatNames: S.edit.seatNames || {}, knownIds: known,
+    });
     const i = S.sessions.findIndex((x) => x.sessionId === S.openId);
     if (i >= 0) S.sessions[i] = s;
     // Пока сохраняли, официант мог ещё что-то поменять — тогда локальные правки не затираем
-    if ((S.editVersion || 0) === version) S.edit = { items: s.items.map((it) => ({ ...it })), guestCount: s.guestCount, seatNames: { ...(s.seatNames || {}) }, dirty: false };
+    if ((S.editVersion || 0) === version) S.edit = editFrom(s);
     return s;
   }
 
@@ -925,14 +1029,36 @@
     S.edit.dirty = true;
     S.editVersion = (S.editVersion || 0) + 1;
     clearTimeout(saveT);
-    saveT = setTimeout(async () => {
-      if (!S.edit?.dirty) return;
-      S.saving = true;
-      try { await saveEdit(); } catch (err) { toast(err.message, true); }
-      S.saving = false;
-      if (S.edit?.dirty) changed(); else rerender();
-    }, 700);
+    saveT = setTimeout(saveNow, 700);
     rerender();
+  }
+  async function saveNow() {
+    if (!S.edit?.dirty) return;
+    S.saving = true;
+    try {
+      await saveEdit();
+      S.saveFailed = false; S.retry = 0;
+    } catch (err) {
+      if (err.code === 'EDIT_LOCKED') {
+        // Стол взял другой официант — показываем его версию, править нельзя
+        toast(err.message, true);
+        const s = await api('GET', `/api/v1/waiter/session/${S.openId}`).catch(() => null);
+        if (s) S.edit = editFrom(s);
+      } else if (!err.status || err.status >= 500) {
+        // Нет связи — правки остаются на экране и уходят, как только сервер ответит
+        S.saveFailed = true; S.retry = Math.min((S.retry || 0) + 1, 5);
+        S.saving = false;
+        clearTimeout(saveT); saveT = setTimeout(saveNow, 1000 * 2 ** S.retry);
+        rerender(); return;
+      } else {
+        // Сервер не принял правку (блюдо закончилось и т. п.) — возвращаем то, что сохранено
+        toast(err.message, true);
+        const s = await api('GET', `/api/v1/waiter/session/${S.openId}`).catch(() => null);
+        if (s) S.edit = editFrom(s);
+      }
+    }
+    S.saving = false;
+    if (S.edit?.dirty && !S.saveFailed) changed(); else rerender();
   }
   /** Перерисовка с сохранением прокрутки списка блюд в шторке. */
   function rerender() {
@@ -974,7 +1100,7 @@
         const s = await api('POST', `/api/v1/waiter/session/${S.openId}/served`, one ? { itemIds: [one] } : undefined);
         const i = S.sessions.findIndex((x) => x.sessionId === S.openId);
         if (i >= 0) S.sessions[i] = s;
-        if (!S.edit.dirty) S.edit = { items: s.items.map((it) => ({ ...it })), guestCount: s.guestCount, seatNames: { ...(s.seatNames || {}) }, dirty: false };
+        if (!S.edit.dirty) S.edit = editFrom(s);
         toast('Отмечено: вынесено'); render(); return;
       }
       if (q('[data-guests]')) {
@@ -996,9 +1122,9 @@
       if (q('[data-add]')) {
         const p = S.catalog.products.find((x) => String(x.id) === q('[data-add]').dataset.add);
         const seat = S.pickSeat || null;
-        const existing = S.edit.items.find((i) => !i.isLocked && String(i.productId) === String(p.id) && (Number(i.seatNumber) || null) === seat);
-        if (existing) existing.quantity += 1;
-        else S.edit.items.push({ productId: p.id, iikoProductId: p.iikoId || p.id, name: p.name, price: p.price, quantity: 1, isLocked: false, seatNumber: seat, source: p.source });
+        // Вок, пицца, сет — сначала выбор (основа, соус, размер), как у гостя в QR-меню
+        if (hasVariants(p)) { openVariantForm(p, seat); return; }
+        addLine(p, seat, null);
         if (navigator.vibrate) try { navigator.vibrate(10); } catch { /* нет вибро */ }
         changed(); return;
       }
@@ -1008,7 +1134,7 @@
         if (S.edit.dirty) await saveEdit();
         try {
           const s = await api('POST', `/api/v1/waiter/session/${S.openId}/send-to-production`);
-          S.edit = { items: s.items.map((i) => ({ ...i })), guestCount: s.guestCount, seatNames: { ...(s.seatNames || {}) }, dirty: false };
+          S.edit = editFrom(s);
           toast('Заказ отправлен на кухню');
         } catch (err) { toast(err.message, true); }
         render(); return;
@@ -1025,7 +1151,13 @@
       }
       if (q('[data-close-table]')) {
         if (!confirm('Закрыть стол? Гость при следующем скане начнёт новый визит.')) return;
-        await api('POST', `/api/v1/waiter/session/${S.openId}/close`);
+        try {
+          await api('POST', `/api/v1/waiter/session/${S.openId}/close`);
+        } catch (err) {
+          // Не оплачено или не отправлено — сервер называет сумму; закрыть можно только осознанно
+          if (err.code !== 'UNPAID' || !confirm(err.message)) { if (err.code !== 'UNPAID') toast(err.message, true); return; }
+          await api('POST', `/api/v1/waiter/session/${S.openId}/close`, { force: true });
+        }
         S.openId = null; S.edit = null; toast('Стол закрыт'); render(); return;
       }
       // админ
@@ -1098,6 +1230,8 @@
     poll = setInterval(() => {
       const busy = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
       if (document.hidden || busy || $('#modal-root').innerHTML) return;
+      // Стол открыт — продлеваем свою блокировку (иначе через 2 минуты просмотра стол «уходит» другому)
+      if (S.openId && S.edit) api('GET', `/api/v1/waiter/session/${S.openId}`).catch(() => {});
       if (S.tab === 'tables' && !S.edit?.dirty && !S.saving && !S.picker) render();
       else if (S.tab === 'hall') render();
     }, 5000);

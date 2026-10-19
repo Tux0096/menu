@@ -89,7 +89,7 @@ function cleanSeatNames(current, patch) {
   return out;
 }
 
-export async function updateOrder(sessionId, staff, { items = [], guestCount, seatNames } = {}) {
+export async function updateOrder(sessionId, staff, { items = [], guestCount, seatNames, knownIds } = {}) {
   if (!Array.isArray(items)) throw httpError(400, 'Нет списка позиций');
   await withSessionMutex(sessionId, () => withTransaction(async (client) => {
     const ctx = await lockSession(client, sessionId);
@@ -121,10 +121,20 @@ export async function updateOrder(sessionId, staff, { items = [], guestCount, se
     // берём выбор из прежней строки, если в запросе его нет
     const prevRow = new Map(ctx.items.filter((x) => !x.is_locked).map((x) => [x.id, x]));
 
-    await client.query('DELETE FROM table_order_items WHERE session_id = $1 AND is_locked = FALSE', [sessionId]);
+    // knownIds — неотправленные строки, которые официант видел на экране. Строки, добавленные гостем после этого,
+    // остаются как есть (раньше сохранение официанта молча их стирало). Без knownIds (старый терминал) — как раньше.
+    const known = Array.isArray(knownIds) ? new Set(knownIds.map(String)) : null;
+    const unlocked = ctx.items.filter((x) => !x.is_locked);
+    const replace = known ? unlocked.filter((x) => known.has(String(x.id))) : unlocked;
+    if (replace.length) await client.query('DELETE FROM table_order_items WHERE id = ANY($1::uuid[])', [replace.map((x) => x.id)]);
     const nextBatch = Math.max(0, ...ctx.items.filter((i) => i.is_locked).map((i) => i.batch_no)) + 1;
     const sources = await productSourceMap(ctx.restaurant.id, items.map((i) => i.iikoProductId).filter(Boolean));
     for (const it of items.filter((i) => !(i.id && lockedIds.has(i.id)))) {
+      // Строку, которую видел официант, гость уже убрал или изменил — устаревшую копию не воскрешаем
+      // (local — строка, созданная в приложении официанта: её ID сохраняем, повтор заменит её же)
+      if (known && it.id && !it.local && !prevRow.has(it.id)) continue;
+      // Строка гостя, которую официант не видел, осталась в базе — не вставляем её второй раз
+      if (known && it.id && prevRow.has(it.id) && !known.has(String(it.id))) continue;
       const qty = Math.floor(Number(it.quantity) || 0);
       if (qty <= 0 || !it.iikoProductId) continue;
       if (!/^[0-9a-f-]{36}$/i.test(String(it.iikoProductId))) throw httpError(400, `«${String(it.name || '').slice(0, 60)}»: нет ID блюда в iiko`);
@@ -141,16 +151,19 @@ export async function updateOrder(sessionId, staff, { items = [], guestCount, se
       const v = entry.sizes.length || entry.groups.length || sizeId || mods.length
         ? priceVariant(entry, key, { sizeId, modifiers: mods, defaults: !explicit }) : null;
       const price = v ? v.price : priced.price;
+      const ownId = it.id && /^[0-9a-f-]{36}$/i.test(String(it.id)) && (it.local || prevRow.has(it.id)) && !lockedIds.has(it.id)
+        ? String(it.id) : null;
       await client.query(
         `INSERT INTO table_order_items
-           (session_id, product_id, iiko_product_id, name, price, quantity, line_total, seat_number, course, batch_no, is_locked,
+           (id, session_id, product_id, iiko_product_id, name, price, quantity, line_total, seat_number, course, batch_no, is_locked,
             guest_id, guest_name, source, size_id, size_name, modifiers, options_text)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12,$13,$14,$15,$16,$17)`,
+         VALUES (COALESCE($18::uuid, gen_random_uuid()), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12,$13,$14,$15,$16,$17)
+         ON CONFLICT (id) DO NOTHING`,
         [sessionId, it.productId || null, it.iikoProductId, lineName(priced.name, v),
           price, qty, price * qty, it.seatNumber || null, it.course || null, nextBatch,
           guestOf(it.seatNumber)?.id || null, guestOf(it.seatNumber)?.name || null,
           sources.get(String(it.iikoProductId)) || 'main',
-          v?.sizeId || null, v?.sizeName || null, v?.mods.length ? JSON.stringify(v.mods) : null, v?.text || null],
+          v?.sizeId || null, v?.sizeName || null, v?.mods.length ? JSON.stringify(v.mods) : null, v?.text || null, ownId],
       );
     }
     await recalcTotal(client, sessionId);
@@ -219,7 +232,7 @@ async function sendToKitchenNow(sessionId, staff) {
   // Стоп-лист проверяем в момент отправки: блюдо могло закончиться, пока гость собирал корзину
   const index = await menuIndex(restaurant);
   const problems = stopProblems(index, pending.map((i) => ({
-    key: i.iiko_product_id || i.product_id, quantity: i.quantity,
+    key: i.iiko_product_id || i.product_id, quantity: i.quantity, name: i.name, sizeId: i.size_id || null, modifiers: i.modifiers || [],
   })));
   if (problems.length) {
     throw httpError(409, `Нельзя отправить: ${problems.join('; ')}. Уберите или уменьшите и предложите гостю замену.`, { code: 'STOP_LIST' });
@@ -465,18 +478,39 @@ export async function releaseSession(sessionId, staff) {
 }
 
 /** Официант принял оплату на своём терминале / закрыл стол. */
-export async function closeSession(sessionId, staff) {
-  // Стол закрывается только в меню (заказы iiko не трогаем — счёт закрыт на кассе)
+/**
+ * Закрыть стол в меню (заказы iiko не трогаем — счёт закрывают на кассе). Неоплаченное или неотправленное —
+ * сначала 409 с суммой: официант подтверждает (force), и в журнал пишется «закрыт без оплаты».
+ */
+export async function closeSession(sessionId, staff, { force = false } = {}) {
+  const ctx = await getSessionContext(sessionId);
+  if (!ctx) throw httpError(404, 'Визит не найден');
+  const { session } = ctx;
+  if (session.status !== 'open' && session.status !== 'paid') return { ...(await getSessionView(sessionId)), unpaid: 0 };
+  const lockedByOther = session.locked_by && session.locked_by !== staff.id
+    && session.locked_until && new Date(session.locked_until) > new Date();
+  if (lockedByOther && !force) throw httpError(409, 'Стол сейчас редактирует другой официант', { code: 'EDIT_LOCKED' });
+  const isPaid = session.payment_status === 'paid';
+  const unpaid = isPaid ? 0 : Math.round(ctx.items.filter((i) => i.is_locked && !i.paid_payment_id)
+    .reduce((n, i) => n + parseFloat(i.line_total || 0), 0));
+  const unsent = ctx.items.filter((i) => !i.is_locked).reduce((n, i) => n + i.quantity, 0);
+  if (!force && (unpaid > 0 || unsent > 0)) {
+    throw httpError(409, [
+      unpaid > 0 ? `Не оплачено ${unpaid} ₽` : null,
+      unsent > 0 ? `не отправлено позиций: ${unsent}` : null,
+    ].filter(Boolean).join(', ') + '. Если гости расплатились на кассе — закройте счёт там; закрыть стол без оплаты?',
+    { code: 'UNPAID', details: { unpaid, unsent } });
+  }
   await pool.query(
     `UPDATE table_sessions SET
-       status = CASE WHEN payment_status = 'paid' THEN 'closed' ELSE 'closed' END,
+       status = 'closed',
        workflow_status = CASE WHEN payment_status = 'paid' THEN 'paid' ELSE 'closed' END,
        closed_at = NOW(), locked_by = NULL, locked_until = NULL, updated_at = NOW()
      WHERE id = $1`,
     [sessionId],
   );
   await markSessionNotificationsRead(sessionId);
-  return getSessionView(sessionId);
+  return { ...(await getSessionView(sessionId)), unpaid };
 }
 
 async function markSessionNotificationsRead(sessionId) {

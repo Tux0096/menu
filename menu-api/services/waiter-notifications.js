@@ -17,35 +17,50 @@ export async function createWaiterNotification({
      RETURNING *`,
     [restaurantId, sessionId, String(tableNumber), type, title, body, JSON.stringify(payload)],
   );
-  // Push на телефоны официантов (приложение), не задерживая основной запрос
-  pushToRestaurant(restaurantId, { title, body, type, sessionId, tableNumber }).catch((e) => console.warn('push:', e.message));
+  // Push: стол закреплён за официантом — ему; «долго ждут» и ошибки iiko — всем (подстраховка). Не задерживая запрос
+  let staffId = null;
+  if (sessionId && !BROADCAST.has(type)) {
+    staffId = (await pool.query('SELECT waiter_id FROM table_sessions WHERE id = $1', [sessionId]).catch(() => ({ rows: [] }))).rows[0]?.waiter_id || null;
+  }
+  pushToRestaurant(restaurantId, { title, body, type, sessionId, tableNumber, staffId }).catch((e) => console.warn('push:', e.message));
   return rows[0];
 }
 
-export async function listWaiterNotifications(restaurantId, { unreadOnly = false, limit = 50 } = {}) {
+const BROADCAST = new Set(['wait_too_long', 'iiko_error']);
+
+/**
+ * Лента официанта: is_read — прочитано им самим или закрыто для всех (стол взят в работу, оплачен, закрыт).
+ */
+export async function listWaiterNotifications(restaurantId, { unreadOnly = false, limit = 50, staffId = null } = {}) {
   const { rows } = await pool.query(
-    `SELECT * FROM waiter_notifications
-     WHERE restaurant_id = $1
-       ${unreadOnly ? 'AND is_read = FALSE' : ''}
-     ORDER BY created_at DESC
+    `SELECT n.*, (n.is_read OR r.staff_id IS NOT NULL) AS is_read
+     FROM waiter_notifications n
+     LEFT JOIN waiter_notification_reads r ON r.notification_id = n.id AND r.staff_id = $3
+     WHERE n.restaurant_id = $1
+       ${unreadOnly ? 'AND n.is_read = FALSE AND r.staff_id IS NULL' : ''}
+     ORDER BY n.created_at DESC
      LIMIT $2`,
-    [restaurantId, limit],
+    [restaurantId, limit, staffId],
   );
   return rows;
 }
 
-/** Отметить уведомление прочитанным — только уведомление своего ресторана */
-export async function markNotificationRead(notificationId, restaurantId) {
+/** Отметить уведомление прочитанным — у себя, только уведомление своего ресторана */
+export async function markNotificationRead(notificationId, restaurantId, staffId) {
   await pool.query(
-    'UPDATE waiter_notifications SET is_read = TRUE WHERE id::text = $1 AND restaurant_id = $2',
-    [String(notificationId), restaurantId],
+    `INSERT INTO waiter_notification_reads (notification_id, staff_id)
+     SELECT id, $3 FROM waiter_notifications WHERE id::text = $1 AND restaurant_id = $2
+     ON CONFLICT DO NOTHING`,
+    [String(notificationId), restaurantId, staffId],
   );
 }
 
-export async function markAllNotificationsRead(restaurantId) {
+export async function markAllNotificationsRead(restaurantId, staffId) {
   await pool.query(
-    `UPDATE waiter_notifications SET is_read = TRUE
-     WHERE restaurant_id = $1 AND is_read = FALSE`,
-    [restaurantId],
+    `INSERT INTO waiter_notification_reads (notification_id, staff_id)
+     SELECT id, $2 FROM waiter_notifications
+     WHERE restaurant_id = $1 AND is_read = FALSE AND created_at > NOW() - INTERVAL '2 days'
+     ON CONFLICT DO NOTHING`,
+    [restaurantId, staffId],
   );
 }

@@ -503,32 +503,65 @@ async function writeGuestCart(client, ctx, cartItems, guestId) {
     }
   }
 
-  const prevPending = new Map(items.filter((i) => !i.is_locked).map((i) => [rowVariantKey(i), i]));
-  await client.query('DELETE FROM table_order_items WHERE session_id = $1 AND is_locked = FALSE AND guest_id IS NOT DISTINCT FROM $2::uuid', [session.id, guestId]);
+  // Строки обновляются на месте (ID не меняются): официант, открывший стол, видит те же строки, и его сохранение
+  // не задваивает и не затирает корзину гостя. Несколько строк одного варианта (официант развёл по местам) не трогаем,
+  // пока их сумма не изменилась.
+  const prevPending = new Map();
+  for (const row of items.filter((i) => !i.is_locked)) {
+    const k = rowVariantKey(row);
+    if (!prevPending.has(k)) prevPending.set(k, []);
+    prevPending.get(k).push(row);
+  }
   const nextBatch = Math.max(0, ...ctx.items.filter((i) => i.is_locked).map((i) => i.batch_no)) + 1;
   const sources = await productSourceMap(ctx.restaurant.id, [...new Set([...incoming.values()].map((l) => l.iikoProductId))]);
+  const keep = new Set();
 
   for (const [vkey, line] of incoming) {
     const key = line.iikoProductId;
     const pendingQty = line.quantity - (lockedQty.get(vkey) || 0);
     if (pendingQty <= 0) continue;
-    const prev = prevPending.get(vkey);
-    const priced = priceLine(index, key, { qty: pendingQty, prevQty: prev?.quantity || 0, clientName: line.name });
+    const rows = prevPending.get(vkey) || [];
+    const prevQtySum = rows.reduce((n, r) => n + r.quantity, 0);
+    const priced = priceLine(index, key, { qty: pendingQty, prevQty: prevQtySum, clientName: line.name });
     const entry = index.get(key);
     const v = entry.sizes.length || entry.groups.length || line.sizeId || line.modifiers.length
       ? priceVariant(entry, key, { sizeId: line.sizeId, modifiers: line.modifiers }) : null;
     const price = v ? v.price : priced.price;
+    const course = line.course !== undefined ? line.course : (rows[0]?.course || null);
+    if (rows.length && prevQtySum === pendingQty && (line.course === undefined || rows.every((r) => (r.course || null) === course))) {
+      // Ничего не изменилось — строки (и места, расставленные официантом) остаются как есть; цену обновляем по меню
+      for (const r of rows) {
+        keep.add(r.id);
+        if (parseFloat(r.price) !== price) {
+          await client.query('UPDATE table_order_items SET price = $2, line_total = $2 * quantity, updated_at = NOW() WHERE id = $1', [r.id, price]);
+        }
+      }
+      continue;
+    }
+    if (rows.length) {
+      const [first] = rows;
+      keep.add(first.id);
+      await client.query(
+        `UPDATE table_order_items SET name = $2, price = $3, quantity = $4, line_total = $5, course = $6,
+           size_id = $7, size_name = $8, modifiers = $9, options_text = $10, updated_at = NOW() WHERE id = $1`,
+        [first.id, lineName(priced.name, v), price, pendingQty, price * pendingQty, course,
+          v?.sizeId || null, v?.sizeName || null, v?.mods.length ? JSON.stringify(v.mods) : null, v?.text || null],
+      );
+      continue;
+    }
     await client.query(
       `INSERT INTO table_order_items
          (session_id, product_id, iiko_product_id, name, price, quantity, line_total, seat_number, course, batch_no, is_locked,
           guest_id, guest_name, source, size_id, size_name, modifiers, options_text)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12,$13,$14,$15,$16,$17)`,
       [session.id, line.productId, key, lineName(priced.name, v), price, pendingQty, price * pendingQty,
-        prev?.seat_number || me?.seat || null, line.course !== undefined ? line.course : (prev?.course || null), nextBatch,
+        me?.seat || null, course, nextBatch,
         guestId, me?.name || null, sources.get(key) || 'main',
         v?.sizeId || null, v?.sizeName || null, v?.mods.length ? JSON.stringify(v.mods) : null, v?.text || null],
     );
   }
+  const drop = items.filter((i) => !i.is_locked && !keep.has(i.id)).map((i) => i.id);
+  if (drop.length) await client.query('DELETE FROM table_order_items WHERE id = ANY($1::uuid[])', [drop]);
   return recalcTotal(client, session.id);
 }
 

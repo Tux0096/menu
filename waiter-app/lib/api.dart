@@ -29,9 +29,17 @@ class Api {
   final _authLost = StreamController<void>.broadcast();
   Stream<void> get onAuthLost => _authLost.stream;
 
+  /// ID телефона: лимит неверных PIN считается по телефону, а не по Wi-Fi зала
+  String? deviceId;
+
   Future<void> load() async {
     final p = await SharedPreferences.getInstance();
     token = p.getString('token');
+    deviceId = p.getString('deviceId');
+    if (deviceId == null) {
+      deviceId = DateTime.now().microsecondsSinceEpoch.toRadixString(36) + Object().hashCode.toRadixString(36);
+      await p.setString('deviceId', deviceId!);
+    }
     restaurantSlug = p.getString('restaurant');
     restaurantName = p.getString('restaurantName');
     staffName = p.getString('staffName');
@@ -59,7 +67,11 @@ class Api {
         ? '$path${sep}restaurant=${Uri.encodeComponent(restaurantSlug!)}'
         : path;
     final uri = Uri.parse('$kApiBase$withRest');
-    final headers = {'Content-Type': 'application/json', if (token != null) 'Authorization': 'Bearer $token'};
+    final headers = {
+      'Content-Type': 'application/json',
+      if (token != null) 'Authorization': 'Bearer $token',
+      'X-Device-Id': ?deviceId,
+    };
     http.Response res;
     try {
       final req = switch (method) {
@@ -72,6 +84,12 @@ class Api {
       throw ApiError('Сервер не отвечает — проверьте интернет');
     } catch (_) {
       throw ApiError('Нет связи с сервером');
+    }
+    // Сервер продлил вход (смена дольше 12 часов) — сохраняем новый токен
+    final fresh = res.headers['x-staff-token'];
+    if (fresh != null && fresh.isNotEmpty && token != null && fresh != token) {
+      token = fresh;
+      SharedPreferences.getInstance().then((p) => p.setString('token', fresh));
     }
     final text = utf8.decode(res.bodyBytes);
     dynamic data;

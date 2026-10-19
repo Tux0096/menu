@@ -209,6 +209,13 @@ const SCHEMA = `
   );
   CREATE INDEX IF NOT EXISTS idx_waiter_notifications_unread
     ON waiter_notifications(restaurant_id, is_read, created_at DESC);
+  -- Прочитано — у каждого официанта своё: «прочитать все» одного не гасит счёт или вызов у остальных
+  CREATE TABLE IF NOT EXISTS waiter_notification_reads (
+    notification_id UUID NOT NULL REFERENCES waiter_notifications(id) ON DELETE CASCADE,
+    staff_id UUID NOT NULL,
+    read_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (notification_id, staff_id)
+  );
 
   CREATE TABLE IF NOT EXISTS visit_feedback (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -317,6 +324,8 @@ const SCHEMA = `
   ALTER TABLE stop_lists ADD COLUMN IF NOT EXISTS sku VARCHAR(100);
   ALTER TABLE stop_lists ADD COLUMN IF NOT EXISTS size_id VARCHAR(100);
   ALTER TABLE stop_lists ADD COLUMN IF NOT EXISTS date_add TIMESTAMPTZ;
+  -- Размер в ключе стоп-листа ('' — весь товар)
+  ALTER TABLE stop_lists ADD COLUMN IF NOT EXISTS size_key VARCHAR(100) NOT NULL DEFAULT '';
   -- Названия позиций номенклатуры iiko (в стоп-листе бывают ингредиенты и модификаторы, которых нет в меню)
   CREATE TABLE IF NOT EXISTS iiko_product_names (
     organization_id VARCHAR(100) NOT NULL,
@@ -520,6 +529,9 @@ const SOFT_INDEXES = [
      WHERE a.session_id = b.session_id AND a.status = 'completed' AND b.status = 'completed'
        AND a.method <> 'cloudpayments' AND b.method <> 'cloudpayments'
        AND (a.created_at, a.id::text) > (b.created_at, b.id::text)`,
+  // Стоп-лист по кассе и размеру: старый ключ (точка + товар) смешивал кухню и бар
+  'ALTER TABLE stop_lists DROP CONSTRAINT IF EXISTS stop_lists_pkey',
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_stop_lists_key ON stop_lists(restaurant_id, source, product_id, size_key)',
   // Онлайн-оплаты до учёта по строкам: строки, отправленные до платежа, помечаем им оплаченными (повторный запуск ничего не меняет)
   `UPDATE table_order_items i SET paid_payment_id = p.id FROM table_payments p
      WHERE p.session_id = i.session_id AND p.method = 'cloudpayments' AND p.status = 'completed'

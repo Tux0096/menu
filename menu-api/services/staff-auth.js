@@ -27,7 +27,7 @@ function issueToken(staff) {
 // (адрес можно менять, ресторан — нет): 5 в минуту с адреса, 20 за 10 минут на ресторан.
 const pinByClient = createLimiter({ windowMs: 60_000, max: 5, message: 'Слишком много попыток — подождите минуту' });
 const pinByRestaurant = createLimiter({
-  windowMs: 10 * 60_000, max: 20, message: 'Слишком много неверных PIN в этом ресторане — вход по PIN приостановлен на 10 минут',
+  windowMs: 10 * 60_000, max: 30, message: 'Слишком много неверных PIN в этом ресторане — вход по PIN приостановлен на 10 минут',
 });
 // Вход по паролю: 10 неудачных попыток за 15 минут на логин и 30 — с одного адреса
 const loginByName = createLimiter({ windowMs: 15 * 60_000, max: 10, message: 'Слишком много попыток — подождите 15 минут' });
@@ -43,7 +43,8 @@ export async function pinLogin(restaurantId, pin, clientKey = '') {
   pinByClient.assert(clientId);
   pinByRestaurant.assert(String(restaurantId));
   const { rows } = await pool.query(
-    `SELECT * FROM staff_users WHERE is_active = TRUE AND pin_hash IS NOT NULL
+    // По PIN входят только сотрудники зала: администратор «на всю сеть» по 4 цифрам — слишком лёгкая цель
+    `SELECT * FROM staff_users WHERE is_active = TRUE AND pin_hash IS NOT NULL AND role IN ('waiter', 'manager')
        AND (restaurant_id = $1 OR restaurant_id IS NULL)`,
     [restaurantId],
   );
@@ -128,6 +129,10 @@ export function staffAuth(minRole = 'waiter', alsoRoles = []) {
       }
       // Ресторан: привязка из базы; у сотрудника «на все рестораны» — ресторан, где он вошёл по PIN
       req.staff = { id: row.id, role, name: row.name, restaurantId: row.restaurant_id || null, loginRestaurantId: payload.rid || null };
+      // Скользящий вход: до конца токена меньше 4 часов — выдаём новый в заголовке (смена дольше 12 часов не обрывается)
+      if (payload.exp - Date.now() < 4 * 60 * 60 * 1000) {
+        res.set('X-Staff-Token', signToken({ sid: payload.sid, role, name: row.name, rid: payload.rid }));
+      }
       return next();
     } catch (err) {
       return sendError(res, err, req);
