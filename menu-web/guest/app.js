@@ -1153,8 +1153,12 @@
   const groupTotal = (g, sel) => g.items.reduce((n, it) => n + (sel.mods.get(String(it.id)) || 0), 0);
   /** Обязательные группы — варианты по умолчанию из iiko, иначе первые. */
   function fillDefaults(g, sel) {
-    for (const it of g.items) if (it.def > 0 && !sel.mods.has(String(it.id))) sel.mods.set(String(it.id), it.def);
+    // По умолчанию из iiko — сколько помещается в группу (в акциях iiko отмечает по умолчанию все варианты)
     for (const it of g.items) {
+      if (it.def > 0 && !sel.mods.has(String(it.id)) && (!g.max || groupTotal(g, sel) + it.def <= g.max)) sel.mods.set(String(it.id), it.def);
+    }
+    // Обязательный выбор без варианта по умолчанию — самый дешёвый (не навязываем доплату)
+    for (const it of [...g.items].sort((a, b) => (a.price || 0) - (b.price || 0))) {
       if (groupTotal(g, sel) >= g.min) break;
       sel.mods.set(String(it.id), (sel.mods.get(String(it.id)) || 0) + 1);
     }
