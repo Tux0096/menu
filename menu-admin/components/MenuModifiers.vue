@@ -87,6 +87,10 @@ async function pickImage(i: ModItem, e: Event) {
     imageSaving.value = '';
   }
 }
+// Название варианта общее для сети — один и тот же вариант в других группах меняется вместе
+function setItemTitle(i: ModItem, title: string) {
+  for (const g of list.value ?? []) for (const x of g.items) if (x.key === i.key) x.title = title;
+}
 const rule = (g: ModGroup) => [
   g.min > 0 && g.max === 1 ? 'обязательно, 1 вариант' : g.min > 0 ? `обязательно, от ${g.min}` : 'по желанию',
   g.max > 1 ? `до ${g.max}` : null,
@@ -126,7 +130,7 @@ const rule = (g: ModGroup) => [
             <span v-else class="text-sm text-slate-400">{{ (i.title || i.auto).slice(0, 1) }}</span>
           </div>
           <div class="min-w-0 flex-1">
-            <UInput v-model="i.title" size="sm" :placeholder="i.auto" maxlength="120" :aria-label="`Название варианта ${i.iikoName}`" />
+            <UInput :model-value="i.title" size="sm" :placeholder="i.auto" maxlength="120" :aria-label="`Название варианта ${i.iikoName}`" @update:model-value="(v: string) => setItemTitle(i, v)" />
             <div class="mt-0.5 truncate text-[11px] text-slate-500">
               {{ i.price ? `+${i.price} ₽` : 'без доплаты' }}<template v-if="i.title"> · в iiko: «{{ i.iikoName }}»</template>
             </div>

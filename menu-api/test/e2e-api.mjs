@@ -230,7 +230,7 @@ step('адрес и время работы точки: сохраняются �
     const lines = sv.items.filter((i) => String(i.iikoProductId) === String(dish.iikoId || dish.id));
     const chosen = lines.find((i) => i.modifiers.some((m) => m.id === choice.id));
     assert.equal(chosen.quantity, 4, 'одинаковый выбор — одна строка (2 + 2)');
-    assert.equal(chosen.price, dish.price + choice.price, 'цена = блюдо + выбор (цена клиента не принимается)');
+    assert.equal(chosen.price, (dish.basePrice ?? dish.price) + choice.price, 'цена = блюдо + выбор (цена клиента не принимается)');
     assert.ok(chosen.name.includes(choice.name), 'выбор виден в названии для официанта');
     const def = lines.find((i) => i !== chosen);
     assert.ok(def && def.modifiers.some((m) => m.groupId === grp.id), 'без выбора — обязательный вариант по умолчанию');

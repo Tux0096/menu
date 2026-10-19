@@ -172,11 +172,12 @@ class Api {
     return d;
   }
 
-  static String? imageUrl(dynamic image) {
+  /// Фото iiko и загруженные в админке (/media) — через ресайзер сервера: WebP нужной ширины, а не оригинал на 1–2 МБ.
+  static String? imageUrl(dynamic image, {int w = 480}) {
     if (image == null) return null;
     final s = image is Map ? (image['url'] ?? image['src'])?.toString() : image.toString();
     if (s == null || s.isEmpty) return null;
-    if (s.startsWith('http')) return s;
+    if (s.startsWith('http') || s.startsWith('/media/')) return '$kApiBase/img?w=$w&u=${Uri.encodeComponent(s)}';
     return '$kApiBase${s.startsWith('/') ? '' : '/'}$s';
   }
 }

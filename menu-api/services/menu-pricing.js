@@ -18,6 +18,7 @@ export async function menuIndex(restaurant) {
       price: Math.round((Number(p.price) || 0) * 100) / 100,
       isInStopList: Boolean(p.isInStopList),
       balance: Number(p.stopBalance) > 0 ? Number(p.stopBalance) : null, // ограниченный остаток в iiko
+      base: p.basePrice ?? null,
       sizes: p.sizes || [],
       groups: p.modifierGroups || [],
     };
@@ -135,7 +136,7 @@ export function priceVariant(entry, key, { sizeId = null, modifiers = [], defaul
     for (const x of picked) mods.push({ id: String(x.it.id), groupId: g.id, name: x.it.name, amount: x.amount, price: x.it.price || 0 });
   }
   if (wanted.size) throw httpError(400, `«${name}»: часть дополнений больше недоступна — выберите заново`);
-  const base = size ? size.price : entry.price;
+  const base = size ? size.price : (entry.base ?? entry.price);
   const price = Math.round((base + extra) * 100) / 100;
   const text = [size?.name || null, ...mods.map((m) => (m.amount > 1 ? `${m.name} ×${m.amount}` : m.name))].filter(Boolean).join(', ');
   const sid = size && entry.sizes.length > 1 ? (size.id ? String(size.id) : null) : null;

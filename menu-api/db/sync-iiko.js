@@ -111,6 +111,26 @@ async function findMenuOrganization(token, restaurant, orgs) {
   return null;
 }
 
+/** Цены прейскуранта кассы: «товар|размер» → цена (размер пустой — цена без размера). Ошибка — пустая карта. */
+async function nomenclaturePrices(token, organizationId) {
+  const map = new Map();
+  try {
+    const { products = [] } = await getNomenclature(token, organizationId);
+    for (const p of products) {
+      for (const sp of p.sizePrices || []) {
+        const v = Number(sp.price?.currentPrice) || 0;
+        if (!(v > 0) || sp.price?.isIncludedInMenu === false) continue;
+        map.set(`${p.id}|${sp.sizeId || ''}`, v);
+        if (!map.has(`${p.id}|`)) map.set(`${p.id}|`, v);
+      }
+    }
+    console.log(`  прейскурант кассы: ${map.size} цен для позиций с нулевой ценой во внешнем меню`);
+  } catch (e) {
+    console.log(`  прейскурант кассы недоступен: ${e.response?.status || e.message}`);
+  }
+  return map;
+}
+
 async function getNomenclature(token, organizationId) {
   const res = await axios.post(
     `${IIKO_URL}/api/1/nomenclature`,
@@ -239,15 +259,40 @@ function priceForOrg(prices, organizationId) {
  * { groups: [...] } — один размер с модификаторами; null — выбирать нечего.
  * Группа: { id (itemGroupId — нужен iiko в заказе), name, min, max, free, items: [{ id, name, price, weight, image, def, max }] }.
  */
-function itemOptions(item, organizationId) {
-  const groupsOf = (size) => (size.itemModifierGroups || []).filter((g) => !g.isHidden).map((g) => {
+/** Сколько минимум доплатить за обязательные группы (основа вока, размер пиццы модификатором): самые дешёвые варианты. */
+export function minRequired(groups) {
+  let sum = 0;
+  for (const g of groups || []) {
+    if (!(g.min > 0)) continue;
+    const cheapest = Math.min(...g.items.map((m) => Number(m.price) || 0));
+    sum += Math.max(0, g.min - (g.free || 0)) * (Number.isFinite(cheapest) ? cheapest : 0);
+  }
+  return sum;
+}
+
+/**
+ * Варианты позиции, которые можно продать: размер с ценой или с обязательной платной группой.
+ * priceOf(prices, itemId, sizeId) — цена организации из внешнего меню, а если там 0 — из прейскуранта кассы.
+ * Возвращает [{ z, price, groups, total }]; total — цена с самым дешёвым обязательным выбором («от»).
+ */
+export function sellableSizes(item, priceOf) {
+  const itemId = item.itemId || item.id;
+  return (item.itemSizes || []).filter((z) => !z.isHidden).map((z) => {
+    const groups = optionGroups(z, priceOf);
+    const price = priceOf(z.prices, itemId, z.sizeId || null);
+    return { z, price, groups, total: price + minRequired(groups) };
+  }).filter((x) => x.total > 0);
+}
+
+function optionGroups(size, priceOf) {
+  return (size.itemModifierGroups || []).filter((g) => !g.isHidden).map((g) => {
     const r = g.restrictions || {};
     const items = (g.items || []).filter((m) => !m.isHidden && (m.itemId || m.id)).map((m) => {
       const mr = m.restrictions || {};
       return {
         id: String(m.itemId || m.id),
         name: String(m.name || '').slice(0, 120),
-        price: priceForOrg(m.prices, organizationId) || 0,
+        price: priceOf(m.prices, m.itemId || m.id, null) || 0,
         weight: m.portionWeightGrams ? Math.round(m.portionWeightGrams) : null,
         image: m.buttonImageUrl || null,
         def: Number(mr.byDefault) || 0,
@@ -264,23 +309,26 @@ function itemOptions(item, organizationId) {
       items,
     };
   }).filter(Boolean);
-  const sizes = (item.itemSizes || []).filter((z) => !z.isHidden)
-    .map((z) => ({ z, price: priceForOrg(z.prices, organizationId) })).filter((x) => x.price > 0);
+}
+
+export function itemOptions(sizes) {
   if (sizes.length > 1) {
     return {
-      sizes: sizes.map(({ z, price }) => ({
+      sizes: sizes.map(({ z, price, groups }) => ({
         id: z.sizeId ? String(z.sizeId) : null,
         name: String(z.sizeName || z.sizeCode || '').slice(0, 60),
         price,
         weight: z.portionWeightGrams ? Math.round(z.portionWeightGrams) : null,
         isDefault: Boolean(z.isDefault),
         image: z.buttonImageUrl || null,
-        groups: groupsOf(z),
+        groups,
       })),
     };
   }
-  const groups = sizes.length ? groupsOf(sizes[0].z) : [];
-  return groups.length ? { groups } : null;
+  const [one] = sizes;
+  if (!one?.groups.length) return null;
+  // Цена блюда без выбора (может быть 0 — вок, где платная основа); у гостя — «от» с самым дешёвым выбором
+  return { groups: one.groups, base: one.price };
 }
 
 /**
@@ -303,6 +351,12 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
   const rows = [];
   // Во внешних меню агрегаторов (OrderMaster) все разделы бывают помечены скрытыми — тогда пометка ничего не значит
   const allHidden = categories.length > 0 && categories.every((c) => c.isHidden);
+  // Цена 0 во внешнем меню (пицца, вок «по прейскуранту») — цена кассы из номенклатуры организации.
+  // В заказ iiko цену не передаём — касса считает по своему прейскуранту, так что гость видит ту же сумму.
+  const needNom = categories.some((c) => (c.items || []).some((i) => (i.itemSizes || []).some((z) => !priceForOrg(z.prices, organizationId))));
+  const nom = needNom ? await nomenclaturePrices(token, organizationId) : new Map();
+  const priceOf = (prices, itemId, sizeId) => priceForOrg(prices, organizationId)
+    || nom.get(`${itemId}|${sizeId || ''}`) || nom.get(`${itemId}|`) || 0;
   // Отчёт для админки: раздел → сколько позиций у гостей, сколько скрыто и без цены (например, «нет пиццы»)
   const report = [];
   for (const [ci, cat] of categories.entries()) {
@@ -311,14 +365,18 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
     if (rep.hidden) continue;
     for (const [ii, item] of (cat.items || []).entries()) {
       if (item.isHidden) { rep.hiddenItems += 1; continue; }
-      const size = (item.itemSizes || []).find((z) => z.isDefault) || (item.itemSizes || [])[0];
-      const price = size ? priceForOrg(size.prices, organizationId) : 0;
-      if (!(price > 0)) { // блюдо не продаётся в этом ресторане
+      // Цена — у любого размера (у пиццы «по умолчанию» бывает 0, а у 30/40 см — цена), из прейскуранта кассы,
+      // если во внешнем меню 0, или в обязательных модификаторах (основа вока)
+      const sizes = sellableSizes(item, priceOf);
+      if (!sizes.length) { // блюдо не продаётся в этом ресторане
         rep.noPrice += 1;
         if (rep.examples.length < 3) rep.examples.push(String(item.name || '').slice(0, 60));
         continue;
       }
       rep.shown += 1;
+      const pick = sizes.find((x) => x.z.isDefault) || sizes[0];
+      const size = pick.z;
+      const price = Math.min(...sizes.map((x) => x.total));
       // КБЖУ на 100 г — массив по организациям (NutritionInfoDto.organizations); берём запись этого ресторана
       const nutr = [].concat(size.nutritionPerHundredGrams || [], size.nutritions || []).filter((x) => x && typeof x === 'object');
       const n = nutr.find((x) => (x.organizations || []).includes(organizationId))
@@ -337,7 +395,7 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
         fats: n.fats ?? null,
         carbs: n.carbs ?? null,
         order: ci * 1000 + ii,
-        options: itemOptions(item, organizationId),
+        options: itemOptions(sizes),
       });
     }
   }
