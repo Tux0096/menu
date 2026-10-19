@@ -250,6 +250,15 @@ html, body { overflow-x: clip; }
 .tcard.is-hot { border-left: 4px solid var(--warn); }
 .tcard.is-open { border-color: var(--ink); }
 .tcard__num { font-size: 24px; font-weight: 600; text-align: center; overflow-wrap: anywhere; line-height: 1.1; }
+.tcard__mine { display: block; font-size: 12px; color: var(--warn); line-height: 1; margin-top: 2px; }
+.mt-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); gap: 8px; }
+.mt-cell { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-height: 56px; padding: 6px 4px;
+  border-radius: 14px; background: var(--card); box-shadow: var(--shadow); border: 2px solid transparent; }
+.mt-cell b { font-size: 18px; }
+.mt-cell small { font-size: 10px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mt-cell.is-on { background: var(--ink); color: #fff; }
+.mt-cell.is-on small { color: rgba(255, 255, 255, .7); }
+.mt-bar { position: sticky; bottom: 0; display: flex; gap: 8px; align-items: center; margin-top: 12px; padding: 10px 0; background: var(--bg); }
 .tcard__pills { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .tcard__guest { font-size: 13px; color: var(--muted); margin-top: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tcard__sum { font-weight: 600; white-space: nowrap; }

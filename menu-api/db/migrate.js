@@ -210,6 +210,14 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_waiter_notifications_unread
     ON waiter_notifications(restaurant_id, is_read, created_at DESC);
   -- Прочитано — у каждого официанта своё: «прочитать все» одного не гасит счёт или вызов у остальных
+  -- Столы, за которые отвечает официант: уведомления и push по ним — ему. Не выбрал ни одного — видит все столы
+  CREATE TABLE IF NOT EXISTS waiter_tables (
+    staff_id UUID NOT NULL,
+    restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+    table_number VARCHAR(20) NOT NULL,
+    PRIMARY KEY (staff_id, restaurant_id, table_number)
+  );
+  CREATE INDEX IF NOT EXISTS idx_waiter_tables_table ON waiter_tables(restaurant_id, table_number);
   CREATE TABLE IF NOT EXISTS waiter_notification_reads (
     notification_id UUID NOT NULL REFERENCES waiter_notifications(id) ON DELETE CASCADE,
     staff_id UUID NOT NULL,

@@ -20,6 +20,7 @@ const ACTIONS: Record<string, string> = {
   'restaurant.info': 'Карточка точки',
   'qr.signed_required': 'Вход только по QR',
   'table.close_unpaid': 'Стол закрыт без оплаты',
+  'waiter.tables': 'Официант выбрал свои столы',
   'menu.override': 'Карточка блюда',
   'menu.override.delete': 'Карточка — как в iiko',
   'menu.sync': 'Перевыгрузка меню из iiko',
@@ -44,7 +45,7 @@ const KINDS = [
   { value: '', label: 'Все действия' },
   { value: 'menu', label: 'Меню и карточки', test: (a: string) => a.startsWith('menu.') || a === 'media.upload' },
   { value: 'marketing', label: 'Баннеры и AI-подсказки', test: (a: string) => a.startsWith('promos.') || a.startsWith('chips.') },
-  { value: 'orders', label: 'Заказы и столы', test: (a: string) => a.startsWith('order.') || a.startsWith('table.') },
+  { value: 'orders', label: 'Заказы и столы', test: (a: string) => a.startsWith('order.') || a.startsWith('table.') || a.startsWith('waiter.') },
   { value: 'settings', label: 'Настройки и сотрудники', test: (a: string) => /^(staff|restaurant|payments|source|cashdesk|qr)\./.test(a) },
   { value: 'login', label: 'Входы', test: (a: string) => a.startsWith('login') },
 ];

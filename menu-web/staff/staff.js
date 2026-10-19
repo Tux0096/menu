@@ -199,10 +199,12 @@
 
   // ── Официант ───────────────────────────────────────────────
   async function loadWaiter() {
-    const [notes, sessions] = await Promise.all([
+    const [notes, sessions, mine] = await Promise.all([
       api('GET', '/api/v1/waiter/notifications'),
       api('GET', '/api/v1/waiter/sessions'),
+      api('GET', '/api/v1/waiter/my-tables').catch(() => null),
     ]);
+    if (mine) S.myTables = { ...mine, draft: S.myTables?.dirty ? S.myTables.draft : new Set(mine.tables), dirty: Boolean(S.myTables?.dirty) };
     const fresh = notes.filter((n) => !n.is_read && !S.lastUnreadIds.has(n.id));
     if (S.lastUnreadIds.size && fresh.length) {
       beep();
@@ -361,8 +363,10 @@
         const needs = (x) => ['cart_ready', 'reorder_pending', 'bill_requested'].includes(x.workflowStatus) || x.readyCount > 0 || x.isOverdue || unreadBy.has(x.sessionId);
         const hot = open.filter(needs);
         const rest = open.filter((x) => !needs(x));
+        const myList = S.myTables?.tables || [];
+        const isMine = (x) => myList.includes(String(x.tableNumber));
         const card = (x) => `<button class="tcard ${S.openId === x.sessionId ? 'is-open' : ''} ${needs(x) ? 'is-hot' : ''}" data-open="${esc(x.sessionId)}">
-          <div class="tcard__num">${esc(x.tableNumber)}</div>
+          <div class="tcard__num">${esc(x.tableNumber)}${isMine(x) ? '<span class="tcard__mine" title="Мой стол">★</span>' : ''}</div>
           <div class="tcard__body">
             <div class="tcard__pills">${statusPill(x)}${x.readyCount ? ` <span class="pill" data-tone="bad">🔔 Готово ${x.readyCount}</span>` : ''}${x.isOverdue ? ` <span class="overdue">⏱ ${x.waitingMinutes} мин</span>` : ''}</div>
             <div class="tcard__guest">${esc((x.guests || []).length ? x.guests.map((g) => g.name).join(', ') : (x.guest?.name || 'Гость'))}${x.pendingCount ? ` · новых: ${x.pendingCount}` : ''}</div>
@@ -378,14 +382,27 @@
           <div class="feed">${S.notes.length ? S.notes.map((n) => `<button class="note ${n.is_read ? '' : 'is-unread'}" data-type="${esc(n.type)}" data-note="${esc(n.id)}" data-session="${esc(n.session_id || '')}">
             <div class="note__head"><span>${esc(n.title)}</span><span class="note__time">${time(n.created_at)}</span></div>
             <div class="note__body">${esc(n.body)}</div></button>`).join('') : '<div class="muted">Пока тихо</div>'}</div>`;
-        const view = S.wview === 'notes' ? 'notes' : 'tables';
+        const view = ['notes', 'mine'].includes(S.wview) ? S.wview : 'tables';
+        // «Мои столы»: за какие столы отвечаю — уведомления и push только по ним (плюс столы без ответственного)
+        const mt = S.myTables;
+        const mineHtml = !mt ? '<div class="muted">Загружаем…</div>' : `<p class="muted" style="margin:0 0 10px;font-size:13px">
+            Отметьте свои столы — уведомления и push будут приходить по ним, по столам, которые вы ведёте, и по столам, за которые никто не отвечает.
+            Ничего не отмечено — приходят по всем столам.</p>
+          <div class="mt-grid">${Array.from({ length: mt.tablesCount || 20 }, (_, i) => String(i + 1)).map((n) => {
+            const on = mt.draft.has(n); const who = mt.others?.[n];
+            return `<button class="mt-cell ${on ? 'is-on' : ''}" data-my-table="${n}" aria-pressed="${on}"><b>${n}</b>${who ? `<small>${esc(who.join(', '))}</small>` : ''}</button>`;
+          }).join('')}</div>
+          <div class="mt-bar"><span class="muted grow">${mt.draft.size ? `Выбрано: ${mt.draft.size}` : 'Все столы'}</span>
+            ${mt.draft.size ? '<button class="btn btn--sm" data-my-clear>Снять все</button>' : ''}
+            <button class="btn btn--sm btn--dark" data-my-save ${mt.dirty ? '' : 'disabled'}>Сохранить</button></div>`;
         return `<div class="waiter ${S.openId && S.edit ? 'has-open' : ''}">
           <section class="waiter__list">
             <div class="seg seg--wide seg--tabs" role="tablist">
               <button class="${view === 'tables' ? 'is-on' : ''}" data-wview="tables">Столы · ${open.length}</button>
               <button class="${view === 'notes' ? 'is-on' : ''}" data-wview="notes">Уведомления${unread.length ? ` <span class="dot-inline">${unread.length}</span>` : ''}</button>
+              <button class="${view === 'mine' ? 'is-on' : ''}" data-wview="mine">Мои столы${S.myTables?.tables?.length ? ` · ${S.myTables.tables.length}` : ''}</button>
             </div>
-            ${view === 'notes' ? notesHtml : tablesHtml}
+            ${view === 'notes' ? notesHtml : view === 'mine' ? mineHtml : tablesHtml}
           </section>
           <section class="waiter__table">${editorHtml() || '<div class="empty-note hide-sm">Выберите стол слева</div>'}</section>
         </div>`;
@@ -1121,6 +1138,22 @@
       }
       if (q('[data-open]')) { await openTable(q('[data-open]').dataset.open); return; }
       if (q('[data-wview]')) { S.wview = q('[data-wview]').dataset.wview; render(); return; }
+      if (q('[data-my-table]') && S.myTables) {
+        const n = q('[data-my-table]').dataset.myTable;
+        const d = new Set(S.myTables.draft);
+        if (d.has(n)) d.delete(n); else d.add(n);
+        S.myTables = { ...S.myTables, draft: d, dirty: true }; render(); return;
+      }
+      if (q('[data-my-clear]') && S.myTables) { S.myTables = { ...S.myTables, draft: new Set(), dirty: true }; render(); return; }
+      if (q('[data-my-save]') && S.myTables) {
+        const btn = q('[data-my-save]'); if (btn.disabled) return; btn.disabled = true;
+        try {
+          const res = await api('PUT', '/api/v1/waiter/my-tables', { tables: [...S.myTables.draft] });
+          S.myTables = { ...res, draft: new Set(res.tables), dirty: false };
+          toast(res.tables.length ? `Ваши столы: ${res.tables.join(', ')}` : 'Уведомления по всем столам');
+        } catch (err) { toast(err.message, true); btn.disabled = false; }
+        render(); return;
+      }
       if (q('[data-hide-editor]')) {
         if (S.edit?.dirty) { clearTimeout(saveT); await saveEdit().catch(() => {}); }
         api('POST', `/api/v1/waiter/session/${S.openId}/release`).catch(() => {});
