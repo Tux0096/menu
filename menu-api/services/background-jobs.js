@@ -90,4 +90,16 @@ export function startBackgroundJobs() {
   setInterval(() => syncIikoMenu(), 5 * 60 * 1000); // раз в 5 минут проверяем, не пора ли (IIKO_SYNC_MS)
   setInterval(() => checkPendingPayments().catch((e) => console.warn('онлайн-оплата:', e.message)), 30000);
   setInterval(refreshAllStopLists, parseInt(process.env.STOP_LIST_REFRESH_MS || '600000', 10));
+  setInterval(cleanupExpired, 6 * 60 * 60 * 1000);
+  setTimeout(cleanupExpired, 60_000).unref?.();
+}
+
+/** Просроченные входы гостей не нужны: токен с истёкшим сроком всё равно не принимается */
+async function cleanupExpired() {
+  try {
+    const { rowCount } = await pool.query("DELETE FROM guest_tokens WHERE expires_at < NOW() - INTERVAL '1 day'");
+    if (rowCount) console.log(`уборка: удалено просроченных входов гостей — ${rowCount}`);
+  } catch (e) {
+    console.warn('уборка входов:', e.message);
+  }
 }

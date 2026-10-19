@@ -24,6 +24,7 @@ import {
 } from '../services/network-menu.js';
 import { syncIikoMenu } from '../services/background-jobs.js';
 import { getCashdesks, getIikoSetup, setCashdesk, setIikoSetup, setSectionRoute } from '../services/cashdesks.js';
+import { QR_SIGNED_REQUIRED, qrSignedRequired, setQrSignedRequired } from '../lib/qr-config.js';
 
 const router = express.Router();
 export default router;
@@ -329,20 +330,38 @@ admin.delete('/menu/override/:id', h(async (req) => {
   await deleteOverride(req.params.id, req.staff.restaurantId || null);
   audit(req.staff, 'menu.override.delete', 'override', req.params.id);
 }));
+// Чипы AI — общие для сети: правит только сотрудник без привязки к ресторану.
+// Баннеры: сотрудник ресторана видит общие и свои, правит только свои (ресторан подставляется сам)
+async function assertRowScope(req, table, id) {
+  const own = req.staff.restaurantId;
+  if (!own) return;
+  if (table === 'ai_chips') throw httpError(403, 'Подсказки AI общие для сети — их меняет администратор сети');
+  if (!id) return;
+  const row = (await listRows(table)).find((x) => String(x.id) === String(id));
+  if (row && row.restaurant_id !== own) throw httpError(403, 'Баннер другого ресторана или общий для сети');
+}
 for (const [path, table] of [['chips', 'ai_chips'], ['promos', 'promo_blocks']]) {
-  admin.get(`/${path}`, h(async () => listRows(table)));
+  admin.get(`/${path}`, h(async (req) => {
+    const rows = await listRows(table);
+    const own = req.staff.restaurantId;
+    return own && table === 'promo_blocks' ? rows.filter((x) => !x.restaurant_id || x.restaurant_id === own) : rows;
+  }));
   admin.post(`/${path}`, h(async (req) => {
-    const row = await saveRow(table, req.body || {});
-    audit(req.staff, `${path}.save`, table, row.id, req.body);
+    const body = { ...(req.body || {}) };
+    await assertRowScope(req, table, body.id);
+    if (req.staff.restaurantId && table === 'promo_blocks') body.restaurant_id = req.staff.restaurantId;
+    const row = await saveRow(table, body);
+    audit(req.staff, `${path}.save`, table, row.id, body);
     return row;
   }));
   admin.delete(`/${path}/:id`, h(async (req) => {
+    await assertRowScope(req, table, req.params.id);
     await deleteRow(table, req.params.id);
     audit(req.staff, `${path}.delete`, table, req.params.id);
   }));
 }
 admin.get('/feedback', h(async (req) => listFeedback((await staffRestaurant(req)).id)));
-admin.get('/audit', h(async () => listAudit()));
+admin.get('/audit', h(async (req) => listAudit(200, req.staff.restaurantId || null)));
 admin.get('/staff', h(async (req) => listStaff(req.staff)));
 admin.post('/staff', h(async (req) => {
   const row = await saveStaff(req.body || {}, req.staff);
@@ -358,6 +377,15 @@ admin.patch('/restaurants/:id', h(async (req) => {
   const row = await updateRestaurant(req.params.id, req.body || {});
   audit(req.staff, 'restaurant.update', 'restaurant', req.params.id, req.body);
   return row;
+}));
+// Вход за стол только по подписанному QR — включают, когда новые наклейки уже на столах. Настройка на всю сеть
+admin.get('/qr-settings', h(async (req) => ({ signedRequired: await qrSignedRequired(), envForced: QR_SIGNED_REQUIRED, canEdit: !req.staff.restaurantId })));
+admin.post('/qr-settings', h(async (req) => {
+  if (req.staff.restaurantId) throw httpError(403, 'Настройка общая для сети — её меняет администратор сети');
+  const on = req.body?.signedRequired === true;
+  await setQrSignedRequired(on);
+  audit(req.staff, 'qr.signed_required', 'settings', 'qr_signed_required', { on });
+  return { signedRequired: await qrSignedRequired(), envForced: QR_SIGNED_REQUIRED, canEdit: true };
 }));
 // QR столов с подписью — картинка сразу в ответе (data URI): подписанный QR выпускает только админка
 admin.get('/tables', h(async (req) => {

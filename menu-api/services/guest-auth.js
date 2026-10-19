@@ -46,7 +46,7 @@ async function upsertGuest({ phone, name, fujiUserId = null }) {
     `INSERT INTO guests (phone, name, fuji_user_id)
      VALUES ($1, $2, $3)
      ON CONFLICT (phone) DO UPDATE SET
-       name = COALESCE(NULLIF(EXCLUDED.name, ''), guests.name),
+       name = COALESCE(NULLIF(guests.name, ''), NULLIF(EXCLUDED.name, '')), -- вход по номеру не меняет имя владельца
        fuji_user_id = COALESCE(EXCLUDED.fuji_user_id, guests.fuji_user_id)
      RETURNING *`,
     [phone, name || null, fujiUserId],

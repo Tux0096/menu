@@ -451,6 +451,8 @@ const SCHEMA = `
   ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS paid_payment_id UUID;
   ALTER TABLE table_payments ADD COLUMN IF NOT EXISTS item_ids JSONB;
   CREATE INDEX IF NOT EXISTS idx_table_payments_session ON table_payments(session_id);
+  CREATE INDEX IF NOT EXISTS idx_waiter_notifications_session ON waiter_notifications(session_id, type, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_guest_tokens_expires ON guest_tokens(expires_at);
   -- Ключи онлайн-оплаты по ресторанам (задаёт администратор в админке «Оплата»)
   CREATE TABLE IF NOT EXISTS restaurant_payment_settings (
     restaurant_id UUID PRIMARY KEY REFERENCES restaurants(id) ON DELETE CASCADE,
