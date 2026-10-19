@@ -534,11 +534,13 @@
   }
 
   /** Кнопка цены на карточке: «299 ₽» → в корзине «− 299 ₽ +»; нет в наличии — подпись вместо кнопки. */
-  /** Цена на карточке: у блюда с размерами — «от» самой низкой. */
+  /** Цена на карточке: у блюда с размерами или платным обязательным выбором (основа вока) — «от» самой низкой. */
   const fromPrice = (p) => {
     const prices = (p.sizes || []).map((z) => Number(z.price)).filter((v) => v > 0);
-    const min = prices.length ? Math.min(...prices) : Number(p.price) || 0;
-    return prices.length > 1 && new Set(prices).size > 1 ? `от ${rub(min)}` : rub(min || p.price);
+    const min = Math.min(Number(p.price) || Infinity, ...prices);
+    const varied = prices.length > 1 && new Set(prices).size > 1;
+    const viaMods = p.basePrice != null && Number(p.basePrice) < Number(p.price);
+    return varied || viaMods ? `от ${rub(min)}` : rub(Number.isFinite(min) ? min : p.price);
   };
   function pricePill(p, qty, stopped, cls = 'price-pill') {
     if (stopped) return `<span class="dish__soon">${Number(p.price) ? 'Закончился :(' : 'Скоро в продаже'}</span>`;
@@ -1189,7 +1191,7 @@
     const missing = groups.filter((g) => groupTotal(g, sel) < g.min).map((g) => g.name);
     return {
       key, sizeId, mods: mods.map(({ id, groupId, amount }) => ({ id, groupId, amount })), options: options || null,
-      price: Math.round(((z ? Number(z.price) : Number(p.price)) + extra) * 100) / 100, weight: z?.weight || null, missing,
+      price: Math.round(((z ? Number(z.price) : Number(p.basePrice ?? p.price)) + extra) * 100) / 100, weight: z?.weight || null, missing,
     };
   }
   const groupHint = (g) => [
