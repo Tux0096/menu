@@ -11,7 +11,9 @@ import { enterTable, getSessionView, markServed, resolveRestaurant } from '../se
 import {
   closeSession, getHallDashboard, listActiveSessions, releaseSession, sendToKitchen, takeSession, updateOrder,
 } from '../services/waiter.js';
-import { listWaiterNotifications, markAllNotificationsRead, markNotificationRead } from '../services/waiter-notifications.js';
+import {
+  getWaiterTables, listWaiterNotifications, markAllNotificationsRead, markNotificationRead, setWaiterTables,
+} from '../services/waiter-notifications.js';
 import { listFeedback, listRestaurants } from '../services/admin.js';
 import { assertStaffSession, staffRestaurant } from '../lib/staff-scope.js';
 import { getRestaurantCatalog } from '../services/catalog.js';
@@ -68,6 +70,17 @@ waiter.get('/notifications', h(async (req) => {
 waiter.post('/notifications/read-all', h(async (req) => {
   const r = await staffRestaurant(req);
   await markAllNotificationsRead(r.id, req.staff.id);
+}));
+// «Мои столы»: за какие столы официант отвечает — уведомления и push по ним приходят ему
+waiter.get('/my-tables', h(async (req) => {
+  const r = await staffRestaurant(req);
+  return { ...(await getWaiterTables(r.id, req.staff.id)), tablesCount: r.tables_count || 20 };
+}));
+waiter.put('/my-tables', h(async (req) => {
+  const r = await staffRestaurant(req);
+  const res = await setWaiterTables(r.id, req.staff.id, req.body?.tables, r.tables_count || 20);
+  audit(req.staff, 'waiter.tables', 'restaurant', r.id, { tables: res.tables });
+  return { ...res, tablesCount: r.tables_count || 20 };
 }));
 waiter.post('/notifications/:id/read', h(async (req) => { await markNotificationRead(req.params.id, (await staffRestaurant(req)).id, req.staff.id); }));
 // Стоп-лист для приёма заказа: что закончилось и что осталось в ограниченном количестве (только блюда меню)
