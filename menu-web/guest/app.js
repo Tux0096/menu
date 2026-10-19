@@ -530,7 +530,7 @@
     };
     return `<nav class="nav" aria-label="Навигация">
       ${item('menu', 'Главная', 'data-go="menu"', 'home')}
-      ${item('ai', 'Фуджи AI', 'data-go="ai"', 'ai')}
+      ${item('ai', 'Фуджи ИИ', 'data-go="ai"', 'ai')}
       ${item('help', 'Помощь', 'data-action="call"', 'help')}
       ${item('order', 'Корзина', 'data-go="order"', 'cart')}
     </nav>`;
@@ -789,9 +789,9 @@
     }
     const head = hasResults
       ? `<section class="ai-head"><img class="ai-head__orb ${loading ? 'is-thinking' : ''}" src="${UI('ai-orb.webp')}" alt="">
-          <div><div class="ai-head__title">Fuji AI</div><div class="ai-head__sub">${esc(loading ? 'Подбираю…' : error ? 'Не получилось' : (S.ai.label || 'Вот что я подобрал:'))}</div></div></section>`
+          <div><div class="ai-head__title">Фуджи ИИ</div><div class="ai-head__sub">${esc(loading ? 'Подбираю…' : error ? 'Не получилось' : (S.ai.label || 'Вот что я подобрал:'))}</div></div></section>`
       : `<section class="ai-hero"><img class="ai-orb" src="${UI('ai-orb.webp')}" alt="">
-          <h1>Спросите Fuji AI</h1><div class="ai-hero__hello">${esc(hello)}</div></section>`;
+          <h1>Спросите Фуджи ИИ</h1><div class="ai-hero__hello">${esc(hello)}</div></section>`;
     return `${topbar()}<main class="screen screen--center screen--ai">
       ${head}
       ${hasResults ? '' : bannersHtml('ai')}
@@ -799,7 +799,7 @@
       <div class="ai-bottom">
         <div class="chips">${chips}</div>
         <form class="ai-input" id="ai-form">
-          <input id="ai-input" type="text" enterkeyhint="send" maxlength="300" placeholder="${hasResults ? 'Повторить поиск' : 'Поиск блюда с помощью ИИ'}" value="${esc(S.ai.draft ?? query)}" aria-label="Запрос к AI">
+          <input id="ai-input" type="text" enterkeyhint="send" maxlength="300" placeholder="${hasResults ? 'Повторить поиск' : 'Поиск блюда с помощью ИИ'}" value="${esc(S.ai.draft ?? query)}" aria-label="Запрос к ИИ">
           <button type="submit" aria-label="Спросить"><img src="${UI('ai-send.svg')}" alt=""></button>
         </form>
         ${cartCount() && !visitOver() ? submitBlock() : ''}
@@ -832,7 +832,7 @@
       let fallback = [];
       try { fallback = (await api('GET', `/api/v1/ai/welcome?restaurant=${encodeURIComponent(S.restaurant || '')}`, null, { timeout: 4000 })).suggestions; } catch { /* offline */ }
       if (my !== aiReq) return;
-      S.ai = { ...S.ai, loading: false, results: fallback, label: fallback.length ? 'AI сейчас недоступен — вот популярные блюда:' : '', error: fallback.length ? null : e.message };
+      S.ai = { ...S.ai, loading: false, results: fallback, label: fallback.length ? 'Помощник сейчас недоступен — вот популярные блюда:' : '', error: fallback.length ? null : e.message };
     }
     render();
   }
@@ -903,7 +903,8 @@
     // «угрем» и «угрём» находят одно и то же
     const norm = (t) => String(t).toLowerCase().replace(/ё/g, 'е');
     const q = norm(S.menu.search.trim());
-    const filtered = q ? products.filter((p) => norm(`${p.name} ${p.description || ''}`).includes(q)) : products;
+    // В поиске блюдо один раз (копия того же блюда в бизнес-ланче — isAlias — не повторяется)
+    const filtered = q ? products.filter((p) => !p.isAlias && norm(`${p.name} ${p.description || ''}`).includes(q)) : products;
     const byGroup = new Map();
     for (const p of filtered) {
       const g = p.parentGroup || 'other';
@@ -935,10 +936,12 @@
     if (!S.catalog) return `${topbar()}<main class="screen"><div class="skeleton skeleton--search"></div><div class="skeleton skeleton--cats"></div><div class="list">${'<div class="skeleton"></div>'.repeat(4)}</div></main>`;
     const sections = menuSections();
     eagerBudget = 4;
-    // Напитки и бар — отдельная вкладка; на главном экране переключатель рядом с «Меню» и карточка в конце списка
+    // Кухня и бар — два меню: явный переключатель над разделами (что выбрано — видно сразу) и карточка в конце списка
     const hasBar = barGroupIds().size > 0 && !S.menu.search;
     const inBar = S.menu.section === 'bar';
-    const switchChip = hasBar ? `<button class="cats__switch" data-section="${inBar ? 'kitchen' : 'bar'}">${inBar ? 'Кухня' : 'Напитки и бар'}</button>` : '';
+    const menuTabs = hasBar ? `<div class="menu-tabs" role="tablist" aria-label="Кухня или бар">
+        <button role="tab" aria-selected="${!inBar}" class="${inBar ? '' : 'is-on'}" data-section="kitchen">Кухня</button>
+        <button role="tab" aria-selected="${inBar}" class="${inBar ? 'is-on' : ''}" data-section="bar">Бар и напитки</button></div>` : '';
     const switchCard = hasBar ? `<button class="section-switch" data-section="${inBar ? 'kitchen' : 'bar'}">
         <span>${inBar ? 'Блюда кухни' : 'Напитки и бар'}</span><small>${inBar ? 'роллы, горячее, десерты' : 'чай, кофе, лимонады, коктейли'}</small></button>` : '';
     return `${topbar()}<main class="screen">
@@ -947,15 +950,16 @@
         ${S.menu.search ? `<button type="button" class="search__clear" data-action="clear-search" aria-label="Очистить поиск">${ICONS.close}</button>`
     : `<span class="search__icon"><img src="${UI('search.svg')}" alt=""></span>`}
       </form>
+      ${S.menu.search ? '' : menuTabs}
       ${S.menu.search ? '' : `<div class="cats" id="cats"><button class="cats__all" data-action="all-cats" aria-label="Все разделы меню">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="2" width="5" height="5" rx="1.5"/><rect x="9" y="2" width="5" height="5" rx="1.5"/><rect x="2" y="9" width="5" height="5" rx="1.5"/><rect x="9" y="9" width="5" height="5" rx="1.5"/></svg>Меню</button>${switchChip}${sections.map((s) => `<button data-cat="${esc(s.id)}" class="${String(S.activeCat) === String(s.id) ? 'is-active' : ''}">${esc(s.name)}</button>`).join('')}</div>`}
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="2" width="5" height="5" rx="1.5"/><rect x="9" y="2" width="5" height="5" rx="1.5"/><rect x="2" y="9" width="5" height="5" rx="1.5"/><rect x="9" y="9" width="5" height="5" rx="1.5"/></svg>Меню</button>${sections.map((s) => `<button data-cat="${esc(s.id)}" class="${String(S.activeCat) === String(s.id) ? 'is-active' : ''}">${esc(s.name)}</button>`).join('')}</div>`}
       ${S.menu.search ? '' : bannersHtml('menu')}
       ${sections.length ? sections.map((s, i) => `<h2 class="section-title" id="cat-${esc(s.id)}">${esc(s.name)}</h2>
         <div class="list ${i === sections.length - 1 && !S.menu.search && !hasBar ? 'list--last' : ''}">${s.items.map((p) => dishCard(p)).join('')}</div>`).join('') + switchCard
     : S.catalog.products?.length
       ? `<div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.webp')}" alt="">
-          <div class="empty__title">Ничего не нашлось</div><div>Спросите Fuji AI — он подберёт похожее</div>
-          <button class="btn btn--dark btn--center empty__btn" data-action="ask-ai-search">Спросить AI: «${esc(S.menu.search.trim().slice(0, 40))}»</button></div>`
+          <div class="empty__title">Ничего не нашлось</div><div>Спросите Фуджи ИИ — он подберёт похожее</div>
+          <button class="btn btn--dark btn--center empty__btn" data-action="ask-ai-search">Спросить ИИ: «${esc(S.menu.search.trim().slice(0, 40))}»</button></div>`
       : `<div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.webp')}" alt="">Меню ресторана ещё загружается из iiko.<br>Загляните чуть позже или позовите официанта.</div>`}
     </main>`;
   }
@@ -963,7 +967,7 @@
   // ── Экран: заказ ───────────────────────────────────────────
   // Четыре шага макета: ждём заказ → ждём официанта → готовим → готово
   const STEP_TEXT = [
-    ['Ждём ваш заказ', 'Выбирайте любимое или спросите AI'],
+    ['Ждём ваш заказ', 'Выбирайте любимое или спросите ИИ'],
     ['Ждём официанта', 'Скоро подойдём и примем ваш заказ'],
     ['Готовим ваш заказ', 'Повара готовят ваши блюда'],
     ['Заказ готов', 'Несём к вашему столу. Приятного аппетита!'],

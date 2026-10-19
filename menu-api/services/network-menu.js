@@ -36,7 +36,7 @@ async function pointInfo(r, allowed, catalog) {
     connected: Boolean(r.organization_id) && (!allowed || allowed.has(r.organization_id)),
     menuSource: catalog.source,
     menuUpdatedAt: catalog.fetchedAt || null,
-    products: (catalog.products || []).length,
+    products: (catalog.products || []).filter((p) => !p.isAlias).length,
     stopCount: stop.size,
     stopListRows: rows[0].n,
     stopUpdatedAt: rows[0].at,
@@ -81,6 +81,7 @@ export async function getNetworkMenu(restaurants) {
     if (!info.connected) continue;
     const groupName = new Map((catalog.groups || []).map((g) => [g.id, g.name]));
     for (const p of catalog.products || []) {
+      if (p.isAlias) continue; // то же блюдо во втором разделе (бизнес-ланч) — одна строка
       put(p.name, r.slug, {
         productId: String(p.id),
         price: Number(p.price) || 0,

@@ -22,7 +22,7 @@ export async function getAdminMenu(restaurant, { force = false } = {}) {
     source: catalog.source,
     fetchedAt: catalog.fetchedAt,
     groups: (catalog.groups || []).map((g) => ({ id: g.id, name: g.name, parentGroup: g.parentGroup || null })),
-    products: catalog.products.map((p) => ({
+    products: catalog.products.filter((p) => !p.isAlias).map((p) => ({
       id: p.id,
       iikoId: p.iikoId || p.id,
       name: p.name,
