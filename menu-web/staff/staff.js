@@ -38,7 +38,7 @@
   };
   // Что может каждая роль — показывается в карточке сотрудника
   const ROLE_INFO = {
-    waiter: ['Официант', 'Столы и заказы гостей, отправка в iiko, «вынесено». Вход в приложении официанта по PIN.'],
+    waiter: ['Официант', 'Столы и заказы гостей, отправка в iiko, «вынесено». Вход на of.menu.franchise-fuji.ru по PIN.'],
     manager: ['Управляющий', 'Статистика и контроль зала, отзывы гостей, плюс всё, что может официант.'],
     marketing: ['Маркетинг', 'Контент меню: карточки блюд, фото, метки «Хит/Новинка», баннеры и акции, AI-подсказки. Без стоп-листа, сотрудников и настроек iiko.'],
     admin: ['Администратор', 'Всё: сотрудники и их доступы, подключение iiko, QR-коды столов, стоп-лист, контент и статистика.'],
@@ -97,20 +97,56 @@
   }
 
   // ── Вход ───────────────────────────────────────────────────
-  function renderLogin(err = '') {
+  // Официант входит по PIN (ресторан телефон запоминает), остальные — логином и паролем.
+  // На of.menu… сначала PIN, на админском адресе — логин; переключатель снизу.
+  let loginMode = ls.get('loginMode') || (HOST === 'admin' ? 'password' : 'pin');
+  let loginRests = null;
+  const deviceId = () => {
+    let id = ls.get('device');
+    if (!id) { id = `d-${Math.random().toString(36).slice(2, 12)}`; ls.set('device', id); }
+    return id;
+  };
+  async function renderLogin(err = '') {
+    if (loginMode === 'pin' && !loginRests) {
+      loginRests = await fetch('/api/v1/restaurants').then((r) => r.json()).catch(() => []);
+    }
+    const rest = ls.get('pinRestaurant') || loginRests?.[0]?.slug || '';
+    const pinForm = `<select class="inp" name="restaurant" aria-label="Ресторан">${(loginRests || []).map((r) => `<option value="${esc(r.slug)}" ${r.slug === rest ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select>
+      <input class="inp" name="pin" type="password" inputmode="numeric" pattern="\\d{4,6}" maxlength="6" placeholder="PIN" autocomplete="one-time-code" required autofocus>`;
+    const pwdForm = `<input class="inp" name="login" placeholder="Логин" autocomplete="username" required>
+      <input class="inp" name="password" type="password" placeholder="Пароль" autocomplete="current-password" required>`;
     $('#app').innerHTML = `<div class="login"><form id="login">
       <div class="brand">ФУДЖИ<small>персонал</small></div>
-      <input class="inp" name="login" placeholder="Логин" autocomplete="username" required>
-      <input class="inp" name="password" type="password" placeholder="Пароль" autocomplete="current-password" required>
+      ${loginMode === 'pin' ? pinForm : pwdForm}
       <button class="btn btn--dark" type="submit">Войти</button>
       <div class="hint" style="color:var(--danger)">${esc(err)}</div>
-      <div class="hint">Роли: официант — столы и заказы; управляющий — контроль зала; администратор — меню, AI, QR, сотрудники.</div>
+      <button type="button" class="btn btn--sm" data-login-mode>${loginMode === 'pin' ? 'Войти по логину и паролю' : 'Войти по PIN (официант)'}</button>
+      <div class="hint">${loginMode === 'pin' ? 'PIN из 4–6 цифр выдаёт администратор. Ресторан телефон запомнит.' : 'Роли: официант — столы и заказы; управляющий — контроль зала; администратор — меню, AI, QR, сотрудники.'}</div>
     </form></div>`;
+    $('[data-login-mode]').addEventListener('click', () => {
+      loginMode = loginMode === 'pin' ? 'password' : 'pin'; ls.set('loginMode', loginMode); renderLogin();
+    });
     $('#login').addEventListener('submit', async (e) => {
       e.preventDefault();
       const f = new FormData(e.target);
+      const btn = e.target.querySelector('button[type=submit]');
+      if (btn.disabled) return;
+      btn.disabled = true;
       try {
-        const res = await api('POST', '/api/v1/staff/login', { login: f.get('login'), password: f.get('password') });
+        let res;
+        if (loginMode === 'pin') {
+          ls.set('pinRestaurant', f.get('restaurant'));
+          const r = await fetch('/api/v1/staff/pin-login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-Device-Id': deviceId() },
+            body: JSON.stringify({ restaurant: f.get('restaurant'), pin: f.get('pin') }),
+          });
+          res = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error(res.error || `Ошибка ${r.status}`);
+          S.restaurant = f.get('restaurant'); ls.set('restaurant', S.restaurant);
+        } else {
+          res = await api('POST', '/api/v1/staff/login', { login: f.get('login'), password: f.get('password') });
+        }
         S.token = res.token; S.staff = res.staff;
         ls.set('token', res.token); ls.set('staff', res.staff);
         start();
@@ -868,7 +904,7 @@
         <small class="muted" id="role-info" style="display:block;margin-top:6px">${esc(ROLE_INFO[u.role || 'waiter'][1])}</small></div>
       <div class="field"><label>Ресторан</label><select class="sel" name="restaurantId"><option value="">Все</option>${(S.staffRests || []).map((r) => `<option value="${r.id}" ${u.restaurantId === r.id ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select></div>
       <div class="field"><label>${u.id ? 'Новый пароль (пусто — не менять)' : 'Пароль'}</label><input class="inp" name="password" type="password" ${u.id ? '' : 'required'}></div>
-      <div class="field"><label>PIN для приложения официанта (4–6 цифр${u.hasPin ? ', пусто — не менять' : ''})</label><input class="inp" name="pin" inputmode="numeric" pattern="\\d{4,6}" maxlength="6" autocomplete="off" placeholder="${u.hasPin ? 'PIN задан' : 'например, 482915'}"></div>
+      <div class="field"><label>PIN для входа официанта (4–6 цифр${u.hasPin ? ', пусто — не менять' : ''})</label><input class="inp" name="pin" inputmode="numeric" pattern="\\d{4,6}" maxlength="6" autocomplete="off" placeholder="${u.hasPin ? 'PIN задан' : 'например, 482915'}"></div>
       ${u.hasPin ? '<label style="display:flex;gap:10px;align-items:center;margin-top:20px"><input type="checkbox" name="clearPin"> Сбросить PIN</label>' : ''}
       <label style="display:flex;gap:10px;align-items:center;margin-top:20px"><input type="checkbox" name="isActive" ${u.isActive !== false ? 'checked' : ''}> Активен</label>
       </div><div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить</button><button class="btn" type="button" data-modal-close>Отмена</button></div></form>`, (root) => {
