@@ -14,7 +14,7 @@
 import axios from 'axios';
 import { randomUUID } from 'crypto';
 import pool from '../db/pool.js';
-import { changeOrderPayments, closeTableOrder, iikoRequest, isIikoDemo, withIikoCreds } from '../iiko-client.js';
+import { changeOrderPayments, closeTableOrder, getOrderSnapshot, iikoRequest, isIikoDemo, withIikoCreds } from '../iiko-client.js';
 import { getSource, MAIN } from './sources.js';
 import { createWaiterNotification } from './waiter-notifications.js';
 import { NOTIFY_TYPES } from '../lib/table-workflow-config.js';
@@ -25,6 +25,8 @@ const CP_API = 'https://api.cloudpayments.ru';
 // Виджет платит одностадийно (pay('charge')) — оплачено только Completed; Authorized — деньги лишь заблокированы
 const PAID_STATUSES = new Set(['Completed']);
 const FAILED_STATUSES = new Set(['Declined', 'Cancelled', 'Voided']);
+// Счёт CloudPayments «в работе» столько минут: 3-D Secure и банк бывают долгими — второй счёт и оплату официанту не даём
+const PENDING_BUSY_MIN = 15;
 
 /** Чаевые: целые рубли, не больше суммы счёта и не больше 50 000 ₽ (защита от опечатки «лишний ноль») */
 function clampTip(tipAmount, base) {
@@ -96,30 +98,52 @@ async function sessionState(sessionId) {
   );
   if (!s[0]) throw httpError(404, 'Визит не найден');
   const { rows: items } = await pool.query(
-    'SELECT is_locked, line_total, source, guest_id FROM table_order_items WHERE session_id = $1', [s[0].id],
+    `SELECT id, is_locked, line_total, source, guest_id, iiko_order_id, paid_payment_id
+       FROM table_order_items WHERE session_id = $1`, [s[0].id],
   );
-  const { rows: pays } = await pool.query(
-    "SELECT amount, guest_ids FROM table_payments WHERE session_id = $1 AND status = 'completed' AND method = 'cloudpayments'",
-    [s[0].id],
-  );
-  // Гости, за которых кухня уже оплачена онлайн; null в списке — «весь стол»
-  const covered = new Set();
-  let wholeTablePaid = false;
-  for (const p of pays) {
-    if (!p.guest_ids) wholeTablePaid = true;
-    else for (const g of p.guest_ids) covered.add(String(g));
-  }
   const kitchen = items.filter((i) => (i.source || MAIN) === MAIN);
   const bar = items.filter((i) => (i.source || MAIN) !== MAIN);
   const sum = (list) => Math.round(list.reduce((n, i) => n + parseFloat(i.line_total || 0), 0) * 100) / 100;
-  return { session: s[0], items, kitchen, bar, covered, wholeTablePaid, sum };
+  // Строки заказа iiko: свой ID или старые строки без него (до этой версии) — в текущем заказе источника
+  const inOrder = (list, orderId) => list.filter((i) => i.is_locked && (!i.iiko_order_id || String(i.iiko_order_id) === String(orderId)));
+  return { session: s[0], items, kitchen, bar, sum, inOrder };
 }
 
-/** Кухня к оплате онлайн: за отмеченных гостей (или весь стол), без уже оплаченного. */
-function kitchenDue(st, guestIds) {
-  if (st.wholeTablePaid) return { amount: 0, bar: 0 };
-  const pick = (i) => (guestIds ? guestIds.includes(String(i.guest_id)) : true) && !st.covered.has(String(i.guest_id));
-  return { amount: st.sum(st.kitchen.filter(pick)), bar: st.sum(st.bar.filter((i) => (guestIds ? guestIds.includes(String(i.guest_id)) : true))) };
+/**
+ * Кухня к оплате онлайн: отправленные строки отмеченных гостей (или всего стола), ещё не оплаченные онлайн.
+ * Считаем по строкам: гость, оплативший свою часть и потом дозаказавший десерт, должен за десерт.
+ */
+export function kitchenDue(st, guestIds) {
+  const mine = (i) => (guestIds ? guestIds.includes(String(i.guest_id)) : true);
+  const lines = st.kitchen.filter((i) => mine(i) && i.is_locked && !i.paid_payment_id);
+  return { amount: st.sum(lines), bar: st.sum(st.bar.filter(mine)), lines };
+}
+
+/** Онлайн-платёж прошёл — помечаем оплаченные им строки (старые платежи без списка строк — по гостям). */
+async function markPaidLines(pay) {
+  const ids = Array.isArray(pay.item_ids) ? pay.item_ids : null;
+  if (ids?.length) {
+    await pool.query(
+      'UPDATE table_order_items SET paid_payment_id = $2 WHERE id = ANY($1::uuid[]) AND paid_payment_id IS NULL',
+      [ids, pay.id],
+    );
+    return;
+  }
+  await pool.query(
+    `UPDATE table_order_items SET paid_payment_id = $2
+     WHERE session_id = $1 AND is_locked AND COALESCE(source, 'main') = 'main' AND paid_payment_id IS NULL
+       AND sent_at <= $3 AND ($4::jsonb IS NULL OR guest_id::text IN (SELECT jsonb_array_elements_text($4::jsonb)))`,
+    [pay.session_id, pay.id, pay.created_at, pay.guest_ids ? JSON.stringify(pay.guest_ids) : null],
+  );
+}
+
+/** Сумма заказа в iiko против нашей: скидка или правка на кассе — платить по нашей сумме нельзя. Null — iiko не ответил. */
+async function iikoSumMismatch(src, orderId, ourSum) {
+  if (isIikoDemo() || !orderId) return null;
+  const snap = await withIikoCreds(src.creds, () => getOrderSnapshot(src.organization_id, orderId)).catch(() => null);
+  if (!snap?.exists || snap.sum == null) return null;
+  if (snap.status === 'Closed') return { closed: true, sum: snap.sum };
+  return Math.abs(snap.sum - ourSum) > 1 ? { sum: snap.sum } : false;
 }
 
 // ── Онлайн-оплата ───────────────────────────────────────────────────────────
@@ -135,7 +159,7 @@ async function startOnlinePaymentNow(sessionId, { tipAmount = 0, guest = null, g
     "SELECT invoice_id, guest_id, guest_ids, created_at FROM table_payments WHERE session_id::text = $1 AND status = 'pending' AND invoice_id IS NOT NULL",
     [String(sessionId)],
   );
-  for (const p of pending) await confirmOnlinePayment(p.invoice_id).catch(() => null);
+  for (const p of pending) await confirmNow(p.invoice_id).catch(() => null);
   const st = await sessionState(sessionId);
   const settings = await paySettings(st.session.rid);
   if (!settings.enabled) throw httpError(403, 'Онлайн-оплата в этом ресторане пока не подключена — оплатите официанту');
@@ -146,7 +170,7 @@ async function startOnlinePaymentNow(sessionId, { tipAmount = 0, guest = null, g
   const overlaps = (other) => !other || !ids || other.some((g) => ids.includes(String(g)));
   const { rows: busy } = await pool.query(
     `SELECT guest_id, guest_ids FROM table_payments WHERE session_id = $1 AND status = 'pending'
-       AND invoice_id IS NOT NULL AND created_at > NOW() - INTERVAL '5 minutes'`,
+       AND invoice_id IS NOT NULL AND created_at > NOW() - INTERVAL '${PENDING_BUSY_MIN} minutes'`,
     [st.session.id],
   );
   if (busy.some((b) => String(b.guest_id || '') !== String(guest?.id || '-') && overlaps(b.guest_ids))) {
@@ -157,12 +181,23 @@ async function startOnlinePaymentNow(sessionId, { tipAmount = 0, guest = null, g
   }
   const due = kitchenDue(st, ids);
   if (due.amount <= 0) throw httpError(400, 'Кухня уже оплачена — напитки бара оплачиваются картой официанту');
+  // Счёт кухни в iiko: закрыт на кассе или сумма другая (скидка, правка) — онлайн не берём, иначе двойная оплата
+  const kitchenOrderId = st.session.iiko_orders?.[MAIN]?.orderId || st.session.iiko_order_id;
+  if (kitchenOrderId && !st.session.iiko_orders?.[MAIN]?.closed) {
+    const restaurant = { id: st.session.rid, organization_id: st.session.rorg, terminal_group_id: st.session.rtg };
+    const src = await getSource(restaurant, MAIN);
+    const ours = st.sum(st.inOrder(st.kitchen, kitchenOrderId));
+    const diff = await iikoSumMismatch(src, kitchenOrderId, ours);
+    if (diff?.closed) throw httpError(409, 'Счёт кухни уже закрыт на кассе — онлайн платить не нужно');
+    if (diff) throw httpError(409, `На кассе сумма по кухне ${Math.round(diff.sum)} ₽, в меню ${Math.round(ours)} ₽ — оплатите официанту`);
+  }
   const tip = clampTip(tipAmount, due.amount);
   const invoiceId = `QR-${String(st.session.table_number).replace(/[^\w-]/g, '')}-${randomUUID().slice(0, 8)}`;
   await pool.query(
-    `INSERT INTO table_payments (session_id, amount, tip_amount, method, status, invoice_id, guest_id, guest_ids)
-     VALUES ($1, $2, $3, 'cloudpayments', 'pending', $4, $5, $6)`,
-    [st.session.id, due.amount, tip, invoiceId, guest?.id || null, ids ? JSON.stringify(ids) : null],
+    `INSERT INTO table_payments (session_id, amount, tip_amount, method, status, invoice_id, guest_id, guest_ids, item_ids)
+     VALUES ($1, $2, $3, 'cloudpayments', 'pending', $4, $5, $6, $7)`,
+    [st.session.id, due.amount, tip, invoiceId, guest?.id || null, ids ? JSON.stringify(ids) : null,
+      JSON.stringify(due.lines.map((l) => l.id))],
   );
   return {
     publicId: settings.publicId,
@@ -186,8 +221,16 @@ async function findCpPayment(settings, invoiceId) {
 
 /** Подтвердить оплату по счёту (спрашиваем CloudPayments); кухня оплачена целиком — закрыть заказ кухни в iiko. */
 export async function confirmOnlinePayment(invoiceId) {
+  // В очереди визита: два подтверждения сразу (гость + фоновая проверка) не вносят оплату в iiko дважды
+  const { rows } = await pool.query('SELECT session_id FROM table_payments WHERE invoice_id = $1', [String(invoiceId)]);
+  if (!rows[0]) throw httpError(404, 'Платёж не найден');
+  return withSessionMutex(rows[0].session_id, () => confirmNow(invoiceId));
+}
+
+async function confirmNow(invoiceId) {
   const { rows } = await pool.query(
-    `SELECT p.*, s.restaurant_id FROM table_payments p JOIN table_sessions s ON s.id = p.session_id WHERE p.invoice_id = $1`,
+    `SELECT p.*, s.restaurant_id, s.payment_status AS session_payment, s.table_number
+       FROM table_payments p JOIN table_sessions s ON s.id = p.session_id WHERE p.invoice_id = $1`,
     [String(invoiceId)],
   );
   const pay = rows[0];
@@ -215,7 +258,21 @@ export async function confirmOnlinePayment(invoiceId) {
        WHERE id = $1 AND status = 'pending'`,
       [pay.id, String(m.TransactionId || '')],
     );
-    if (rowCount) await settleKitchen(pay.session_id, pay);
+    if (rowCount) {
+      await markPaidLines(pay);
+      if (pay.session_payment === 'paid') {
+        // Стол уже оплачен (официанту или на кассе), а гость доплатил онлайн — деньги вернуть
+        await createWaiterNotification({
+          restaurantId: pay.restaurant_id, sessionId: pay.session_id, tableNumber: pay.table_number,
+          type: NOTIFY_TYPES.IIKO_ERROR || 'iiko_error',
+          title: `Стол №${pay.table_number} — двойная оплата`,
+          body: `Гость оплатил онлайн ${Math.round(expected)} ₽ после закрытия счёта — оформите возврат в CloudPayments`,
+          payload: { sessionId: pay.session_id, invoiceId: pay.invoice_id },
+        }).catch(() => {});
+      } else {
+        await settleKitchen(pay.session_id, pay);
+      }
+    }
     return { status: 'completed', sessionId: pay.session_id };
   }
   if (FAILED_STATUSES.has(m.Status)) {
@@ -247,19 +304,24 @@ async function settleKitchen(sessionId, lastPayment) {
   const settings = await paySettings(session.rid);
   const tip = Math.round(parseFloat(lastPayment?.tip_amount || 0));
   const paidNow = Math.round(parseFloat(lastPayment?.amount || 0));
-  const kitchenLeft = kitchenDue(st, null).amount;
-  const barTotal = st.sum(st.bar);
+  // Не оплачено: отправленные строки без онлайн-оплаты и всё, что ещё собирают в корзине
+  const kitchenLeft = kitchenDue(st, null).amount + st.sum(st.kitchen.filter((i) => !i.is_locked));
+  const barTotal = st.sum(st.bar.filter((i) => i.is_locked));
 
   let iikoNote = '';
   if (kitchenLeft <= 0) {
     const orders = { ...(session.iiko_orders || {}) };
     if (session.iiko_order_id && !orders[MAIN]) orders[MAIN] = { orderId: session.iiko_order_id };
     const orderId = orders[MAIN]?.orderId;
-    const kitchenSum = st.sum(st.kitchen.filter((i) => i.is_locked));
-    if (orderId && kitchenSum > 0 && !isIikoDemo()) {
+    // В iiko вносим ровно то, что гости заплатили онлайн по строкам этого заказа — не «всю кухню стола»
+    const kitchenSum = st.sum(st.inOrder(st.kitchen, orderId).filter((i) => i.paid_payment_id));
+    if (orderId && kitchenSum > 0 && !isIikoDemo() && !orders[MAIN]?.closed) {
       const restaurant = { id: session.rid, organization_id: session.rorg, terminal_group_id: session.rtg };
       const src = await getSource(restaurant, MAIN);
       try {
+        const diff = orders[MAIN]?.paid ? false : await iikoSumMismatch(src, orderId, kitchenSum);
+        if (diff?.closed) throw new Error('счёт уже закрыт на кассе — проверьте, не оплачен ли он дважды');
+        if (diff) throw new Error(`в iiko по счёту ${Math.round(diff.sum)} ₽, оплачено онлайн ${Math.round(kitchenSum)} ₽`);
         await withIikoCreds(src.creds, async () => {
           const paymentTypeId = await paymentTypeFor(src, settings);
           if (!paymentTypeId) throw new Error('в iiko нет типа оплаты «Онлайн» — создайте его или укажите ID в админке «Оплата»');
@@ -285,7 +347,7 @@ async function settleKitchen(sessionId, lastPayment) {
       }
     }
     // Бара нет — стол оплачен полностью
-    if (barTotal <= 0) {
+    if (barTotal <= 0 && !st.bar.some((i) => !i.is_locked)) {
       await pool.query(
         `UPDATE table_sessions SET payment_status = 'paid', status = 'paid', workflow_status = 'paid',
            paid_at = NOW(), updated_at = NOW() WHERE id = $1`,
@@ -351,6 +413,18 @@ export function acceptWaiterPayment(sessionId, opts = {}) {
 
 async function acceptWaiterPaymentNow(sessionId, { method, tipAmount = 0 } = {}) {
   if (!KIND[method]) throw httpError(400, 'Выберите: наличными или картой');
+  // Гость прямо сейчас платит онлайн — сначала досматриваем его счёт, иначе деньги возьмут дважды
+  const { rows: pending } = await pool.query(
+    "SELECT invoice_id FROM table_payments WHERE session_id::text = $1 AND status = 'pending' AND invoice_id IS NOT NULL",
+    [String(sessionId)],
+  );
+  for (const p of pending) await confirmNow(p.invoice_id).catch(() => null);
+  const { rows: busy } = await pool.query(
+    `SELECT 1 FROM table_payments WHERE session_id::text = $1 AND status = 'pending' AND invoice_id IS NOT NULL
+       AND created_at > NOW() - INTERVAL '${PENDING_BUSY_MIN} minutes' LIMIT 1`,
+    [String(sessionId)],
+  );
+  if (busy.length) throw httpError(409, 'Гость сейчас оплачивает онлайн — подождите пару минут или попросите его закрыть оплату');
   const st = await sessionState(sessionId);
   const { session } = st;
   if (session.payment_status === 'paid') throw httpError(409, 'Счёт уже оплачен');
@@ -359,23 +433,27 @@ async function acceptWaiterPaymentNow(sessionId, { method, tipAmount = 0 } = {})
   const restaurant = { id: session.rid, organization_id: session.rorg, terminal_group_id: session.rtg };
   const orders = { ...(session.iiko_orders || {}) };
   if (session.iiko_order_id && !orders[MAIN]) orders[MAIN] = { orderId: session.iiko_order_id };
-  const onlinePaid = st.wholeTablePaid || st.covered.size
-    ? (await pool.query(
-      "SELECT COALESCE(SUM(amount), 0)::float AS s FROM table_payments WHERE session_id = $1 AND status = 'completed' AND method = 'cloudpayments'",
-      [session.id],
-    )).rows[0].s : 0;
 
-  const total = Math.max(0, Math.round((st.sum(st.items.filter((i) => i.is_locked)) - onlinePaid) * 100) / 100);
+  let total = 0;
   const closed = [];
   for (const [code, o] of Object.entries(orders)) {
     if (!o?.orderId || o.closed) continue;
-    const lines = st.items.filter((i) => i.is_locked && (i.source || MAIN) === code);
-    const sum = st.sum(lines);
-    if (sum <= 0) continue;
+    // Строки этого заказа iiko: оплаченное онлайн вносим «Онлайн», остальное — наличными/картой
+    const lines = st.inOrder(st.items.filter((i) => (i.source || MAIN) === code), o.orderId);
+    const online = st.sum(lines.filter((i) => i.paid_payment_id));
+    const rest = st.sum(lines.filter((i) => !i.paid_payment_id));
+    if (online + rest <= 0) continue;
+    total = Math.round((total + rest) * 100) / 100;
     const src = await getSource(restaurant, code);
-    const online = code === MAIN ? Math.min(onlinePaid, sum) : 0;
-    const rest = Math.round((sum - online) * 100) / 100;
     if (isIikoDemo()) { closed.push(code); continue; }
+    const where = code === MAIN ? 'кухни' : `«${src.name || code}»`;
+    // Сумма на кассе другая (скидка, правка) — не закрываем нашей суммой, официант закрывает счёт на кассе
+    const diff = o.paid ? false : await iikoSumMismatch(src, o.orderId, online + rest);
+    if (diff?.closed) { await markOrderClosed(session.id, code); closed.push(code); continue; }
+    if (diff) {
+      throw httpError(409, `Счёт ${where}: на кассе ${Math.round(diff.sum)} ₽, в меню ${Math.round(online + rest)} ₽ (скидка или правка на кассе). `
+        + 'Примите оплату на кассе iiko — стол закроется сам');
+    }
     try {
       await withIikoCreds(src.creds, async () => {
         const payments = [];
@@ -400,7 +478,6 @@ async function acceptWaiterPaymentNow(sessionId, { method, tipAmount = 0 } = {})
       closed.push(code);
     } catch (e) {
       const reason = e.response?.data?.errorDescription || e.response?.data?.message || e.message;
-      const where = code === MAIN ? 'кухни' : `«${src.name || code}»`;
       await pool.query('UPDATE table_sessions SET iiko_last_error = $2 WHERE id = $1', [session.id, `Оплата ${where}: ${reason}`]);
       throw httpError(502, `iiko не закрыл счёт ${where}: ${reason}. Закройте его на кассе, затем «Закрыть стол»`);
     }
@@ -424,13 +501,14 @@ async function acceptWaiterPaymentNow(sessionId, { method, tipAmount = 0 } = {})
 export async function checkPendingPayments() {
   const { rows } = await pool.query(
     `SELECT invoice_id FROM table_payments WHERE status = 'pending' AND invoice_id IS NOT NULL
-       AND created_at < NOW() - INTERVAL '15 seconds' AND created_at > NOW() - INTERVAL '3 hours'
+       AND created_at < NOW() - INTERVAL '15 seconds' AND created_at > NOW() - INTERVAL '24 hours'
      ORDER BY created_at LIMIT 20`,
   );
   for (const r of rows) {
     try { await confirmOnlinePayment(r.invoice_id); } catch (e) { console.warn('оплата', r.invoice_id, e.message); }
   }
   await pool.query(
-    "UPDATE table_payments SET status = 'expired' WHERE status = 'pending' AND created_at < NOW() - INTERVAL '3 hours'",
+    // Сутки без ответа CloudPayments — счёт брошен (до этого досматриваем: банк мог подтвердить позже)
+    "UPDATE table_payments SET status = 'expired' WHERE status = 'pending' AND created_at < NOW() - INTERVAL '24 hours'",
   );
 }

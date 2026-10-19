@@ -3,8 +3,10 @@
  */
 import pool from '../db/pool.js';
 import { NOTIFY_TYPES, WAITER_RESPONSE_SLA_MS, WORKFLOW } from '../lib/table-workflow-config.js';
+import { randomUUID } from 'crypto';
 import {
-  addItemsToOrder, createTableOrder, isIikoDemo, isTerminalGroupError, pickAliveTerminalGroup, withIikoCreds,
+  addItemsToOrder, createTableOrder, getOrderSnapshot, isIikoDemo, isTerminalGroupError, isUnknownOutcome,
+  pickAliveTerminalGroup, withIikoCreds,
 } from '../iiko-client.js';
 import { createWaiterNotification } from './waiter-notifications.js';
 import { getSource, listSources, MAIN, productSourceMap } from './sources.js';
@@ -180,6 +182,22 @@ export async function saveTerminalGroup(restaurantId, code, terminalGroupId) {
 }
 
 /**
+ * Дошла ли партия до заказа iiko: живых позиций каждого блюда в заказе не меньше, чем у нас уже отправлено + в партии.
+ * Нужна, когда ответ iiko потерялся: повторить вслепую — задвоить блюда на кухне.
+ */
+export function batchLanded(snap, lockedRows, batchRows) {
+  if (!snap?.exists || !batchRows.length) return false;
+  const alive = new Map();
+  for (const it of snap.items || []) alive.set(it.productId, (alive.get(it.productId) || 0) + it.amount);
+  const need = new Map();
+  for (const r of [...lockedRows, ...batchRows]) {
+    const pid = String(r.iiko_product_id);
+    need.set(pid, (need.get(pid) || 0) + Number(r.quantity || 0));
+  }
+  return batchRows.every((r) => (alive.get(String(r.iiko_product_id)) || 0) >= need.get(String(r.iiko_product_id)));
+}
+
+/**
  * «В работу» (кейс 8): отправить новые позиции в iiko на стол.
  * Позиции делятся по источникам iiko: кухня — в iiko ресторана, алкоголь — в iiko бара
  * (свой заказ на тот же стол). При ошибке одного iiko остальное уходит, не отправленное остаётся
@@ -220,8 +238,11 @@ async function sendToKitchenNow(sessionId, staff) {
   }
 
   const sentIds = [];
+  const sentByCode = new Map();
   const errors = [];
-  for (const [code, items] of groups) {
+  const saveOrders = () => pool.query('UPDATE table_sessions SET iiko_orders = $2 WHERE id = $1', [sessionId, JSON.stringify(orders)]);
+  for (const [code, all] of groups) {
+    let items = all;
     // Запоминаем кассу позиции: по ней считается «бар — принять оплату» и статусы
     await pool.query('UPDATE table_order_items SET source = $2 WHERE id = ANY($1::uuid[]) AND source IS DISTINCT FROM $2',
       [items.map((i) => i.id), code]);
@@ -229,8 +250,8 @@ async function sendToKitchenNow(sessionId, staff) {
     try {
       await withIikoCreds(src.creds, async () => {
         // Имя гостя, место и курс — комментарием к позиции (печатается на чеке); по порядку курсов
-        const delta = [...items]
-          .sort((a, b) => (a.course || 1) - (b.course || 1))
+        const sortedItems = [...items].sort((a, b) => (a.course || 1) - (b.course || 1));
+        let delta = sortedItems
           .map((i) => ({
             productId: i.iiko_product_id,
             amount: i.quantity,
@@ -242,18 +263,46 @@ async function sendToKitchenNow(sessionId, staff) {
               .filter(Boolean).join(', ') || undefined,
           }));
         let orderId = orders[code]?.orderId;
+        const inOrder = (oid) => ctx.items.filter((r) => r.is_locked && (r.source || MAIN) === code
+          && (!r.iiko_order_id || String(r.iiko_order_id) === String(oid)));
+        const pend = orders[code]?.pending;
+        // Прошлая отправка не дождалась ответа iiko — сначала узнаём, дошла ли она, иначе блюда задвоятся
+        if (pend && orderId && !demo) {
+          const snap = await getOrderSnapshot(src.organization_id, orderId).catch(() => null);
+          if (!snap) throw new Error('iiko пока не подтвердил прошлую отправку — проверьте заказ на кассе и повторите через минуту');
+          const prev = items.filter((r) => (pend.ids || []).includes(String(r.id)));
+          if (snap.exists && prev.length && batchLanded(snap, inOrder(orderId), prev)) {
+            sentIds.push(...prev.map((r) => r.id));
+            sentByCode.set(code, [...(sentByCode.get(code) || []), ...prev.map((r) => r.id)]);
+            items = items.filter((r) => !prev.includes(r));
+          } else if (!snap.exists && pend.create) {
+            orders[code] = { orderId: null, tableId: orders[code].tableId };
+            orderId = null;
+          }
+        }
+        if (orders[code]) delete orders[code].pending;
+        if (!items.length) return;
+        delta = delta.filter((d, i) => items.includes(sortedItems[i]));
         if (orderId) {
+          orders[code].pending = { ids: items.map((r) => String(r.id)) };
+          await saveOrders();
           try {
             await addItemsToOrder({ organizationId: src.organization_id, orderId, items: delta });
           } catch (e) {
-            // Заказ стола на кассе удалили или закрыли — создаём новый на тот же стол
-            const text = `${e.response?.data?.errorDescription || ''} ${e.message || ''}`;
-            if (!/Deleted|Closed|status|not found|не найден/i.test(text)) throw e;
-            console.warn(`iiko: заказ ${orderId} (${code}) удалён или закрыт на кассе — создаём новый`);
-            const tableId = orders[code]?.tableId;
-            orders[code] = { orderId: null, tableId };
-            if (code === MAIN) session.iiko_order_id = null;
-            orderId = null;
+            // Причину решает статус заказа в iiko, а не текст ошибки: «status code 500» — не «заказ закрыт»
+            const snap = demo ? null : await getOrderSnapshot(src.organization_id, orderId).catch(() => null);
+            if (snap && (!snap.exists || snap.status === 'Closed' || snap.status === 'Deleted')) {
+              // Счёт закрыли или удалили на кассе — дозаказ уходит новым заказом на тот же стол
+              console.warn(`iiko: заказ ${orderId} (${code}) ${snap.status || 'не найден'} — создаём новый`);
+              orders[code] = { orderId: null, tableId: orders[code]?.tableId };
+              if (code === MAIN) session.iiko_order_id = null;
+              orderId = null;
+            } else if (snap && isUnknownOutcome(e) && batchLanded(snap, inOrder(orderId), items)) {
+              console.warn(`iiko: add_items ${orderId} без ответа, но позиции в заказе есть — считаем отправленными`);
+            } else {
+              if (!isUnknownOutcome(e) && orders[code]) delete orders[code].pending;
+              throw e;
+            }
           }
         }
         if (!orderId) {
@@ -267,12 +316,17 @@ async function sendToKitchenNow(sessionId, staff) {
             );
             if (!tableId) throw new Error(`Стол №${session.table_number} не найден в схеме зала iiko`);
           };
+          // Свой ID заказа сохраняем до вызова: потерялся ответ или упал процесс — следующая отправка проверит его в iiko
+          const newId = randomUUID();
+          orders[code] = { orderId: newId, tableId: tableId || null, pending: { ids: items.map((r) => String(r.id)), create: true } };
+          await saveOrders();
           const create = () => createTableOrder({
             organizationId: src.organization_id,
             terminalGroupId,
             tableIds: tableId ? [tableId] : [],
             items: delta,
             guestCount: session.guest_count || 1,
+            id: demo ? undefined : newId,
           });
           // Касса должна быть на связи: иначе iiko примет заказ, но он зависнет и не дойдёт до кассы
           if (!demo) {
@@ -297,7 +351,15 @@ async function sendToKitchenNow(sessionId, staff) {
           try {
             created = await create();
           } catch (e) {
-            if (demo || !isTerminalGroupError(e)) throw e;
+            if (!demo && isUnknownOutcome(e)) {
+              const snap = await getOrderSnapshot(src.organization_id, newId).catch(() => null);
+              if (snap?.exists) created = { orderInfo: { id: newId } };
+              else if (!snap) throw e; // не знаем — pending остаётся, следующая отправка проверит
+            }
+            if (created) { /* заказ создан, хоть ответ и потерялся */ } else if (demo || !isTerminalGroupError(e)) {
+              if (!isUnknownOutcome(e)) orders[code] = { orderId: null, tableId: tableId || null };
+              throw e;
+            } else {
             // iiko не принял заказ через эту кассу — пробуем другие терминальные группы организации
             const { list } = await pickAliveTerminalGroup(src.organization_id, terminalGroupId);
             const others = src.orderOverride ? [] : list.filter((t) => t.id !== terminalGroupId && t.isAlive !== false && !/бар|bar/i.test(t.name || ''))
@@ -322,6 +384,7 @@ async function sendToKitchenNow(sessionId, staff) {
             }
             if (lastErr) {
               if (others.length) { terminalGroupId = firstGroup; await dropCache(); }
+              orders[code] = { orderId: null, tableId: null };
               const raw = e.response?.data?.errorDescription || e.message || '';
               const names = list.map((t) => `${t.name || t.id}${t.isAlive ? ' — на связи' : t.isAlive === false ? ' — не на связи' : ''}`).join('; ');
               throw new Error(/server version/i.test(raw)
@@ -330,16 +393,20 @@ async function sendToKitchenNow(sessionId, staff) {
                   + `Кассы: ${names || 'нет'}`
                 : raw);
             }
+            }
           }
           if (created?.orderInfo?.creationStatus === 'Error') {
+            orders[code] = { orderId: null, tableId: tableId || null };
             throw new Error(created.orderInfo.errorInfo?.message || 'iiko отклонил заказ');
           }
           orderId = created?.orderInfo?.id || created?.order?.id || created?.id || null;
           if (!orderId) throw new Error('iiko не вернул номер заказа');
           orders[code] = { orderId, tableId: tableId || null };
         }
+        if (orders[code]) delete orders[code].pending;
       });
       sentIds.push(...items.map((i) => i.id));
+      sentByCode.set(code, [...(sentByCode.get(code) || []), ...items.map((i) => i.id)]);
     } catch (e) {
       const reason = e.response?.data?.errorDescription || e.response?.data?.message || e.message || 'Ошибка iiko';
       errors.push(groups.size > 1 || code !== MAIN ? `${src.name}: ${reason}` : reason);
@@ -352,6 +419,12 @@ async function sendToKitchenNow(sessionId, staff) {
        WHERE id = ANY($1::uuid[])`,
       [sentIds],
     );
+    // Строка помнит свой заказ iiko: оплата и сверка считаются по заказу, а не по всему столу
+    for (const [code, ids] of sentByCode) {
+      if (orders[code]?.orderId) {
+        await pool.query('UPDATE table_order_items SET iiko_order_id = $2 WHERE id = ANY($1::uuid[])', [ids, String(orders[code].orderId)]);
+      }
+    }
   }
   const errorText = errors.length ? errors.join('; ') : null;
   await pool.query(

@@ -436,6 +436,12 @@ const SCHEMA = `
     created_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (restaurant_id, source)
   );
+  -- Строка заказа знает свой заказ iiko (после закрытия счёта на кассе дозаказ уходит в новый заказ)
+  -- и онлайн-платёж, которым она оплачена: долг гостя и сумма в iiko считаются по строкам, а не «гость оплатил всё»
+  ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS iiko_order_id VARCHAR(64);
+  ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS paid_payment_id UUID;
+  ALTER TABLE table_payments ADD COLUMN IF NOT EXISTS item_ids JSONB;
+  CREATE INDEX IF NOT EXISTS idx_table_payments_session ON table_payments(session_id);
   -- Ключи онлайн-оплаты по ресторанам (задаёт администратор в админке «Оплата»)
   CREATE TABLE IF NOT EXISTS restaurant_payment_settings (
     restaurant_id UUID PRIMARY KEY REFERENCES restaurants(id) ON DELETE CASCADE,
@@ -514,6 +520,12 @@ const SOFT_INDEXES = [
      WHERE a.session_id = b.session_id AND a.status = 'completed' AND b.status = 'completed'
        AND a.method <> 'cloudpayments' AND b.method <> 'cloudpayments'
        AND (a.created_at, a.id::text) > (b.created_at, b.id::text)`,
+  // Онлайн-оплаты до учёта по строкам: строки, отправленные до платежа, помечаем им оплаченными (повторный запуск ничего не меняет)
+  `UPDATE table_order_items i SET paid_payment_id = p.id FROM table_payments p
+     WHERE p.session_id = i.session_id AND p.method = 'cloudpayments' AND p.status = 'completed'
+       AND i.paid_payment_id IS NULL AND i.is_locked AND COALESCE(i.source, 'main') = 'main' AND i.sent_at <= p.created_at
+       AND (p.guest_ids IS NULL OR i.guest_id::text IN (SELECT jsonb_array_elements_text(p.guest_ids)))
+       AND NOT EXISTS (SELECT 1 FROM table_payments q WHERE q.item_ids IS NOT NULL AND q.session_id = p.session_id)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_table_payments_one_waiter
      ON table_payments(session_id) WHERE status = 'completed' AND method <> 'cloudpayments'`,
 ];

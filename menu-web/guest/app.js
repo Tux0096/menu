@@ -1459,7 +1459,8 @@
     const online = Boolean(S.config?.onlinePay);
     const paidOnline = s.onlinePaid || { wholeTable: false, guestIds: [] };
     const isBar = (i) => (i.source || 'main') !== 'main';
-    const covered = (i) => paidOnline.wholeTable || paidOnline.guestIds.includes(String(i.guestId));
+    // Оплачено онлайн — по строкам (сервер помечает каждую); старый ответ без пометок — по гостям
+    const covered = (i) => (i.paidOnline !== undefined ? i.paidOnline : paidOnline.wholeTable || paidOnline.guestIds.includes(String(i.guestId)));
     const picked = new Set(guests.map((g) => String(g.id)));
     const tips = S.config?.tipPresets || [0, 10, 15, 20];
     const st = { method: online ? 'online' : 'card', tipPct: 0, busy: false };
