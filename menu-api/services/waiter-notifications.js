@@ -1,4 +1,5 @@
 import { pushToRestaurant } from './push.js';
+import { uuidOrNull } from '../lib/uuid.js';
 import pool from '../db/pool.js';
 
 export async function createWaiterNotification({
@@ -49,9 +50,9 @@ export async function listWaiterNotifications(restaurantId, { unreadOnly = false
 export async function markNotificationRead(notificationId, restaurantId, staffId) {
   await pool.query(
     `INSERT INTO waiter_notification_reads (notification_id, staff_id)
-     SELECT id, $3 FROM waiter_notifications WHERE id::text = $1 AND restaurant_id = $2
+     SELECT id, $3 FROM waiter_notifications WHERE id = $1 AND restaurant_id = $2
      ON CONFLICT DO NOTHING`,
-    [String(notificationId), restaurantId, staffId],
+    [uuidOrNull(notificationId), restaurantId, staffId],
   );
 }
 

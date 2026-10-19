@@ -80,7 +80,11 @@ router.get('/api/v1/table/session/:sessionId', guestAuth(), bySessionParam, h(as
   const last = iikoRefreshAt.get(req.params.sessionId) || 0;
   if (Date.now() - last > 30000) {
     iikoRefreshAt.set(req.params.sessionId, Date.now());
-    await refreshFromIiko(req.params.sessionId);
+    // Статусы из iiko — в фоне: гость не ждёт ответа iiko (свежие придут следующим опросом через 10 с)
+    refreshFromIiko(req.params.sessionId).catch(() => {});
+    if (iikoRefreshAt.size > 5000) {
+      for (const [k, t] of iikoRefreshAt) if (Date.now() - t > 10 * 60_000) iikoRefreshAt.delete(k);
+    }
   }
   return getSessionView(req.params.sessionId);
 }));

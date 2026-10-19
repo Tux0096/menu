@@ -1,4 +1,5 @@
 /** Персонал: вход (пароль, PIN), экран официанта, контроль зала управляющего. */
+import { uuidOrNull } from '../lib/uuid.js';
 import pool from '../db/pool.js';
 import express from 'express';
 import { h, requireBody, sendError } from '../lib/http.js';
@@ -138,8 +139,8 @@ waiter.delete('/devices/:token', h(async (req) => { await unregisterDevice(req.p
 waiter.get('/session/:id', h(async (req) => {
   await pool.query(
     `UPDATE table_sessions SET locked_until = NOW() + INTERVAL '2 minutes'
-     WHERE id::text = $1 AND locked_by = $2 AND locked_until > NOW()`,
-    [req.params.id, req.staff.id],
+     WHERE id = $1 AND locked_by = $2 AND locked_until > NOW()`,
+    [uuidOrNull(req.params.id), req.staff.id],
   );
   return getSessionView(req.params.id);
 }));

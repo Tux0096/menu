@@ -11,6 +11,7 @@
  *  3) фоновая проверка раз в 30 с досматривает платежи, если гость закрыл страницу раньше.
  * Когда кухня оплачена целиком — в iiko кухни вносится оплата и заказ закрывается; бар закрывает официант.
  */
+import { uuidOrNull } from '../lib/uuid.js';
 import axios from 'axios';
 import { randomUUID } from 'crypto';
 import pool from '../db/pool.js';
@@ -93,8 +94,8 @@ export async function onlinePayConfig(restaurantId) {
 async function sessionState(sessionId) {
   const { rows: s } = await pool.query(
     `SELECT s.*, r.name AS restaurant_name, r.id AS rid, r.organization_id AS rorg, r.terminal_group_id AS rtg
-       FROM table_sessions s JOIN restaurants r ON r.id = s.restaurant_id WHERE s.id::text = $1`,
-    [String(sessionId)],
+       FROM table_sessions s JOIN restaurants r ON r.id = s.restaurant_id WHERE s.id = $1`,
+    [uuidOrNull(sessionId)],
   );
   if (!s[0]) throw httpError(404, 'Визит не найден');
   const { rows: items } = await pool.query(
@@ -156,8 +157,8 @@ export function startOnlinePayment(sessionId, opts = {}) {
 async function startOnlinePaymentNow(sessionId, { tipAmount = 0, guest = null, guestIds = null } = {}) {
   // Незавершённые счета визита сначала досматриваем: вдруг уже оплачены (гость платил в другой вкладке)
   const { rows: pending } = await pool.query(
-    "SELECT invoice_id, guest_id, guest_ids, created_at FROM table_payments WHERE session_id::text = $1 AND status = 'pending' AND invoice_id IS NOT NULL",
-    [String(sessionId)],
+    "SELECT invoice_id, guest_id, guest_ids, created_at FROM table_payments WHERE session_id = $1 AND status = 'pending' AND invoice_id IS NOT NULL",
+    [uuidOrNull(sessionId)],
   );
   for (const p of pending) await confirmNow(p.invoice_id).catch(() => null);
   const st = await sessionState(sessionId);
@@ -415,14 +416,14 @@ async function acceptWaiterPaymentNow(sessionId, { method, tipAmount = 0 } = {})
   if (!KIND[method]) throw httpError(400, 'Выберите: наличными или картой');
   // Гость прямо сейчас платит онлайн — сначала досматриваем его счёт, иначе деньги возьмут дважды
   const { rows: pending } = await pool.query(
-    "SELECT invoice_id FROM table_payments WHERE session_id::text = $1 AND status = 'pending' AND invoice_id IS NOT NULL",
-    [String(sessionId)],
+    "SELECT invoice_id FROM table_payments WHERE session_id = $1 AND status = 'pending' AND invoice_id IS NOT NULL",
+    [uuidOrNull(sessionId)],
   );
   for (const p of pending) await confirmNow(p.invoice_id).catch(() => null);
   const { rows: busy } = await pool.query(
-    `SELECT 1 FROM table_payments WHERE session_id::text = $1 AND status = 'pending' AND invoice_id IS NOT NULL
+    `SELECT 1 FROM table_payments WHERE session_id = $1 AND status = 'pending' AND invoice_id IS NOT NULL
        AND created_at > NOW() - INTERVAL '${PENDING_BUSY_MIN} minutes' LIMIT 1`,
-    [String(sessionId)],
+    [uuidOrNull(sessionId)],
   );
   if (busy.length) throw httpError(409, 'Гость сейчас оплачивает онлайн — подождите пару минут или попросите его закрыть оплату');
   const st = await sessionState(sessionId);

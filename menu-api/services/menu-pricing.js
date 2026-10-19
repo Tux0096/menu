@@ -9,9 +9,12 @@ import { getRestaurantCatalog } from './catalog.js';
 export const MAX_LINE_QTY = 50;
 
 /** Индекс меню ресторана: id и iikoId блюда → { name, price, isInStopList, balance } */
+const indexes = new WeakMap(); // готовый каталог → индекс (каталог кэшируется до изменения)
 export async function menuIndex(restaurant) {
   const catalog = await getRestaurantCatalog(restaurant);
+  if (indexes.has(catalog)) return indexes.get(catalog);
   const index = new Map();
+  indexes.set(catalog, index);
   for (const p of catalog.products || []) {
     const entry = {
       name: String(p.name || 'Позиция').slice(0, 300),

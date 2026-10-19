@@ -7,6 +7,7 @@ import pool from '../db/pool.js';
 import { accessibleOrgIds, iikoRequest, isIikoDemo, withIikoCreds } from '../iiko-client.js';
 import { allOrgTargets } from './sources.js';
 import { PUBLIC_MENU_URL } from '../lib/qr-config.js';
+import { bumpCatalogVersion } from '../lib/catalog-version.js';
 
 const memory = new Map(); // restaurantId -> Set(productId) — закончилось (любая касса, без размера)
 const limited = new Map(); // restaurantId -> Map(productId -> остаток) — ограниченный остаток
@@ -40,6 +41,7 @@ async function loadFromDb() {
   }
   loaded = true;
   loadedAt = new Date().toISOString();
+  bumpCatalogVersion();
 }
 
 /**

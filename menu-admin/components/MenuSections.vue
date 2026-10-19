@@ -108,7 +108,7 @@ const DEFAULTS: [string, string][] = [['новин', 'novinki'], ['хит', 'hit
 function defaultImage(name: string) {
   const n = name.toLowerCase();
   const hit = DEFAULTS.find(([k]) => n.includes(k));
-  return hit ? `/ui/cats/${hit[1]}.png` : null;
+  return hit ? `/ui/cats/${hit[1]}.webp` : null;
 }
 // Что видит гость: своя картинка → из iiko → стандартная по названию
 const shown = (c: MenuCategory) => c.image || c.iikoImage || defaultImage(c.name);
