@@ -352,7 +352,8 @@
     const session = await api('POST', '/api/v1/table/enter', {
       restaurantSlug: S.restaurant, tableNumber: S.table, previousSessionId: S.sessionId, join, name, qrKey: S.qrKey || undefined,
     });
-    if (session.joinRequired) { openJoinSheet({ ...session, guestName: session.guestName || name }, then); return false; }
+    // Имя, которое гость только что ввёл, главнее сохранённого для этого телефона
+    if (session.joinRequired) { openJoinSheet({ ...session, guestName: name || session.guestName }, then); return false; }
     if (name && S.guest) { S.guest = { ...S.guest, name }; store.set('guest', S.guest); }
     const localCart = S.cart;
     const sameVisit = session.sessionId === S.sessionId;
@@ -519,7 +520,7 @@
   }
 
   function nav() {
-    const count = cartCount();
+    const count = pendingCount();
     const item = (key, label, attr, iconName) => {
       const active = S.tab === key;
       const icon = key === 'ai' ? `<img src="${UI('nav-ai.webp')}" alt="" class="nav__orb">`
@@ -592,7 +593,7 @@
         <label class="consent"><input type="checkbox" id="consent" checked><span class="consent__box">${ICONS.check}</span><span>Согласие на обработку персональных данных</span></label>` : ''}
       <div class="auth__error" id="seat-error">${esc(error)}</div>
       <button class="btn btn--dark" type="submit"><span>Продолжить</span><span class="round-btn">${ICONS.arrowRight}</span></button>
-      ${needLogin ? `<a class="fuji-btn" id="fuji-login" href="${fujiUrl ? esc(`${fujiUrl}${fujiUrl.includes('?') ? '&' : '?'}return=${encodeURIComponent(`${location.origin}${location.pathname}?restaurant=${S.restaurant || ''}&table=${S.table || ''}`)}`) : '#'}">
+      ${needLogin && fujiUrl ? `<a class="fuji-btn" id="fuji-login" href="${fujiUrl ? esc(`${fujiUrl}${fujiUrl.includes('?') ? '&' : '?'}return=${encodeURIComponent(`${location.origin}${location.pathname}?restaurant=${S.restaurant || ''}&table=${S.table || ''}`)}`) : '#'}">
         <img src="${UI('fuji-app.svg')}" alt=""><span>Войти через приложение Фуджи</span></a>` : ''}
     </form>`, (sheet) => {
       const phone = $('#phone', sheet);
@@ -736,11 +737,16 @@
     });
   }
 
+  /**
+   * Маска телефона «+7 900-123-45-67». Цифры считаются после «+7»: раньше «8 900…» в поле «+7 » превращалось
+   * в «+7 890…» — гость регистрировался под чужим номером. 11 цифр с 7 или 8 впереди (вставили номер целиком) —
+   * первая лишняя. Одну «8» не убираем: код Самары 846 тоже начинается с 8.
+   */
   function formatPhone(v) {
-    let d = v.replace(/\D/g, '');
-    if (d.startsWith('8')) d = `7${d.slice(1)}`;
-    if (!d.startsWith('7')) d = `7${d}`;
-    d = d.slice(0, 11);
+    const raw = String(v || '').trim();
+    let d = (raw.startsWith('+7') ? raw.slice(2) : raw).replace(/\D/g, '');
+    if (d.length >= 11 && /^[78]/.test(d)) d = d.slice(1);
+    d = `7${d.slice(0, 10)}`;
     const p = [d.slice(1, 4), d.slice(4, 7), d.slice(7, 9), d.slice(9, 11)];
     let out = '+7';
     if (p[0]) out += ` ${p[0]}`;
@@ -870,10 +876,12 @@
     if (!list.length) return '';
     return `<div class="banners">${list.map((b) => {
       const src = imgSrc(b.image, 960);
-      return `<button class="banner ${src ? 'has-img' : ''}" data-banner="${esc(b.id)}">
+      const link = b.productId || b.categoryId || /^https?:\/\//.test(b.url || '');
+      const tag = link ? 'button' : 'div';
+      return `<${tag} class="banner ${src ? 'has-img' : ''} ${link ? '' : 'banner--static'}" ${link ? `data-banner="${esc(b.id)}"` : ''}>
         ${src ? `<img src="${esc(src)}" alt="" loading="lazy" decoding="async">` : ''}
         <div class="banner__text"><div class="banner__title">${esc(b.title)}</div>${b.text ? `<div class="banner__sub">${esc(b.text)}</div>` : ''}</div>
-      </button>`;
+      </${tag}>`;
     }).join('')}</div>`;
   }
   function openBanner(id) {
@@ -892,8 +900,10 @@
   function menuSections(section = S.menu.section) {
     const products = S.catalog?.products || [];
     const groups = S.catalog?.groups || [];
-    const q = S.menu.search.trim().toLowerCase();
-    const filtered = q ? products.filter((p) => `${p.name} ${p.description || ''}`.toLowerCase().includes(q)) : products;
+    // «угрем» и «угрём» находят одно и то же
+    const norm = (t) => String(t).toLowerCase().replace(/ё/g, 'е');
+    const q = norm(S.menu.search.trim());
+    const filtered = q ? products.filter((p) => norm(`${p.name} ${p.description || ''}`).includes(q)) : products;
     const byGroup = new Map();
     for (const p of filtered) {
       const g = p.parentGroup || 'other';
@@ -925,6 +935,12 @@
     if (!S.catalog) return `${topbar()}<main class="screen"><div class="skeleton skeleton--search"></div><div class="skeleton skeleton--cats"></div><div class="list">${'<div class="skeleton"></div>'.repeat(4)}</div></main>`;
     const sections = menuSections();
     eagerBudget = 4;
+    // Напитки и бар — отдельная вкладка; на главном экране переключатель рядом с «Меню» и карточка в конце списка
+    const hasBar = barGroupIds().size > 0 && !S.menu.search;
+    const inBar = S.menu.section === 'bar';
+    const switchChip = hasBar ? `<button class="cats__switch" data-section="${inBar ? 'kitchen' : 'bar'}">${inBar ? 'Кухня' : 'Напитки и бар'}</button>` : '';
+    const switchCard = hasBar ? `<button class="section-switch" data-section="${inBar ? 'kitchen' : 'bar'}">
+        <span>${inBar ? 'Блюда кухни' : 'Напитки и бар'}</span><small>${inBar ? 'роллы, горячее, десерты' : 'чай, кофе, лимонады, коктейли'}</small></button>` : '';
     return `${topbar()}<main class="screen">
       <form class="search ${S.menu.search ? 'is-active' : ''}" id="search-form" onsubmit="return false">
         <input id="search" type="search" placeholder="Поиск по меню" value="${esc(S.menu.search)}" aria-label="Поиск">
@@ -932,10 +948,10 @@
     : `<span class="search__icon"><img src="${UI('search.svg')}" alt=""></span>`}
       </form>
       ${S.menu.search ? '' : `<div class="cats" id="cats"><button class="cats__all" data-action="all-cats" aria-label="Все разделы меню">
-          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="2" width="5" height="5" rx="1.5"/><rect x="9" y="2" width="5" height="5" rx="1.5"/><rect x="2" y="9" width="5" height="5" rx="1.5"/><rect x="9" y="9" width="5" height="5" rx="1.5"/></svg>Меню</button>${sections.map((s) => `<button data-cat="${esc(s.id)}" class="${String(S.activeCat) === String(s.id) ? 'is-active' : ''}">${esc(s.name)}</button>`).join('')}</div>`}
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="2" width="5" height="5" rx="1.5"/><rect x="9" y="2" width="5" height="5" rx="1.5"/><rect x="2" y="9" width="5" height="5" rx="1.5"/><rect x="9" y="9" width="5" height="5" rx="1.5"/></svg>Меню</button>${switchChip}${sections.map((s) => `<button data-cat="${esc(s.id)}" class="${String(S.activeCat) === String(s.id) ? 'is-active' : ''}">${esc(s.name)}</button>`).join('')}</div>`}
       ${S.menu.search ? '' : bannersHtml('menu')}
       ${sections.length ? sections.map((s, i) => `<h2 class="section-title" id="cat-${esc(s.id)}">${esc(s.name)}</h2>
-        <div class="list ${i === sections.length - 1 && !S.menu.search ? 'list--last' : ''}">${s.items.map((p) => dishCard(p)).join('')}</div>`).join('')
+        <div class="list ${i === sections.length - 1 && !S.menu.search && !hasBar ? 'list--last' : ''}">${s.items.map((p) => dishCard(p)).join('')}</div>`).join('') + switchCard
     : S.catalog.products?.length
       ? `<div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.webp')}" alt="">
           <div class="empty__title">Ничего не нашлось</div><div>Спросите Fuji AI — он подберёт похожее</div>
@@ -1023,7 +1039,9 @@
   }).join('')}
       </div>`).join('');
 
-    const canClear = fresh.length > 0;
+    // Передано официанту и с тех пор не менялось — это уже заказ, а не черновик корзины
+    const handedOver = fresh.length > 0 && WAITING_WAITER.includes(s?.workflowStatus) && !S.changedSinceSubmit;
+    const canClear = fresh.length > 0 && !handedOver;
     // Итого — по отправленному (все гости); неотправленное считается отдельно, «В корзине»
     const sentSum = (s?.items || []).filter((i) => i.isLocked).reduce((n, i) => n + (Number(i.lineTotal) || 0), 0);
     const row = (attr, label, icon = '') => `<button class="menu-row" ${attr}>${icon}<span>${label}</span><img src="${UI('chevron.svg')}" alt=""></button>`;
@@ -1032,8 +1050,8 @@
       ${bannersHtml('order')}
       ${sentHtml ? `<section class="order-card">${sentHtml}
         ${sentSum > 0 ? `<div class="total-row"><span>${multi ? 'Весь стол' : 'Итого'}</span><b>${rub(sentSum)}</b></div>` : ''}</section>` : ''}
-      ${cartHtml ? `<section class="order-card">${cartHtml}
-        <div class="total-row"><span>В корзине</span><b>${rub(fresh.reduce((n, x) => n + x.q * unitPrice(x.l), 0))}</b></div></section>`
+      ${cartHtml ? `<section class="order-card">${handedOver ? '<div class="order-card__note">Передано официанту — он подойдёт и подтвердит заказ. Изменения придётся передать ещё раз</div>' : ''}${cartHtml}
+        <div class="total-row"><span>${handedOver ? 'Передано официанту' : 'В корзине'}</span><b>${rub(fresh.reduce((n, x) => n + x.q * unitPrice(x.l), 0))}</b></div></section>`
     : sentHtml ? '' : '<section class="order-empty">Корзина пуста</section>'}
       <div class="actions">
         ${paid ? `<button class="btn btn--dark" data-action="new-visit"><span>Начать новый заказ</span><span class="round-btn">${ICONS.arrowRight}</span></button>
@@ -1161,11 +1179,8 @@
     for (const it of g.items) {
       if (it.def > 0 && !sel.mods.has(String(it.id)) && (!g.max || groupTotal(g, sel) + it.def <= g.max)) sel.mods.set(String(it.id), it.def);
     }
-    // Обязательный выбор без варианта по умолчанию — самый дешёвый (не навязываем доплату)
-    for (const it of [...g.items].sort((a, b) => (a.price || 0) - (b.price || 0))) {
-      if (groupTotal(g, sel) >= g.min) break;
-      sel.mods.set(String(it.id), (sel.mods.get(String(it.id)) || 0) + 1);
-    }
+    // Обязательный выбор без варианта по умолчанию гость делает сам: кухня не получит соус, который он не выбирал.
+    // Кнопка «Добавить» до выбора показывает, что выбрать, и прокручивает к этой группе
   }
   function initSel(p) {
     const sel = { sizeId: null, mods: new Map() };
@@ -1207,7 +1222,7 @@
     const sizesHtml = sizes.length ? `<div class="product__block"><div class="product__label">Размер</div>
       <div class="opt-tiles">${sizes.map((z) => `<button class="opt-tile ${String(z.id) === String(sel.sizeId) ? 'is-on' : ''}" data-size="${esc(z.id)}">
         <span class="opt-tile__circle opt-tile__circle--size">${short(z.name)}</span><span class="opt-tile__name">${esc(z.name)}</span><span class="opt-tile__price">${rub(z.price)}</span></button>`).join('')}</div></div>` : '';
-    const groupsHtml = groupsFor(p, sel).map((g, gi) => `<div class="product__block">
+    const groupsHtml = groupsFor(p, sel).map((g, gi) => `<div class="product__block" data-group-block="${gi}">
       <div class="product__label product__label--row">${esc(g.name)}<span class="opt-hint ${groupTotal(g, sel) < g.min ? 'is-missing' : ''}">${esc(groupHint(g))}</span></div>
       <div class="opt-tiles">${g.items.map((it) => {
     const amt = sel.mods.get(String(it.id)) || 0;
@@ -1248,10 +1263,11 @@
     const lineQty = r ? S.cart[r.key]?.qty || 0 : S.cart[String(p.id)]?.qty || 0;
     const qty = qtyOf(p);
     const price = r ? r.price : Number(p.price) || 0;
-    const weight = r?.weight ? `${r.weight} г` : p.weight;
+    const weight = r?.weight ? `${r.weight} ${/\d\s*(мл|л)(?![а-яё])/i.test(String(p.weight || '')) ? 'мл' : 'г'}` : p.weight;
     const stopped = isStopped(p);
+    const liquid = /\d\s*(мл|л)(?![а-яё])/i.test(String(p.weight || ''));
     const toggle = grams ? `<div class="nutri-toggle">
-        <button data-nutri="dish" class="${perDish ? 'is-active' : ''}">Блюдо</button><button data-nutri="100" class="${perDish ? '' : 'is-active'}">100 грамм</button></div>` : '';
+        <button data-nutri="dish" class="${perDish ? 'is-active' : ''}">${liquid ? 'Порция' : 'Блюдо'}</button><button data-nutri="100" class="${perDish ? '' : 'is-active'}">100 ${liquid ? 'мл' : 'грамм'}</button></div>` : '';
     return `<div class="product__photo">${imgHtml(p, 'product-hero', 720)}
         <button class="product__close" data-sheet-close aria-label="Закрыть"><img src="${UI('close-white.svg')}" alt=""></button>
         ${qty && !stopped ? `<span class="dish__count dish__count--hero" aria-label="В заказе ${qty}">${qty}</span>` : ''}</div>
@@ -1291,7 +1307,15 @@
         else if (nutri) S.nutri = nutri.dataset.nutri;
         else if (size && sel) { sel.sizeId = size.dataset.size; sel.mods = new Map(); for (const g of groupsFor(p, sel)) fillDefaults(g, sel); }
         else if (mod && sel) toggleMod(p, sel, mod.dataset.mod, Number(mod.dataset.group));
-        else if (need) { toast(`Выберите: ${resolveSel(p, sel).missing.join(', ')}`, true); return; }
+        else if (need) {
+          // Прокручиваем к первой невыбранной группе: на телефоне она часто под большим фото
+          const groups = groupsFor(p, sel);
+          const gi = groups.findIndex((g) => groupTotal(g, sel) < g.min);
+          const el = sheet.querySelector(`[data-group-block="${gi}"]`);
+          if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+          toast(`Выберите: ${resolveSel(p, sel).missing.join(', ')}`, true);
+          return;
+        }
         else return;
         e.stopPropagation();
         const box = $('#product-sheet'); // шторку могла сменить форма входа за стол
@@ -1334,66 +1358,6 @@
     return outcome.ok ? 'pending' : 'cancelled';
   }
 
-  function openPaySheet() {
-    const s = S.session;
-    const online = Boolean(S.config?.onlinePay);
-    const methods = S.config?.paymentMethods || [];
-    const tips = S.config?.tipPresets || [0, 10, 15, 20];
-    const st = { method: methods[0]?.id || 'sbp', tipPct: 10, tipCustom: null, paying: false };
-    const tipAmount = () => (st.tipCustom != null ? Math.max(0, Math.round(st.tipCustom)) : Math.round((s.total * st.tipPct) / 100));
-    const draw = () => `<h2>Оплата счёта</h2>
-      <div class="card" style="text-align:center">
-        <div class="big-sum">${rub(s.total + tipAmount())}</div>
-        <div class="sum-rows"><span>Заказ</span><span>${rub(s.total)}</span></div>
-        <div class="sum-rows"><span>Чаевые официанту</span><span>${rub(tipAmount())}</span></div>
-      </div>
-      ${online ? '' : `<div class="label">Способ оплаты</div>
-      <div class="opt-grid" style="grid-template-columns:1fr 1fr">${methods.map((m) => `<button class="opt ${st.method === m.id ? 'is-active' : ''}" data-method="${m.id}">${esc(m.label)}</button>`).join('')}</div>`}
-      <div class="label">Чаевые</div>
-      <div class="opt-grid">${tips.map((t) => `<button class="opt ${st.tipCustom == null && st.tipPct === t ? 'is-active' : ''}" data-tip="${t}">${t ? `${t}%` : 'Без чаевых'}</button>`).join('')}
-        <button class="opt ${st.tipCustom != null ? 'is-active' : ''}" data-tip="custom">Своя сумма</button></div>
-      ${st.tipCustom != null ? `<div class="pill-input" style="min-height:56px;margin-bottom:16px"><input id="tip-custom" type="number" inputmode="numeric" min="0" placeholder="Сумма чаевых, ₽" value="${st.tipCustom || ''}"></div>` : ''}
-      <button class="btn btn--dark" data-pay ${st.paying ? 'disabled' : ''}><span>${st.paying ? 'Оплачиваем…' : `Оплатить ${rub(s.total + tipAmount())}`}</span><span class="round-btn">${st.paying ? '<div class="spinner spinner--dark"></div>' : ICONS.arrowRight}</span></button>
-      <p class="muted" style="font-size:12px;text-align:center;margin-top:12px">${online ? 'Картой, СБП или SberPay через CloudPayments. Данные карты не попадают в меню.' : 'Демо-оплата: платёжный провайдер подключается по выбору заказчика. Реквизиты карт не хранятся.'}</p>`;
-    openSheet('<div id="pay-sheet"></div>', (sheet) => {
-      const box = $('#pay-sheet'); box.innerHTML = draw();
-      sheet.addEventListener('input', (e) => {
-        if (e.target.id === 'tip-custom') {
-          st.tipCustom = Number(e.target.value) || 0;
-          box.querySelector('.big-sum').textContent = rub(s.total + tipAmount());
-          box.querySelectorAll('.sum-rows span')[3].textContent = rub(tipAmount());
-          box.querySelector('[data-pay] span').textContent = `Оплатить ${rub(s.total + tipAmount())}`;
-        }
-      });
-      sheet.addEventListener('click', async (e) => {
-        const m = e.target.closest('[data-method]'); const t = e.target.closest('[data-tip]'); const pay = e.target.closest('[data-pay]');
-        if (m) st.method = m.dataset.method;
-        else if (t) { if (t.dataset.tip === 'custom') st.tipCustom = st.tipCustom ?? 0; else { st.tipCustom = null; st.tipPct = Number(t.dataset.tip); } }
-        else if (pay && !st.paying) {
-          st.paying = true; box.innerHTML = draw();
-          try {
-            if (online) {
-              const res = await runOnlinePay(tipAmount());
-              render();
-              if (res === 'ok') { toast('Оплачено, спасибо!'); openFeedbackSheet(); return; }
-              if (res === 'cancelled') { st.paying = false; box.innerHTML = draw(); toast('Оплата отменена'); return; }
-              toast('Проверяем оплату — статус обновится в течение минуты');
-              closeSheet(); refreshSession(true); return;
-            }
-            const session = await api('POST', '/api/v1/table/guest-pay', { sessionId: S.sessionId, method: st.method, tipAmount: tipAmount() });
-            applySession(session); render();
-            openFeedbackSheet();
-            return;
-          } catch (err) {
-            st.paying = false; toast(err.message, true);
-            if (err.status === 409) { closeSheet(); refreshSession(true); return; }
-          }
-        } else return;
-        box.innerHTML = draw();
-      });
-    });
-  }
-
   function openFeedbackSheet() {
     const st = { rating: 0 };
     const draw = () => `<div style="text-align:center"><div class="orb orb--sm" style="margin:8px auto 16px"></div></div>
@@ -1408,12 +1372,15 @@
         const star = e.target.closest('[data-star]');
         if (star) { const c = $('#fb-comment').value; st.rating = Number(star.dataset.star); box.innerHTML = draw(); $('#fb-comment').value = c; return; }
         if (e.target.closest('[data-skip]')) { closeSheet(); return; }
-        if (e.target.closest('[data-send]')) {
+        const send = e.target.closest('[data-send]');
+        if (send) {
+          if (st.busy) return;
+          st.busy = true; send.disabled = true;
           try {
             await api('POST', '/api/v1/table/feedback', { sessionId: S.sessionId, rating: st.rating, comment: $('#fb-comment').value });
             if (S.session) S.session.feedbackLeft = true;
             closeSheet(); toast('Спасибо за отзыв!'); render();
-          } catch (err) { toast(err.message, true); }
+          } catch (err) { toast(err.message, true); st.busy = false; send.disabled = false; }
         }
       });
     });
@@ -1838,7 +1805,6 @@
     else if (action === 'exit-fullscreen') exitFullscreen();
     else if (action === 'call') { if (S.session) openCallSheet(); else openSeatSheet(openCallSheet); }
     else if (action === 'submit') submitToWaiter();
-    else if (action === 'pay') openPaySheet();
     else if (action === 'bill') requestBill();
     else if (action === 'all-cats') openCategoriesSheet();
     else if (action === 'clear-search') { S.menu.search = ''; render(); $('#search')?.focus(); }
@@ -1847,6 +1813,7 @@
     else if (action === 'feedback') openFeedbackSheet();
     else if (action === 'new-visit') newVisit();
     else if (action === 'clear') {
+      if (!confirm('Убрать из корзины всё, что ещё не передано официанту?')) return;
       for (const [k, l] of Object.entries(S.cart)) {
         const locked = lockedQty(k);
         if (locked) S.cart[k] = { ...l, qty: locked }; else delete S.cart[k];
