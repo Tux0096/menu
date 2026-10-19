@@ -84,9 +84,9 @@ async function getCatalogFromDb(restaurantId) {
       fiberAmount: num(p.proteins),
       fatAmount: num(p.fats),
       carbohydrateAmount: num(p.carbs),
-      // Размеры и модификаторы из внешнего меню iiko (с ценами точки)
-      sizes: p.options?.sizes || [],
-      modifierGroups: p.options?.groups || [],
+      // Размеры и модификаторы из внешнего меню iiko (с ценами точки), с понятными гостю названиями
+      sizes: (p.options?.sizes || []).map((z) => ({ ...z, groups: cleanGroups(z.groups) })),
+      modifierGroups: cleanGroups(p.options?.groups),
       groupModifiers: [],
       modifiers: [],
       filters: [],
@@ -98,6 +98,32 @@ async function getCatalogFromDb(restaurantId) {
       minGroupMod: 0,
     })),
   };
+}
+
+/**
+ * Названия групп и вариантов модификаторов из iiko — для гостя: без служебных «мод+», «ЗАЛ», «- » в начале.
+ * Служебное название группы («мод к поке», «мод+Люб.ролл за 1р») заменяется понятным по составу: «Соус на выбор»…
+ */
+// \b в JS не работает с кириллицей — границы слова пробелами
+const cleanModText = (t) => {
+  const v = String(t || '').replace(/(^|\s)ЗАЛ\.?(?=\s|$)/g, ' ').replace(/^[\s\-–—•*]+/, '').replace(/[\s*]+$/, '').replace(/\s+/g, ' ').trim();
+  return v ? v[0].toUpperCase() + v.slice(1) : v;
+};
+function groupTitle(name, items) {
+  const n = cleanModText(name);
+  const all = items.map((m) => m.name.toLowerCase()).join(' ');
+  if (n && !/^мод([.+\s]|$)/i.test(n)) return n;
+  if (/соус|heinz/.test(all) || /соус/i.test(n)) return 'Соус на выбор';
+  if (/топпинг/.test(all)) return 'Топпинг';
+  if (/ролл/i.test(n) || /ролл/.test(all)) return 'Ролл на выбор';
+  if (/лапш|удон|фунчоз|рис\b/.test(all)) return 'Основа на выбор';
+  return 'На выбор';
+}
+function cleanGroups(groups) {
+  return (groups || []).map((g) => {
+    const items = (g.items || []).map((m) => ({ ...m, name: cleanModText(m.name) || m.name }));
+    return { ...g, name: groupTitle(g.name, items), iikoName: g.name, items };
+  });
 }
 
 async function saveSnapshot(restaurantId, source, data) {

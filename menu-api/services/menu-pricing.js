@@ -83,7 +83,7 @@ export function rowVariantKey(row) {
  * iiko всё равно примет заказ). Бесплатные в группе (freeQuantity) — самые дешёвые из выбранных.
  * Возвращает { price, sizeId, sizeName, mods: [{ id, groupId, name, amount, price }], text, key }.
  */
-export function priceVariant(entry, key, { sizeId = null, modifiers = [] } = {}) {
+export function priceVariant(entry, key, { sizeId = null, modifiers = [], defaults = false } = {}) {
   const name = entry.name.slice(0, 60);
   let size = null;
   let groups = entry.groups || [];
@@ -106,11 +106,19 @@ export function priceVariant(entry, key, { sizeId = null, modifiers = [] } = {})
     let picked = g.items.filter((it) => wanted.has(String(it.id))).map((it) => ({ it, amount: wanted.get(String(it.id)) }));
     for (const x of picked) wanted.delete(String(x.it.id));
     let total = picked.reduce((n, x) => n + x.amount, 0);
+    // Выбор не прислали (официант добавил блюдо) — варианты по умолчанию из iiko, в пределах группы
+    if (defaults && !picked.length) {
+      for (const it of g.items.filter((x) => x.def > 0)) {
+        if (g.max > 0 && total + it.def > g.max) break;
+        picked.push({ it, amount: it.def }); total += it.def;
+      }
+    }
     // Обязательный выбор не сделан — по умолчанию из iiko, иначе первые варианты
     if (total < g.min) {
       const fill = g.items.filter((it) => it.def > 0 && !picked.some((x) => x.it.id === it.id)).map((it) => ({ it, amount: it.def }));
       for (const f of fill) { if (total >= g.min) break; picked.push(f); total += f.amount; }
-      for (const it of g.items) {
+      // Обязательный выбор без варианта по умолчанию — самый дешёвый (не навязываем доплату)
+      for (const it of [...g.items].sort((a, b) => (a.price || 0) - (b.price || 0))) {
         if (total >= g.min) break;
         const cur = picked.find((x) => x.it.id === it.id);
         if (cur) { cur.amount += 1; } else picked.push({ it, amount: 1 });

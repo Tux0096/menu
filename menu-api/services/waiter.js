@@ -135,7 +135,9 @@ export async function updateOrder(sessionId, staff, { items = [], guestCount, se
       const entry = index.get(key);
       const sizeId = it.sizeId !== undefined ? it.sizeId : was?.size_id || null;
       const mods = Array.isArray(it.modifiers) ? it.modifiers : was?.modifiers || [];
-      const v = entry.sizes.length || entry.groups.length || sizeId || mods.length ? priceVariant(entry, key, { sizeId, modifiers: mods }) : null;
+      const explicit = Array.isArray(it.modifiers) || Boolean(was);
+      const v = entry.sizes.length || entry.groups.length || sizeId || mods.length
+        ? priceVariant(entry, key, { sizeId, modifiers: mods, defaults: !explicit }) : null;
       const price = v ? v.price : priced.price;
       await client.query(
         `INSERT INTO table_order_items
