@@ -26,7 +26,7 @@ import { createWaiterNotification } from './waiter-notifications.js';
 import { getSource, productSourceMap } from './sources.js';
 import { menuIndex, priceLine, priceVariant, rowVariantKey, variantKey } from './menu-pricing.js';
 import { stopListLoadedAt } from './stoplist.js';
-import { withSessionMutex } from '../lib/session-mutex.js';
+import { isSessionBusy, withSessionMutex } from '../lib/session-mutex.js';
 import { withIikoCreds } from '../iiko-client.js';
 
 import { httpError } from '../lib/http.js';
@@ -174,6 +174,7 @@ function mapItem(row) {
           : row.kitchen_status === 'CookingStarted' ? 'cooking'
             : row.kitchen_status ? 'accepted' : 'sent',
     isReady: row.kitchen_status === 'CookingCompleted' && !row.served_at,
+    paidOnline: Boolean(row.paid_payment_id),
     servedAt: row.served_at || null,
   };
 }
@@ -856,23 +857,26 @@ function demoKitchenStatus(row) {
 }
 
 /** Заказ источника в iiko не создался: снимаем отметку «отправлено», чтобы официант отправил повторно. */
-async function failIikoOrder(ctx, code, src, reason) {
+async function failIikoOrder(ctx, code, src, reason, orderId) {
   const { session } = ctx;
-  const orders = { ...(session.iiko_orders || {}) };
-  delete orders[code];
   const where = code === 'main' ? 'кухни' : `«${src.name || code}»`;
   const text = /timeout/i.test(reason)
     ? `Заказ ${where} не дошёл до кассы iiko (касса не на связи) — блюда снова не отправлены, нажмите «В работу» ещё раз`
     : `iiko не создал заказ ${where}: ${reason} — блюда снова не отправлены`;
-  await pool.query(
-    `UPDATE table_order_items SET is_locked = FALSE, synced_to_iiko = FALSE, sent_at = NULL, kitchen_status = NULL, updated_at = NOW()
-     WHERE session_id = $1 AND COALESCE(source, 'main') = $2 AND is_locked AND served_at IS NULL`,
-    [session.id, code],
+  // Только строки и запись этого заказа: пока шёл опрос, официант мог уже отправить заново новым заказом
+  const { rowCount } = await pool.query(
+    `UPDATE table_sessions SET iiko_orders = iiko_orders - $2::text, iiko_last_error = $3,
+       iiko_order_id = CASE WHEN $2 = 'main' THEN NULL ELSE iiko_order_id END, updated_at = NOW()
+     WHERE id = $1 AND (iiko_orders -> $2::text ->> 'orderId' = $4 OR ($2 = 'main' AND iiko_order_id::text = $4))`,
+    [session.id, code, text, String(orderId)],
   );
+  if (!rowCount) return;
   await pool.query(
-    `UPDATE table_sessions SET iiko_orders = $2, iiko_last_error = $3,
-       iiko_order_id = CASE WHEN $4 THEN NULL ELSE iiko_order_id END, updated_at = NOW() WHERE id = $1`,
-    [session.id, JSON.stringify(orders), text, code === 'main'],
+    `UPDATE table_order_items SET is_locked = FALSE, synced_to_iiko = FALSE, sent_at = NULL, kitchen_status = NULL,
+       iiko_order_id = NULL, updated_at = NOW()
+     WHERE session_id = $1 AND COALESCE(source, 'main') = $2 AND is_locked AND served_at IS NULL
+       AND (iiko_order_id IS NULL OR iiko_order_id = $3)`,
+    [session.id, code, String(orderId)],
   );
   await createWaiterNotification({
     restaurantId: ctx.restaurant.id, sessionId: session.id, tableNumber: session.table_number,
@@ -944,7 +948,7 @@ async function syncRemovedItems(ctx, code, order, orderId) {
           [row.id, q - cut],
         );
       }
-      removed.push({ name: row.name, quantity: cut });
+      removed.push({ name: row.name, quantity: cut, paidOnline: Boolean(row.paid_payment_id) });
       excess -= cut;
     }
   }
@@ -956,14 +960,57 @@ async function syncRemovedItems(ctx, code, order, orderId) {
       restaurantId: ctx.restaurant.id, sessionId: session.id, tableNumber: session.table_number,
       type: NOTIFY_TYPES.IIKO_ERROR || 'iiko_error',
       title: `Стол №${session.table_number} — ${orderDeleted ? 'заказ удалён' : 'позиции удалены'} на кассе${where}`,
-      body: removed.map((r) => `${r.name} ×${r.quantity}`).join('; '),
+      // Удалили уже оплаченное онлайн — деньги у нас, гостю нужен возврат
+      body: removed.map((r) => `${r.name} ×${r.quantity}`).join('; ')
+        + (removed.some((r) => r.paidOnline) ? ' · было оплачено онлайн — оформите возврат гостю' : ''),
       payload: { sessionId: session.id, source: code, removed },
     }).catch(() => {});
   }
   return removed;
 }
 
-export async function refreshFromIiko(sessionId) {
+/**
+ * Все заказы стола закрыты на кассе iiko — гость расплатился там. Закрываем визит в меню, иначе гость мог бы
+ * оплатить ещё раз онлайн, а следующие гости попали бы в чужой визит. Оплату записываем как «на кассе».
+ */
+async function closeIfPaidAtTill(ctx, orders, closedAtTill) {
+  const { session } = ctx;
+  if (session.payment_status === 'paid' || session.status !== 'open' || !closedAtTill.length) return;
+  const live = Object.entries(orders).filter(([, o]) => o?.orderId);
+  if (!live.every(([code, o]) => o.closed || closedAtTill.includes(code))) return;
+  if (ctx.items.some((i) => !i.is_locked)) return; // гости уже собирают дозаказ — визит не закрываем
+  const { rows } = await pool.query(
+    `SELECT COALESCE(SUM(line_total), 0)::float AS s FROM table_order_items
+     WHERE session_id = $1 AND is_locked AND paid_payment_id IS NULL`,
+    [session.id],
+  );
+  const due = Math.round(rows[0].s * 100) / 100;
+  await pool.query(
+    `INSERT INTO table_payments (session_id, amount, tip_amount, method, status, paid_at)
+     SELECT $1, $2, 0, 'pos', 'completed', NOW()
+     WHERE NOT EXISTS (SELECT 1 FROM table_payments WHERE session_id = $1 AND status = 'completed' AND method <> 'cloudpayments')`,
+    [session.id, due],
+  );
+  await pool.query(
+    `UPDATE table_sessions SET payment_status = 'paid', status = 'closed', workflow_status = 'paid', paid_at = NOW(),
+       closed_at = NOW(), locked_by = NULL, locked_until = NULL, updated_at = NOW()
+     WHERE id = $1 AND payment_status <> 'paid'`,
+    [session.id],
+  );
+  await pool.query('UPDATE waiter_notifications SET is_read = TRUE WHERE session_id = $1 AND is_read = FALSE', [session.id]);
+  console.log(`iiko: стол ${session.table_number} — счёт закрыт на кассе, визит закрыт (${due} ₽ на кассе)`);
+}
+
+/**
+ * Статусы заказа из iiko — в очереди визита, чтобы не перезаписать то, что сейчас меняет отправка или оплата.
+ * Визит занят — пропускаем: следующий опрос (20 с) досмотрит.
+ */
+export function refreshFromIiko(sessionId) {
+  if (isSessionBusy(sessionId)) return Promise.resolve();
+  return withSessionMutex(sessionId, () => refreshFromIikoNow(sessionId));
+}
+
+async function refreshFromIikoNow(sessionId) {
   const demo = isIikoDemo();
   const ctx = await getSessionContext(sessionId);
   const orders = { ...(ctx?.session.iiko_orders || {}) };
@@ -979,6 +1026,7 @@ export async function refreshFromIiko(sessionId) {
     } else {
       // Заказ каждого источника (кухня, бар) — в своём iiko
       const maps = new Map();
+      const closedAtTill = [];
       for (const [code, o] of Object.entries(orders)) {
         if (!o?.orderId) continue;
         const src = await getSource(ctx.restaurant, code);
@@ -986,11 +1034,23 @@ export async function refreshFromIiko(sessionId) {
         const info = (data?.orders || [])[0];
         // iiko не создал заказ (касса не взяла его вовремя и т. п.) — блюда источника снова «не отправлены»
         if (info?.creationStatus === 'Error') {
-          await failIikoOrder(ctx, code, src, info.errorInfo?.message || info.errorInfo?.description || 'iiko не создал заказ');
+          await failIikoOrder(ctx, code, src, info.errorInfo?.message || info.errorInfo?.description || 'iiko не создал заказ', o.orderId);
           continue;
         }
         const order = info?.order || info;
         if (!order) continue;
+        // Счёт закрыт на кассе (гость заплатил там) — помечаем; когда закрыты все заказы стола, закрываем и визит
+        if (order.status === 'Closed') {
+          closedAtTill.push(code);
+          if (!o.closed) {
+            await pool.query(
+              `UPDATE table_sessions SET iiko_orders = jsonb_set(iiko_orders, $2::text[], (iiko_orders->$3) || '{"closed":true}'::jsonb)
+               WHERE id = $1 AND iiko_orders -> $3 ->> 'orderId' = $4`,
+              [sessionId, [code], code, String(o.orderId)],
+            );
+          }
+          continue;
+        }
         // Удалили позиции или весь заказ на кассе — убираем и у нас
         await syncRemovedItems(ctx, code, order, o.orderId);
         if (order.status === 'Deleted') continue;
@@ -1006,6 +1066,7 @@ export async function refreshFromIiko(sessionId) {
         }
         maps.set(code, byProduct);
       }
+      await closeIfPaidAtTill(ctx, orders, closedAtTill);
       if (!maps.size) return;
       const gone = new Set((await pool.query('SELECT id FROM table_order_items WHERE session_id = $1', [sessionId])).rows.map((r) => r.id));
       for (let i = locked.length - 1; i >= 0; i--) if (!gone.has(locked[i].id)) locked.splice(i, 1);

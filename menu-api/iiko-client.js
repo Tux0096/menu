@@ -183,11 +183,14 @@ export async function createTableOrder({
   tableIds,
   items,
   guestCount = 1,
+  id = undefined,
 }) {
   return iikoPost('/api/1/order/create', {
     organizationId,
     terminalGroupId,
     order: {
+      // Свой ID заказа: если ответ iiko потерялся, по нему проверяем, создан ли заказ, вместо второго заказа на кухню
+      ...(id ? { id } : {}),
       tableIds,
       items: items.map(orderItem),
       guests: { count: guestCount },
@@ -225,6 +228,33 @@ export async function getOrdersByTable(organizationIds, tableIds) {
 /** Заказы на стол по ID (статус заказа и статусы блюд на кухне). */
 export async function getOrdersByIds(organizationId, orderIds) {
   return iikoPost('/api/1/order/by_id', { organizationIds: [organizationId], orderIds });
+}
+
+/**
+ * Снимок заказа iiko: { exists, creationStatus, status (New/Bill/Closed/Deleted), sum, items:[{productId, amount}] }.
+ * exists=false — iiko такого заказа не знает (не создан).
+ */
+export async function getOrderSnapshot(organizationId, orderId) {
+  const data = await getOrdersByIds(organizationId, [orderId]);
+  const info = (data?.orders || [])[0];
+  if (!info) return { exists: false };
+  const order = info.order || null;
+  const items = (order?.items || []).filter((i) => (i.type || 'Product') === 'Product' && !i.deleted)
+    .map((i) => ({ productId: String(i.product?.id || i.productId || ''), amount: Number(i.amount || 0) }));
+  return {
+    exists: info.creationStatus !== 'Error',
+    creationStatus: info.creationStatus || null,
+    error: info.errorInfo?.message || info.errorInfo?.description || null,
+    status: order?.status || null,
+    sum: order?.sum != null ? Number(order.sum) : null,
+    items,
+  };
+}
+
+/** Ответ iiko не получен (таймаут, сеть, 5xx): команда могла и выполниться — повтор вслепую задвоит заказ. */
+export function isUnknownOutcome(e) {
+  if (e?.iikoCommand) return false; // команда iiko вернула Error — это точный отказ
+  return !e?.response || e.response.status >= 500 || e.code === 'ECONNABORTED';
 }
 
 export async function initOrderByTable(organizationId, terminalGroupId, tableIds) {

@@ -16,3 +16,8 @@ export function withSessionMutex(sessionId, fn) {
   tail.then(() => { if (queues.get(key) === tail) queues.delete(key); });
   return run;
 }
+
+/** Над визитом сейчас идёт операция (отправка, оплата) — фоновое обновление можно пропустить, а не ждать. */
+export function isSessionBusy(sessionId) {
+  return queues.has(String(sessionId || ''));
+}

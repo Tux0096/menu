@@ -254,8 +254,13 @@ step('адрес и время работы точки: сохраняются �
     if (sized) assert.ok(sv.items.find((i) => i.sizeId === String(big.id))?.isLocked, 'размер ушёл на кухню');
     // гость сохраняет корзину после отправки — отправленные варианты не теряются и не считаются убранными
     ok(await api('POST', '/api/v1/table-order/cart', { sessionId: sm.sessionId, items: sv.items.map((i) => ({ productId: i.productId, iikoProductId: i.iikoProductId, name: i.name, quantity: i.quantity, sizeId: i.sizeId, modifiers: i.modifiers })) }, g2), 'cart after send');
-    ok(await api('POST', `/api/v1/waiter/session/${sm.sessionId}/close`, {}, W), 'close mods');
-    step('модификаторы и размеры: цена с сервера, обязательный выбор, отправка на кухню, официант не теряет выбор');
+    // Оплата официанту картой: весь стол, ровно сумма отправленного; повторное нажатие не проводит второй раз
+    const sentSum = sv.items.filter((i) => i.isLocked).reduce((n, i) => n + i.lineTotal, 0);
+    const paid = ok(await api('POST', `/api/v1/waiter/session/${sm.sessionId}/pay`, { method: 'card' }, W), 'pay mods');
+    assert.equal(Math.round(paid.amount), Math.round(sentSum), 'официанту — сумма отправленного');
+    r = await api('POST', `/api/v1/waiter/session/${sm.sessionId}/pay`, { method: 'card' }, W);
+    assert.equal(r.status, 409, 'второй раз не оплачивается');
+    step('модификаторы и размеры: цена с сервера, обязательный выбор, отправка на кухню, официант не теряет выбор; оплата официанту — один раз');
   }
 }
 
