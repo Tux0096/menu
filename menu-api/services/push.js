@@ -68,9 +68,12 @@ export async function unregisterDevice(token) {
 const LOUD = new Set(['dish_ready', 'cart_ready', 'reorder_intent', 'call_waiter', 'bill_requested', 'wait_too_long']);
 
 /** Push всем телефонам официантов ресторана (не блокирует основной поток). */
-export async function pushToRestaurant(restaurantId, { title, body, type, sessionId, tableNumber }) {
+export async function pushToRestaurant(restaurantId, { title, body, type, sessionId, tableNumber, staffId = null }) {
   if (!isPushEnabled() || !restaurantId) return;
-  const { rows } = await pool.query('SELECT token FROM waiter_devices WHERE restaurant_id = $1', [restaurantId]);
+  let { rows } = await pool.query('SELECT token, staff_id FROM waiter_devices WHERE restaurant_id = $1', [restaurantId]);
+  // У стола есть официант и его телефон на связи — только ему; иначе всем телефонам точки
+  const own = staffId ? rows.filter((r) => String(r.staff_id) === String(staffId)) : [];
+  if (own.length) rows = own;
   if (!rows.length) return;
   const a = serviceAccount();
   let token;

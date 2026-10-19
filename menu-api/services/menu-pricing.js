@@ -56,9 +56,21 @@ export function stopProblems(index, items) {
   const qty = new Map();
   for (const i of items) qty.set(String(i.key), (qty.get(String(i.key)) || 0) + (Number(i.quantity) || 0));
   const out = [];
+  // Блюдо пропало из меню, размер или выбранный соус закончились — iiko отклонит или пробьёт не то
+  for (const i of items) {
+    const p = index.get(String(i.key));
+    if (!p) { out.push(`«${String(i.name || 'позиция').slice(0, 60)}» — больше нет в меню`); continue; }
+    if (i.sizeId && p.sizes.length && !p.sizes.some((z) => String(z.id) === String(i.sizeId))) {
+      out.push(`«${p.name.slice(0, 60)}» — этот размер закончился`);
+    }
+    const groups = i.sizeId ? (p.sizes.find((z) => String(z.id) === String(i.sizeId))?.groups || []) : p.groups;
+    const live = new Set(groups.flatMap((g) => g.items.map((m) => String(m.id))));
+    const gone = (i.modifiers || []).filter((m) => !live.has(String(m.id)));
+    if (gone.length && (groups.length || p.sizes.length)) out.push(`«${p.name.slice(0, 60)}» — ${gone.map((m) => m.name || 'дополнение').join(', ')} закончилось`);
+  }
   for (const [key, n] of qty) {
     const p = index.get(key);
-    if (!p) continue;
+    if (!p) continue; // уже в списке выше
     if (p.isInStopList) out.push(`«${p.name.slice(0, 60)}» — на стопе`);
     else if (p.balance && n > p.balance) out.push(`«${p.name.slice(0, 60)}» — осталось ${p.balance} шт., в заказе ${n}`);
   }

@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import '../api.dart';
 import '../cart.dart';
 import '../theme.dart';
+import 'variant_sheet.dart';
 
 /// Меню плитками: категории → блюда. Тап по плитке — +1 выбранному гостю.
 class MenuScreen extends StatefulWidget {
@@ -144,6 +145,15 @@ class _MenuScreenState extends State<MenuScreen> {
     if (left != null && widget.cart.pendingFor(p['id'].toString()) >= left) {
       HapticFeedback.heavyImpact();
       toast(context, '«${p['name']}»: осталось только $left шт.');
+      return;
+    }
+    // Вок, пицца, сет: сначала выбор (основа, соус, размер) — как у гостя в QR-меню
+    if (hasVariants(p)) {
+      pickVariant(context, p).then((v) {
+        if (v == null || !mounted) return;
+        HapticFeedback.lightImpact();
+        widget.cart.add(p, _seat, sizeId: v.sizeId, modifiers: v.modifiers, price: v.price, options: v.text);
+      });
       return;
     }
     HapticFeedback.lightImpact();
@@ -474,6 +484,7 @@ class _DishTile extends StatelessWidget {
                         ? Image.network(img, fit: BoxFit.cover, errorBuilder: (_, _, _) => _placeholder())
                         : _placeholder(),
                     if (stop) const Positioned(left: 8, top: 8, child: _Tag('Стоп', C.danger)),
+                    if (!stop && hasVariants(p)) const Positioned(left: 8, bottom: 8, child: _Tag('Выбор', C.violet)),
                     if (!stop && p['stopBalance'] != null)
                       Positioned(left: 8, top: 8, child: _Tag('Осталось ${p['stopBalance']}', C.warn)),
                     if (count > 0)
@@ -516,7 +527,7 @@ class _DishTile extends StatelessWidget {
                       Row(
                         children: [
                           Text(
-                            rub((p['price'] as num?) ?? 0),
+                            '${hasVariants(p) ? 'от ' : ''}${rub((p['price'] as num?) ?? 0)}',
                             style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15),
                           ),
                           const Spacer(),

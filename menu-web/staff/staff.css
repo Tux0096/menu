@@ -140,7 +140,7 @@ input.inp:focus, textarea.inp:focus, select.sel:focus { box-shadow: 0 0 0 2px va
 .hint { font-size: 12px; color: var(--muted); text-align: center; }
 
 /* modal */
-.backdrop { position: fixed; inset: 0; background: rgba(9,16,39,.3); z-index: 50; display: grid; place-items: center; padding: 16px; }
+.backdrop { position: fixed; inset: 0; background: rgba(9,16,39,.3); z-index: 70; /* над шторкой выбора блюд */ display: grid; place-items: center; padding: 16px; }
 .modal { background: var(--bg); border-radius: 24px; padding: 22px; width: min(620px, 100%); max-height: 90dvh; overflow-y: auto; }
 .toast { position: fixed; left: 50%; top: 14px; transform: translate(-50%, -150%); visibility: hidden; background: var(--ink); color: #fff; padding: 12px 18px; border-radius: 16px; z-index: 90; transition: transform .3s, visibility .3s; font-size: 14px; }
 .toast.is-shown { transform: translate(-50%, 0); visibility: visible; }
@@ -349,3 +349,8 @@ html, body { overflow-x: clip; }
 .gchip--edit:hover { border-color: var(--ink); }
 .inp--prio { width: 76px; padding: 8px 10px; text-align: center; }
 .sel--badge { min-width: 120px; }
+
+/* Выбор официанта: размер и модификаторы */
+.vchips { display: flex; flex-wrap: wrap; gap: 8px; }
+.vchip { padding: 9px 14px; border-radius: var(--pill); border: 1px solid var(--line); background: var(--card); font-size: 14px; min-height: 40px; }
+.vchip.is-on { background: var(--ink); border-color: var(--ink); color: #fff; }

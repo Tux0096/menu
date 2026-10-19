@@ -25,7 +25,7 @@ const PORT = process.env.PORT || 3101;
 app.set('trust proxy', 'loopback');
 app.disable('x-powered-by');
 app.use(securityHeaders);
-app.use(cors());
+app.use(cors({ exposedHeaders: ['X-Staff-Token'] })); // новый токен персонала (скользящий вход) читает приложение официанта
 app.use(express.json({ limit: '1mb' }));
 
 // Маршруты API по областям: публичное, вебхуки iiko, гость, персонал, админка

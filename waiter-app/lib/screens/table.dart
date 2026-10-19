@@ -28,6 +28,9 @@ class _TableScreenState extends State<TableScreen> {
   bool _saving = false;
   bool _sending = false;
   bool _dirty = false;
+  // Сохранение не прошло (нет связи) — повторяем с паузой, на экране «не сохранено»
+  bool _saveFailed = false;
+  int _retry = 0;
   Timer? _debounce;
   Timer? _poll;
 
@@ -109,17 +112,73 @@ class _TableScreenState extends State<TableScreen> {
       final s = Map<String, dynamic>.from(
         await Api.I.post('/api/v1/waiter/session/${widget.sessionId}/cart', cart.toBody()) as Map,
       );
+      _saveFailed = false;
+      _retry = 0;
       if (cart.version == version) {
         _dirty = false;
         if (mounted) _apply(s);
       }
       return true;
     } on ApiError catch (e) {
-      if (mounted) toast(context, e.message);
+      if (e.code == 'EDIT_LOCKED') {
+        // Стол взял другой официант — дальше только просмотр, показываем его версию
+        _readOnly = true;
+        _dirty = false;
+        _saveFailed = false;
+        if (mounted) toast(context, e.message);
+        _reload();
+      } else if (e.status == 0 || e.status >= 500) {
+        // Нет связи — правки остаются на экране и уходят, как только сервер ответит
+        _saveFailed = true;
+        _retry = (_retry + 1).clamp(1, 5);
+        _debounce?.cancel();
+        _debounce = Timer(Duration(seconds: 2 << (_retry - 1)), _save);
+      } else {
+        // Сервер не принял правку (блюдо закончилось, нет в меню) — возвращаем то, что сохранено на сервере
+        if (mounted) toast(context, e.message);
+        _dirty = false;
+        _saveFailed = false;
+        _reload();
+      }
       return false;
     } finally {
       _saving = false;
       if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _reload() async {
+    try {
+      _apply(Map<String, dynamic>.from(await Api.I.get('/api/v1/waiter/session/${widget.sessionId}') as Map));
+    } catch (_) {}
+  }
+
+  /// Назад с несохранёнными правками: сначала пробуем сохранить, не вышло — спрашиваем
+  Future<void> _leave() async {
+    _debounce?.cancel();
+    if (_dirty && await _save()) {
+      if (mounted) Navigator.of(context).pop();
+      return;
+    }
+    if (!_dirty) {
+      if (mounted) Navigator.of(context).pop();
+      return;
+    }
+    if (!mounted) return;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Изменения не сохранены'),
+        content: const Text('Нет связи с сервером. Останьтесь на экране — правки уйдут, когда связь вернётся.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Выйти без сохранения')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Остаться')),
+        ],
+      ),
+    );
+    if (go == true && mounted) {
+      _dirty = false;
+      Navigator.of(context).pop();
     }
   }
 
@@ -210,6 +269,10 @@ class _TableScreenState extends State<TableScreen> {
 
   /// Оплата официанту: вносится в iiko (кухня и бар) и счёт закрывается.
   Future<void> _pay(String method) async {
+    if (cart.pendingQty > 0) {
+      toast(context, 'Сначала отправьте или удалите неотправленные блюда');
+      return;
+    }
     final s = _s;
     final online = ((s?['onlinePaid'] as Map?)?['amount'] as num?) ?? 0;
     final due = (((s?['sentTotal'] as num?) ?? 0) - online).clamp(0, double.infinity);
@@ -235,23 +298,29 @@ class _TableScreenState extends State<TableScreen> {
     }
   }
 
-  Future<void> _close() async {
+  Future<void> _close({bool force = false, String? warning}) async {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Закрыть стол?'),
-        content: const Text('Гость при следующем скане начнёт новый визит.'),
+        title: Text(force ? 'Закрыть без оплаты?' : 'Закрыть стол?'),
+        content: Text(warning ?? 'Гость при следующем скане начнёт новый визит.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Закрыть')),
+          FilledButton(
+            style: force ? FilledButton.styleFrom(backgroundColor: C.danger) : null,
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(force ? 'Закрыть без оплаты' : 'Закрыть'),
+          ),
         ],
       ),
     );
     if (ok != true) return;
     try {
-      await Api.I.post('/api/v1/waiter/session/${widget.sessionId}/close');
+      await Api.I.post('/api/v1/waiter/session/${widget.sessionId}/close', {if (force) 'force': true});
       if (mounted) Navigator.of(context).pop();
     } on ApiError catch (e) {
+      // Не оплачено или не отправлено — сервер называет сумму; второй шаг — закрыть осознанно
+      if (e.code == 'UNPAID' && !force) return _close(force: true, warning: e.message);
       if (mounted) toast(context, e.message);
     }
   }
@@ -259,7 +328,12 @@ class _TableScreenState extends State<TableScreen> {
   @override
   Widget build(BuildContext context) {
     final s = _s;
-    return Scaffold(
+    return PopScope(
+      canPop: !_dirty,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _leave();
+      },
+      child: Scaffold(
       appBar: AppBar(
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -267,7 +341,13 @@ class _TableScreenState extends State<TableScreen> {
             Text('Стол ${s?['tableNumber'] ?? widget.tableNumber}'),
             if (s != null)
               Text(
-                [s['workflowLabel'], if (_saving) 'сохраняем…' else if (_dirty) 'изменено'].join(' · '),
+                [
+                  s['workflowLabel'],
+                  if (_readOnly) 'только просмотр'
+                  else if (_saveFailed) 'не сохранено — нет связи'
+                  else if (_saving) 'сохраняем…'
+                  else if (_dirty) 'изменено',
+                ].join(' · '),
                 style: const TextStyle(fontSize: 13, color: C.muted, fontWeight: FontWeight.w400),
               ),
           ],
@@ -294,6 +374,7 @@ class _TableScreenState extends State<TableScreen> {
             )
           : _body(s),
       bottomNavigationBar: s == null || _readOnly ? null : _bottomBar(),
+      ),
     );
   }
 

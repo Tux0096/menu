@@ -1,4 +1,5 @@
 /** Персонал: вход (пароль, PIN), экран официанта, контроль зала управляющего. */
+import pool from '../db/pool.js';
 import express from 'express';
 import { h, requireBody, sendError } from '../lib/http.js';
 import { acceptWaiterPayment } from '../services/payments.js';
@@ -38,7 +39,9 @@ router.post('/api/v1/staff/pin-login', h(async (req) => {
   }
   requireBody(req.body, 'restaurant', 'pin');
   const r = await resolveRestaurant(req.body.restaurant);
-  return pinLogin(r.id, req.body.pin, req.ip);
+  // Лимит попыток — по адресу и устройству: телефоны зала за одним Wi-Fi не блокируют друг друга
+  const device = String(req.get('X-Device-Id') || '').replace(/[^\w-]/g, '').slice(0, 64);
+  return pinLogin(r.id, req.body.pin, `${req.ip}|${device}`);
 }));
 router.get('/api/v1/staff/restaurants', staffAuth('waiter', ['marketing']), h(async (req) => {
   const list = await listRestaurants();
@@ -59,13 +62,13 @@ waiter.param('id', async (req, res, next, id) => {
 });
 waiter.get('/notifications', h(async (req) => {
   const r = await staffRestaurant(req);
-  return listWaiterNotifications(r.id, { unreadOnly: req.query.unread === '1' });
+  return listWaiterNotifications(r.id, { unreadOnly: req.query.unread === '1', staffId: req.staff.id });
 }));
 waiter.post('/notifications/read-all', h(async (req) => {
   const r = await staffRestaurant(req);
-  await markAllNotificationsRead(r.id);
+  await markAllNotificationsRead(r.id, req.staff.id);
 }));
-waiter.post('/notifications/:id/read', h(async (req) => { await markNotificationRead(req.params.id, (await staffRestaurant(req)).id); }));
+waiter.post('/notifications/:id/read', h(async (req) => { await markNotificationRead(req.params.id, (await staffRestaurant(req)).id, req.staff.id); }));
 // Стоп-лист для приёма заказа: что закончилось и что осталось в ограниченном количестве (только блюда меню)
 waiter.get('/stop-list', h(async (req) => {
   const catalog = await getRestaurantCatalog(await staffRestaurant(req));
@@ -131,13 +134,27 @@ waiter.post('/devices', h(async (req) => {
   return { ok: true, pushEnabled: isPushEnabled() };
 }));
 waiter.delete('/devices/:token', h(async (req) => { await unregisterDevice(req.params.token); }));
-waiter.get('/session/:id', h(async (req) => getSessionView(req.params.id)));
+// Официант смотрит стол — его блокировка продлевается (раньше через 2 минуты просмотра стол «уходил» другому)
+waiter.get('/session/:id', h(async (req) => {
+  await pool.query(
+    `UPDATE table_sessions SET locked_until = NOW() + INTERVAL '2 minutes'
+     WHERE id::text = $1 AND locked_by = $2 AND locked_until > NOW()`,
+    [req.params.id, req.staff.id],
+  );
+  return getSessionView(req.params.id);
+}));
 waiter.post('/session/:id/take', h(async (req) => takeSession(req.params.id, req.staff)));
 waiter.post('/session/:id/served', h(async (req) => markServed(req.params.id, req.body?.itemIds)));
 waiter.post('/session/:id/release', h(async (req) => releaseSession(req.params.id, req.staff)));
 waiter.post('/session/:id/cart', h(async (req) => {
   const result = await updateOrder(req.params.id, req.staff, req.body || {});
-  audit(req.staff, 'order.edit', 'session', req.params.id, { items: (req.body?.items || []).length, guestCount: req.body?.guestCount });
+  // Автосохранение идёт каждые полсекунды — в журнал пишем не чаще раза в 5 минут на стол
+  const key = `${req.staff.id}:${req.params.id}`;
+  if (Date.now() - (editAudited.get(key) || 0) > 5 * 60_000) {
+    editAudited.set(key, Date.now());
+    if (editAudited.size > 5000) editAudited.clear();
+    audit(req.staff, 'order.edit', 'session', req.params.id, { items: (req.body?.items || []).length, guestCount: req.body?.guestCount });
+  }
   return result;
 }));
 waiter.post('/session/:id/send-to-production', h(async (req) => {
@@ -152,10 +169,13 @@ waiter.post('/session/:id/pay', h(async (req) => {
   return { ...result, session: await getSessionView(req.params.id) };
 }));
 waiter.post('/session/:id/close', h(async (req) => {
-  const result = await closeSession(req.params.id, req.staff);
-  audit(req.staff, 'table.close', 'session', req.params.id);
+  const force = Boolean(req.body?.force);
+  const result = await closeSession(req.params.id, req.staff, { force });
+  audit(req.staff, force && result.unpaid ? 'table.close_unpaid' : 'table.close', 'session', req.params.id,
+    result.unpaid ? { unpaid: result.unpaid } : undefined);
   return result;
 }));
+const editAudited = new Map();
 router.use('/api/v1/waiter', waiter);
 
 router.get('/api/v1/manager/feedback', staffAuth('manager'), h(async (req) => listFeedback((await staffRestaurant(req)).id)));

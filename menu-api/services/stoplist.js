@@ -8,26 +8,55 @@ import { accessibleOrgIds, iikoRequest, isIikoDemo, withIikoCreds } from '../iik
 import { allOrgTargets } from './sources.js';
 import { PUBLIC_MENU_URL } from '../lib/qr-config.js';
 
-const memory = new Map(); // restaurantId -> Set(productId) — закончилось
+const memory = new Map(); // restaurantId -> Set(productId) — закончилось (любая касса, без размера)
 const limited = new Map(); // restaurantId -> Map(productId -> остаток) — ограниченный остаток
+// restaurantId -> Map(source -> { whole: Set(pid), sized: Set('pid|sizeId'), balances: Map(pid -> остаток) })
+const bySource = new Map();
 let loaded = false;
 let loadedAt = null;
 
 async function loadFromDb() {
-  const { rows } = await pool.query('SELECT restaurant_id, product_id, balance::float AS balance FROM stop_lists');
+  const { rows } = await pool.query(
+    `SELECT restaurant_id, product_id, balance::float AS balance, COALESCE(source, 'main') AS source, size_key FROM stop_lists`,
+  );
   memory.clear();
   limited.clear();
+  bySource.clear();
   for (const r of rows) {
+    if (!bySource.has(r.restaurant_id)) bySource.set(r.restaurant_id, new Map());
+    const m = bySource.get(r.restaurant_id);
+    if (!m.has(r.source)) m.set(r.source, { whole: new Set(), sized: new Set(), balances: new Map() });
+    const e = m.get(r.source);
     if (r.balance <= 0) {
+      if (r.size_key) { e.sized.add(`${r.product_id}|${r.size_key}`); continue; }
+      e.whole.add(r.product_id);
       if (!memory.has(r.restaurant_id)) memory.set(r.restaurant_id, new Set());
       memory.get(r.restaurant_id).add(r.product_id);
-    } else {
+    } else if (!r.size_key) {
+      e.balances.set(r.product_id, r.balance);
       if (!limited.has(r.restaurant_id)) limited.set(r.restaurant_id, new Map());
       limited.get(r.restaurant_id).set(r.product_id, r.balance);
     }
   }
   loaded = true;
   loadedAt = new Date().toISOString();
+}
+
+/**
+ * Стоп по кассе и размеру: блюдо бара на стопе только в баре, пицца 40 см — только этот размер.
+ * stopped(source, productId, sizeId?) и balance(source, productId). Касса без своего стоп-листа — смотрим кухню.
+ */
+export async function getStopIndex(restaurantId) {
+  if (!loaded) await loadFromDb();
+  const m = bySource.get(restaurantId) || new Map();
+  const of = (source) => m.get(source || 'main') || m.get('main') || { whole: new Set(), sized: new Set(), balances: new Map() };
+  return {
+    stopped: (source, pid, sizeId = null) => {
+      const e = of(source);
+      return e.whole.has(String(pid)) || Boolean(sizeId && e.sized.has(`${pid}|${sizeId}`));
+    },
+    balance: (source, pid) => of(source).balances.get(String(pid)) ?? null,
+  };
 }
 
 /** Остатки блюд с ограниченным количеством (iiko: стоп-лист с остатком > 0). */
@@ -86,14 +115,16 @@ export async function refreshStopLists(orgIds = null) {
         try {
           await client.query('BEGIN');
           await client.query('DELETE FROM stop_lists WHERE restaurant_id = $1 AND source = $2', [t.restaurant_id, t.source]);
+          // Ключ — касса + товар + размер: стоп бара не закрывает блюдо кухни, стоп 40 см — не всю пиццу.
+          // LEAST — только внутри одной сверки (одна позиция на нескольких кассах одной точки)
           for (const it of items) {
             await client.query(
-              `INSERT INTO stop_lists (restaurant_id, product_id, balance, source, sku, size_id, date_add)
-               VALUES ($1, $2, $3, $4, $5, $6, $7)
-               ON CONFLICT (restaurant_id, product_id) DO UPDATE SET balance = LEAST(stop_lists.balance, EXCLUDED.balance),
-                 source = EXCLUDED.source, sku = EXCLUDED.sku, size_id = EXCLUDED.size_id, date_add = EXCLUDED.date_add,
-                 updated_at = NOW()`,
-              [t.restaurant_id, it.productId, it.balance, t.source, it.sku, it.sizeId, it.dateAdd],
+              `INSERT INTO stop_lists (restaurant_id, product_id, balance, source, sku, size_id, size_key, date_add)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+               ON CONFLICT (restaurant_id, source, product_id, size_key) DO UPDATE SET
+                 balance = LEAST(stop_lists.balance, EXCLUDED.balance),
+                 sku = EXCLUDED.sku, size_id = EXCLUDED.size_id, date_add = EXCLUDED.date_add, updated_at = NOW()`,
+              [t.restaurant_id, it.productId, it.balance, t.source, it.sku, it.sizeId, it.sizeId || '', it.dateAdd],
             );
           }
           await client.query('COMMIT');
