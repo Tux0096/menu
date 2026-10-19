@@ -24,7 +24,7 @@ import {
 } from '../iiko-client.js';
 import { createWaiterNotification } from './waiter-notifications.js';
 import { getSource, productSourceMap } from './sources.js';
-import { menuIndex, priceLine } from './menu-pricing.js';
+import { menuIndex, priceLine, priceVariant, rowVariantKey, variantKey } from './menu-pricing.js';
 import { stopListLoadedAt } from './stoplist.js';
 import { withSessionMutex } from '../lib/session-mutex.js';
 import { withIikoCreds } from '../iiko-client.js';
@@ -151,6 +151,11 @@ function mapItem(row) {
     name: row.name,
     price: parseFloat(row.price),
     quantity: row.quantity,
+    // Выбор гостя: размер и модификаторы (уходят в iiko), текстом — для показа
+    sizeId: row.size_id || null,
+    modifiers: row.modifiers || [],
+    options: row.options_text || null,
+    variantKey: rowVariantKey(row),
     lineTotal: parseFloat(row.line_total),
     seatNumber: row.seat_number || null,
     guestId: row.guest_id || null,
@@ -418,6 +423,11 @@ export async function trackActivity(sessionId) {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Позиции корзины по вариантам: одно блюдо с разным размером/модификаторами — разные строки.
+ * Ключ — выбор как его прислал гость (у отправленных строк он совпадает с сохранённым);
+ * проверка выбора и цена — только для неотправленной части (priceVariant), отправленное не перепроверяется.
+ */
 function aggregateCart(cartItems) {
   const map = new Map();
   for (const item of cartItems || []) {
@@ -427,12 +437,19 @@ function aggregateCart(cartItems) {
       throw httpError(400, `«${String(item.name || 'Позиция').slice(0, 60)}» нельзя заказать через меню — позовите официанта`);
     }
     const qty = Math.max(0, Math.floor(Number(item.quantity) || 0));
-    const prev = map.get(key);
+    const sizeId = item.sizeId ? String(item.sizeId) : null;
+    const modifiers = (Array.isArray(item.modifiers) ? item.modifiers : [])
+      .map((m) => ({ id: String(m?.id || ''), groupId: m?.groupId ?? null, amount: Math.floor(Number(m?.amount ?? 1) || 0) }))
+      .filter((m) => m.id && m.amount > 0).slice(0, 40);
+    const vkey = variantKey(key, sizeId, modifiers);
+    const prev = map.get(vkey);
     if (prev) prev.quantity += qty;
     else {
-      map.set(key, {
+      map.set(vkey, {
         productId: item.productId ? String(item.productId) : null,
         iikoProductId: key,
+        sizeId,
+        modifiers,
         // название — только для текста ошибки; цену и название в заказ ставит сервер по меню (priceLine)
         name: String(item.name || 'Позиция').slice(0, 300),
         quantity: qty,
@@ -443,6 +460,9 @@ function aggregateCart(cartItems) {
   }
   return map;
 }
+
+/** Название строки заказа с выбором гостя: «Вок с курицей (Соус терияки)» — так видят официант и касса. */
+export const lineName = (name, variant) => (variant?.text ? `${name} (${variant.text})`.slice(0, 300) : name);
 
 async function recalcTotal(client, sessionId) {
   const { rows } = await client.query(
@@ -472,7 +492,7 @@ async function writeGuestCart(client, ctx, cartItems, guestId) {
   const index = await menuIndex(ctx.restaurant);
   const lockedQty = new Map();
   for (const row of items.filter((i) => i.is_locked)) {
-    const key = String(row.iiko_product_id);
+    const key = rowVariantKey(row);
     lockedQty.set(key, (lockedQty.get(key) || 0) + row.quantity);
   }
   for (const [key, qty] of lockedQty) {
@@ -482,24 +502,30 @@ async function writeGuestCart(client, ctx, cartItems, guestId) {
     }
   }
 
-  const prevPending = new Map(items.filter((i) => !i.is_locked).map((i) => [String(i.iiko_product_id), i]));
+  const prevPending = new Map(items.filter((i) => !i.is_locked).map((i) => [rowVariantKey(i), i]));
   await client.query('DELETE FROM table_order_items WHERE session_id = $1 AND is_locked = FALSE AND guest_id IS NOT DISTINCT FROM $2::uuid', [session.id, guestId]);
   const nextBatch = Math.max(0, ...ctx.items.filter((i) => i.is_locked).map((i) => i.batch_no)) + 1;
-  const sources = await productSourceMap(ctx.restaurant.id, [...incoming.keys()]);
+  const sources = await productSourceMap(ctx.restaurant.id, [...new Set([...incoming.values()].map((l) => l.iikoProductId))]);
 
-  for (const [key, line] of incoming) {
-    const pendingQty = line.quantity - (lockedQty.get(key) || 0);
+  for (const [vkey, line] of incoming) {
+    const key = line.iikoProductId;
+    const pendingQty = line.quantity - (lockedQty.get(vkey) || 0);
     if (pendingQty <= 0) continue;
-    const prev = prevPending.get(key);
+    const prev = prevPending.get(vkey);
     const priced = priceLine(index, key, { qty: pendingQty, prevQty: prev?.quantity || 0, clientName: line.name });
+    const entry = index.get(key);
+    const v = entry.sizes.length || entry.groups.length || line.sizeId || line.modifiers.length
+      ? priceVariant(entry, key, { sizeId: line.sizeId, modifiers: line.modifiers }) : null;
+    const price = v ? v.price : priced.price;
     await client.query(
       `INSERT INTO table_order_items
          (session_id, product_id, iiko_product_id, name, price, quantity, line_total, seat_number, course, batch_no, is_locked,
-          guest_id, guest_name, source)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12,$13)`,
-      [session.id, line.productId, key, priced.name, priced.price, pendingQty, priced.price * pendingQty,
+          guest_id, guest_name, source, size_id, size_name, modifiers, options_text)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12,$13,$14,$15,$16,$17)`,
+      [session.id, line.productId, key, lineName(priced.name, v), price, pendingQty, price * pendingQty,
         prev?.seat_number || me?.seat || null, line.course !== undefined ? line.course : (prev?.course || null), nextBatch,
-        guestId, me?.name || null, sources.get(key) || 'main'],
+        guestId, me?.name || null, sources.get(key) || 'main',
+        v?.sizeId || null, v?.sizeName || null, v?.mods.length ? JSON.stringify(v.mods) : null, v?.text || null],
     );
   }
   return recalcTotal(client, session.id);

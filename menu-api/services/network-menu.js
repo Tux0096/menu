@@ -147,27 +147,73 @@ export async function getNetworkMenuPoints(restaurants) {
   return { points };
 }
 
-/** Разделы меню подключённых точек с картинками из админки (шторка «Меню» у гостя). */
+/**
+ * Разделы меню подключённых точек — в том порядке, в каком их видит гость, с настройками из админки.
+ * Скрытых разделов в меню гостя нет, поэтому они добавляются из настроек (в конец списка).
+ */
 export async function getCategoryList(restaurants) {
-  const { rows } = await pool.query('SELECT key, image_url FROM category_content');
-  const images = new Map(rows.map((r) => [r.key, r.image_url]));
+  const { rows } = await pool.query('SELECT key, name, image_url, title, sort_order, tab, is_hidden FROM category_content');
+  const content = new Map(rows.map((r) => [r.key, r]));
   const list = new Map();
   const catalogs = await Promise.all(restaurants.map((r) => getRestaurantCatalog(r)));
   for (const catalog of catalogs) {
     const used = new Map();
     for (const p of catalog.products || []) used.set(String(p.parentGroup), (used.get(String(p.parentGroup)) || 0) + 1);
     for (const g of catalog.groups || []) {
-      const key = menuKey(g.name);
+      const iikoName = g.iikoName || g.name;
+      const key = menuKey(iikoName);
       if (!key || !used.get(String(g.id))) continue;
+      const c = content.get(key);
+      const cur = list.get(key) || {
+        key, name: iikoName, title: c?.title || '', image: c?.image_url || null, iikoImage: null,
+        isBar: Boolean(g.isBar), tab: c?.tab || '', hidden: false, sortOrder: c?.sort_order ?? null, points: 0, items: 0, position: list.size,
+      };
       // iikoImage — картинка раздела из iiko: гость видит её, пока своей нет
-      const cur = list.get(key) || { key, name: g.name, image: images.get(key) || null, iikoImage: null, isBar: Boolean(g.isBar), points: 0, items: 0 };
       if (!cur.iikoImage && g.image && g.image !== cur.image) cur.iikoImage = g.image;
       cur.points += 1;
       cur.items = Math.max(cur.items, used.get(String(g.id)));
       list.set(key, cur);
     }
   }
-  return [...list.values()].sort((a, b) => Number(a.isBar) - Number(b.isBar) || a.name.localeCompare(b.name, 'ru'));
+  for (const c of rows.filter((r) => r.is_hidden && !list.has(r.key))) {
+    list.set(c.key, {
+      key: c.key, name: c.name, title: c.title || '', image: c.image_url || null, iikoImage: null, isBar: c.tab === 'bar',
+      tab: c.tab || '', hidden: true, sortOrder: c.sort_order ?? null, points: 0, items: 0, position: 1e6 + list.size,
+    });
+  }
+  return [...list.values()].sort((a, b) => a.position - b.position).map(({ position, ...x }) => x);
+}
+
+/**
+ * Настройки разделов из админки одним списком в нужном порядке: своё название, вкладка, скрытие.
+ * Порядок — позиция в списке; картинки не трогаются (они сохраняются сразу при загрузке).
+ */
+export async function saveCategorySettings(items) {
+  const list = (Array.isArray(items) ? items : []).slice(0, 300);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const [i, it] of list.entries()) {
+      const name = String(it.name || '').slice(0, 200);
+      const key = menuKey(name).slice(0, 200);
+      if (!key) continue;
+      const title = String(it.title || '').trim().slice(0, 100) || null;
+      const tab = ['kitchen', 'bar'].includes(it.tab) ? it.tab : null;
+      await client.query(
+        `INSERT INTO category_content (key, name, title, sort_order, tab, is_hidden, updated_at) VALUES ($1, $2, $3, $4, $5, $6, NOW())
+         ON CONFLICT (key) DO UPDATE SET name = EXCLUDED.name, title = EXCLUDED.title, sort_order = EXCLUDED.sort_order,
+           tab = EXCLUDED.tab, is_hidden = EXCLUDED.is_hidden, updated_at = NOW()`,
+        [key, name, title, i + 1, tab, Boolean(it.hidden)],
+      );
+    }
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK');
+    throw e;
+  } finally {
+    client.release();
+  }
+  return { saved: list.length };
 }
 
 /** Картинка раздела (пусто — стандартная по названию). Ключ — название раздела без регистра и пометок iiko. */

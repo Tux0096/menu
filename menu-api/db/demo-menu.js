@@ -54,6 +54,23 @@ const P = [
   ['sauces', 'Соус унаги', 60, '30 г', 'Сладкий соус'],
 ];
 
+// Размеры и модификаторы — как во внешнем меню iiko (для проверки выбора в карточке блюда)
+const mod = (name, price = 0, extra = {}) => ({ id: randomUUID(), name, price, weight: null, image: null, def: 0, max: 0, ...extra });
+const sauces = () => ({ id: randomUUID(), name: 'Соус на выбор', min: 1, max: 1, free: 1,
+  items: [mod('Терияки', 0, { def: 1 }), mod('Устричный'), mod('Карри лайм'), mod('Пад тай')] });
+const OPTIONS = {
+  'WOK с курицей терияки': { modifierGroups: [
+    { id: randomUUID(), name: 'Основа', min: 1, max: 1, free: 1, items: [mod('Удон', 0, { def: 1 }), mod('Гречневая'), mod('Рис'), mod('Фунчоза')] },
+    sauces(),
+    { id: randomUUID(), name: 'Добавить', min: 0, max: 3, free: 0, items: [mod('Курица', 120, { max: 2 }), mod('Креветки', 190), mod('Кунжут', 30)] },
+  ] },
+  'Пицца Четыре сыра': { sizes: [
+    { id: randomUUID(), name: '25 см', price: 549, weight: 420, isDefault: false, groups: [] },
+    { id: randomUUID(), name: '30 см', price: 649, weight: 550, isDefault: true, groups: [] },
+    { id: randomUUID(), name: '40 см', price: 899, weight: 900, isDefault: false, groups: [] },
+  ] },
+};
+
 const catalog = {
   groups: Object.values(G).map((g, i) => ({
     id: g.id, name: g.name, slug: `g${i}`, parentGroup: null, order: i, isIncludedInMenu: true, isGroupModifier: false,
@@ -65,6 +82,7 @@ const catalog = {
       id, iikoId: id, name, price, weight, description, parentGroup: G[g].id, order: i, slug: `p${i}`,
       image: null, isPublished: true, groupModifiers: [], modifiers: [], filters: [], allergens: [],
       energyAmount: 180 + (i * 37) % 200, fiberAmount: 8 + (i % 7), fatAmount: 6 + (i % 9), carbohydrateAmount: 20 + (i % 15),
+      sizes: OPTIONS[name]?.sizes || [], modifierGroups: OPTIONS[name]?.modifierGroups || [],
     };
   }),
 };

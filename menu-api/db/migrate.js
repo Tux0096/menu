@@ -405,6 +405,18 @@ const SCHEMA = `
     image_url TEXT,
     updated_at TIMESTAMPTZ DEFAULT NOW()
   );
+  -- Разделы меню из админки: своё название, порядок, вкладка «Кухня/Бар», скрыть раздел
+  ALTER TABLE category_content ADD COLUMN IF NOT EXISTS title VARCHAR(100);
+  ALTER TABLE category_content ADD COLUMN IF NOT EXISTS sort_order INT;
+  ALTER TABLE category_content ADD COLUMN IF NOT EXISTS tab VARCHAR(10);
+  ALTER TABLE category_content ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN NOT NULL DEFAULT FALSE;
+  -- Размеры и модификаторы блюда из внешнего меню iiko (с ценами точки): { sizes: [...] } или { groups: [...] }
+  ALTER TABLE products ADD COLUMN IF NOT EXISTS options JSONB;
+  -- Выбор гостя в строке заказа: размер и модификаторы уходят в iiko (productSizeId, modifiers)
+  ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS size_id VARCHAR(64);
+  ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS size_name VARCHAR(100);
+  ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS modifiers JSONB;
+  ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS options_text VARCHAR(300);
   -- Ключи онлайн-оплаты по ресторанам (задаёт администратор в админке «Оплата»)
   CREATE TABLE IF NOT EXISTS restaurant_payment_settings (
     restaurant_id UUID PRIMARY KEY REFERENCES restaurants(id) ON DELETE CASCADE,

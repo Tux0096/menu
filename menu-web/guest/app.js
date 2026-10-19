@@ -216,16 +216,29 @@
   }
 
   // ── Корзина ────────────────────────────────────────────────
-  const cartLines = () => Object.values(S.cart).filter((l) => l.qty > 0);
+  /*
+   * Строка корзины: { key, qty, product, course, sizeId, mods: [{ id, groupId, amount }], options, price }.
+   * Блюдо без выбора — ключ = ID блюда; с размером/модификаторами — ключ варианта (как на сервере:
+   * «iikoId|sizeId|id:кол-во,…»), одно блюдо с разным выбором — разные строки.
+   */
+  const lineKey = (l) => l.key || String(l.product.id);
+  const unitPrice = (l) => Number(l.price ?? l.product.price) || 0;
+  const cartLines = () => Object.entries(S.cart).filter(([, l]) => l.qty > 0).map(([key, l]) => ({ ...l, key }));
   const cartCount = () => cartLines().reduce((s, l) => s + l.qty, 0);
-  const cartTotal = () => cartLines().reduce((s, l) => s + l.qty * (Number(l.product.price) || 0), 0);
+  const cartTotal = () => cartLines().reduce((s, l) => s + l.qty * unitPrice(l), 0);
   // За столом может быть несколько гостей: корзина гостя — только его позиции
   const myItems = (session = S.session) => (session?.items || [])
     .filter((i) => (i.guestId || null) === (S.guest?.id || null));
-  const lockedQty = (pid) => myItems()
-    .filter((i) => i.isLocked && (String(i.productId) === String(pid) || String(i.iikoProductId) === String(pid)))
+  /** Ключ строки заказа с сервера — тот же, что у строки корзины. */
+  const itemKey = (i) => (i.sizeId || i.modifiers?.length ? String(i.variantKey) : String(i.productId || i.iikoProductId));
+  const lockedQty = (key) => myItems()
+    .filter((i) => i.isLocked && (itemKey(i) === String(key) || (!i.sizeId && !i.modifiers?.length && String(i.iikoProductId) === String(key))))
     .reduce((s, i) => s + i.quantity, 0);
-  const pendingCount = () => cartLines().reduce((s, l) => s + Math.max(0, l.qty - lockedQty(l.product.id)), 0);
+  const pendingCount = () => cartLines().reduce((s, l) => s + Math.max(0, l.qty - lockedQty(l.key)), 0);
+  /** Сколько штук блюда в корзине — по всем вариантам (для отметки на карточке в меню). */
+  const qtyOf = (p) => cartLines().filter((l) => String(l.product.id) === String(p.id)).reduce((n, l) => n + l.qty, 0);
+  /** У блюда есть выбор (размер или модификаторы) — добавляется из карточки блюда. */
+  const hasOptions = (p) => Boolean(p?.sizes?.length > 1 || p?.modifierGroups?.length || p?.sizes?.some((z) => z.groups?.length));
   // Визит окончен: оплачен или официант закрыл стол — заказывать в него нельзя
   const visitOver = (s = S.session) => Boolean(s && (s.isPaid || s.status === 'closed'));
   const isStopped = (p) => p.isInStopList || (S.catalog?.stopList || []).includes(String(p.id));
@@ -238,9 +251,16 @@
   function cartFromSession(session) {
     const next = {};
     for (const it of myItems(session)) {
-      const key = String(it.productId || it.iikoProductId);
-      const product = findProduct(key) || { id: key, iikoId: it.iikoProductId, name: it.name, price: it.price };
-      if (!next[key]) next[key] = { qty: 0, product, course: null };
+      const key = itemKey(it);
+      const variant = Boolean(it.sizeId || it.modifiers?.length);
+      const pid = String(it.productId || it.iikoProductId);
+      const product = findProduct(pid) || { id: pid, iikoId: it.iikoProductId, name: it.name, price: it.price };
+      if (!next[key]) {
+        next[key] = { key, qty: 0, product, course: null, ...(variant ? {
+          sizeId: it.sizeId || null, mods: (it.modifiers || []).map((m) => ({ id: m.id, groupId: m.groupId ?? null, amount: m.amount })),
+          options: it.options || null, price: it.price,
+        } : {}) };
+      }
       next[key].qty += it.quantity;
       if (!it.isLocked && it.course) next[key].course = it.course;
     }
@@ -249,19 +269,23 @@
 
   function persistCart() { store.set('cart', S.cart); }
 
-  function changeQty(product, delta) {
+  /**
+   * Изменить количество: блюда без выбора — по ID; варианта — по выбору sel ({ sizeId, mods, options, price })
+   * или по ключу уже существующей строки (key).
+   */
+  function changeQty(product, delta, { sel = null, key: lineK = null } = {}) {
     // Меню открыто без стола/входа — сначала стол и телефон, потом положим блюдо в корзину
-    if (delta > 0 && !S.session) { openSeatSheet(() => changeQty(product, delta)); return; }
+    if (delta > 0 && !S.session) { openSeatSheet(() => changeQty(product, delta, { sel, key: lineK })); return; }
     if (visitOver()) { toast(S.session.isPaid ? 'Счёт уже оплачен. Отсканируйте QR, чтобы начать новый заказ' : 'Визит закрыт. Отсканируйте QR, чтобы начать новый заказ'); return; }
-    const key = String(product.id);
-    const line = S.cart[key] || { qty: 0, product };
+    const key = lineK || (sel ? sel.key : String(product.id));
+    const line = S.cart[key] || { key, qty: 0, product, ...(sel ? { sizeId: sel.sizeId, mods: sel.mods, options: sel.options, price: sel.price } : {}) };
     const next = line.qty + delta;
     if (delta > 0 && isStopped(product)) { toast('Эта позиция сейчас недоступна', true); return; }
     // Ограниченный остаток в iiko: больше, чем осталось, официант на кухню не отправит
-    const left = Number((findProduct(key) || product).stopBalance) || 0;
+    const left = Number((findProduct(product.id) || product).stopBalance) || 0;
     if (delta > 0 && left && next - lockedQty(key) > left) { toast(`Осталось только ${left} шт.`, true); return; }
     if (delta < 0 && next < lockedQty(key)) { toast('Это блюдо уже готовится — убрать можно через официанта', true); return; }
-    if (next <= 0) delete S.cart[key]; else S.cart[key] = { ...line, qty: next, product };
+    if (next <= 0) delete S.cart[key]; else S.cart[key] = { ...line, key, qty: next, product };
     persistCart();
     S.changedSinceSubmit = true; store.set('changedSinceSubmit', true);
     if (delta > 0 && S.ai.query && S.tab === 'ai') {
@@ -281,8 +305,9 @@
     saveTimer = setTimeout(saveCart, 700);
   }
   const payloadItems = () => cartLines().map((l) => ({
-    productId: l.product.id, iikoProductId: l.product.iikoId || l.product.id, name: l.product.name, price: l.product.price, quantity: l.qty,
+    productId: l.product.id, iikoProductId: l.product.iikoId || l.product.id, name: l.product.name, price: unitPrice(l), quantity: l.qty,
     course: l.course || null,
+    ...(l.sizeId || l.mods?.length ? { sizeId: l.sizeId || null, modifiers: l.mods || [] } : {}),
   }));
   async function saveCart() {
     if (!S.sessionId) return;
@@ -509,8 +534,16 @@
   }
 
   /** Кнопка цены на карточке: «299 ₽» → в корзине «− 299 ₽ +»; нет в наличии — подпись вместо кнопки. */
+  /** Цена на карточке: у блюда с размерами — «от» самой низкой. */
+  const fromPrice = (p) => {
+    const prices = (p.sizes || []).map((z) => Number(z.price)).filter((v) => v > 0);
+    const min = prices.length ? Math.min(...prices) : Number(p.price) || 0;
+    return prices.length > 1 && new Set(prices).size > 1 ? `от ${rub(min)}` : rub(min || p.price);
+  };
   function pricePill(p, qty, stopped, cls = 'price-pill') {
     if (stopped) return `<span class="dish__soon">${Number(p.price) ? 'Закончился :(' : 'Скоро в продаже'}</span>`;
+    // Блюдо с выбором — кнопка открывает карточку (выбор размера, соуса…); количество видно на фото
+    if (hasOptions(p)) return `<button class="${cls}" data-inc="${esc(p.id)}" aria-label="Выбрать ${esc(p.name)}">${fromPrice(p)}${cls.includes('big') ? `<img src="${UI('plus-circle.svg')}" alt="">` : ''}</button>`;
     if (!qty) return `<button class="${cls}" data-inc="${esc(p.id)}" aria-label="Добавить ${esc(p.name)}">${rub(p.price)}${cls.includes('big') ? `<img src="${UI('plus-circle.svg')}" alt="">` : ''}</button>`;
     return `<div class="${cls} ${cls}--qty">
       <button data-dec="${esc(p.id)}" aria-label="Убрать">${ICONS.minus}</button>
@@ -519,7 +552,7 @@
   }
 
   function dishCard(p, { reason = null } = {}) {
-    const qty = S.cart[String(p.id)]?.qty || 0;
+    const qty = qtyOf(p);
     const stopped = isStopped(p);
     const sub = reason || p.description || '';
     const count = qty && !stopped ? `<span class="dish__count" data-key="count-${qty}" aria-label="В заказе ${qty}">${qty}</span>` : '';
@@ -636,8 +669,8 @@
   async function switchTable(table) {
     const carry = {};
     for (const l of cartLines()) {
-      const q = Math.max(0, l.qty - lockedQty(l.product.id));
-      if (q) carry[String(l.product.id)] = { ...l, qty: q };
+      const q = Math.max(0, l.qty - lockedQty(l.key));
+      if (q) carry[l.key] = { ...l, qty: q };
     }
     const hasCarry = Object.keys(carry).length > 0;
     clearTimeout(saveTimer);
@@ -807,7 +840,7 @@
     return null;
   }
   const blockedLines = () => cartLines()
-    .map((l) => ({ l, q: l.qty - lockedQty(l.product.id) })).filter((x) => x.q > 0 && lineProblem(x.l, x.q));
+    .map((l) => ({ l, q: l.qty - lockedQty(l.key) })).filter((x) => x.q > 0 && lineProblem(x.l, x.q));
   function submitBlock() {
     const pending = pendingCount();
     const reorder = (S.session?.items || []).some((i) => i.isLocked);
@@ -950,18 +983,18 @@
     const lines = cartLines();
     const paid = visitOver(s);
     // Корзина — то, что ещё не ушло официанту; отправленное — блоком выше, по гостям
-    const fresh = lines.map((l) => ({ l, q: l.qty - lockedQty(l.product.id) })).filter((x) => x.q > 0);
+    const fresh = lines.map((l) => ({ l, q: l.qty - lockedQty(l.key) })).filter((x) => x.q > 0);
     const cartHtml = fresh.map(({ l, q }) => {
       const problem = lineProblem(l, q);
-      return `<div class="cart-line ${problem ? 'is-problem' : ''} ${S.openLine === String(l.product.id) ? 'is-open' : ''}" data-key="cart-${esc(l.product.id)}">
-        <div class="cart-line__row" data-swipe-del="${esc(l.product.id)}">
+      return `<div class="cart-line ${problem ? 'is-problem' : ''} ${S.openLine === l.key ? 'is-open' : ''}" data-key="cart-${esc(l.key)}">
+        <div class="cart-line__row" data-swipe-del="${esc(l.key)}">
           ${thumb(findProduct(l.product.id) || l.product)}
-          <div class="cart-line__main"><div class="cart-line__name">${esc(l.product.name)}</div><div class="cart-line__price">${rub(l.product.price)}</div>${problem ? `<span class="st st--stop">${esc(problem)}</span>` : ''}</div>
+          <div class="cart-line__main"><div class="cart-line__name">${esc(l.product.name)}</div>${l.options ? `<div class="cart-line__opts">${esc(l.options)}</div>` : ''}<div class="cart-line__price">${rub(unitPrice(l))}</div>${problem ? `<span class="st st--stop">${esc(problem)}</span>` : ''}</div>
           ${paid ? '' : `<div class="stepper-mini">
-            <button data-dec="${esc(l.product.id)}" aria-label="Убрать">${ICONS.minus}</button><b>${q}</b>
-            <button data-inc="${esc(l.product.id)}" aria-label="Добавить">${ICONS.plus}</button></div>`}
+            <button data-line-dec="${esc(l.key)}" aria-label="Убрать">${ICONS.minus}</button><b>${q}</b>
+            <button data-line-inc="${esc(l.key)}" aria-label="Добавить">${ICONS.plus}</button></div>`}
         </div>
-        <button class="cart-line__del" data-remove="${esc(l.product.id)}" aria-label="Удалить"><img src="${UI('trash.svg')}" alt=""></button>
+        <button class="cart-line__del" data-remove="${esc(l.key)}" aria-label="Удалить"><img src="${UI('trash.svg')}" alt=""></button>
       </div>`;
     }).join('');
 
@@ -996,7 +1029,7 @@
       ${sentHtml ? `<section class="order-card">${sentHtml}
         ${sentSum > 0 ? `<div class="total-row"><span>${multi ? 'Весь стол' : 'Итого'}</span><b>${rub(sentSum)}</b></div>` : ''}</section>` : ''}
       ${cartHtml ? `<section class="order-card">${cartHtml}
-        <div class="total-row"><span>В корзине</span><b>${rub(fresh.reduce((n, x) => n + x.q * (Number(x.l.product.price) || 0), 0))}</b></div></section>`
+        <div class="total-row"><span>В корзине</span><b>${rub(fresh.reduce((n, x) => n + x.q * unitPrice(x.l), 0))}</b></div></section>`
     : sentHtml ? '' : '<section class="order-empty">Корзина пуста</section>'}
       <div class="actions">
         ${paid ? `<button class="btn btn--dark" data-action="new-visit"><span>Начать новый заказ</span><span class="round-btn">${ICONS.arrowRight}</span></button>
@@ -1110,8 +1143,92 @@
     }, { cls: 'sheet--gray' });
   }
 
-  /** Экран блюда (шторка): фото, метки, название, описание, КБЖУ, аллергены, кнопка. Его же рисует превью админки. */
-  function productDetailHtml(p) {
+  // ── Выбор в карточке блюда: размер и модификаторы (как во внешнем меню iiko) ──
+  // sel: { sizeId, mods: Map(id → кол-во) }. Правила те же, что на сервере (menu-pricing.js → priceVariant).
+  const sizeOf = (p, sel) => {
+    const sizes = p.sizes || [];
+    return sizes.length ? sizes.find((z) => String(z.id) === String(sel.sizeId)) || sizes.find((z) => z.isDefault) || sizes[0] : null;
+  };
+  const groupsFor = (p, sel) => (p.sizes?.length ? sizeOf(p, sel)?.groups || [] : p.modifierGroups || []);
+  const groupTotal = (g, sel) => g.items.reduce((n, it) => n + (sel.mods.get(String(it.id)) || 0), 0);
+  /** Обязательные группы — варианты по умолчанию из iiko, иначе первые. */
+  function fillDefaults(g, sel) {
+    for (const it of g.items) if (it.def > 0 && !sel.mods.has(String(it.id))) sel.mods.set(String(it.id), it.def);
+    for (const it of g.items) {
+      if (groupTotal(g, sel) >= g.min) break;
+      sel.mods.set(String(it.id), (sel.mods.get(String(it.id)) || 0) + 1);
+    }
+  }
+  function initSel(p) {
+    const sel = { sizeId: null, mods: new Map() };
+    const z = sizeOf(p, sel);
+    sel.sizeId = z?.id ?? null;
+    for (const g of groupsFor(p, sel)) fillDefaults(g, sel);
+    return sel;
+  }
+  /** Выбор → строка корзины: ключ варианта, размер, модификаторы, текст выбора и цена за 1 шт. */
+  function resolveSel(p, sel) {
+    const z = sizeOf(p, sel);
+    const groups = groupsFor(p, sel);
+    const mods = [];
+    let extra = 0;
+    for (const g of groups) {
+      const picked = g.items.filter((it) => sel.mods.get(String(it.id)) > 0).map((it) => ({ it, amount: sel.mods.get(String(it.id)) }));
+      const units = picked.flatMap((x) => Array(x.amount).fill(Number(x.it.price) || 0)).sort((a, b) => a - b);
+      extra += units.slice(Math.min(g.free || 0, units.length)).reduce((n, v) => n + v, 0);
+      for (const x of picked) mods.push({ id: String(x.it.id), groupId: g.id ?? null, amount: x.amount, name: x.it.name });
+    }
+    const sizeId = z && p.sizes.length > 1 && z.id ? String(z.id) : null;
+    const m = mods.map((x) => `${x.id}:${x.amount}`).sort();
+    const key = sizeId || m.length ? `${p.iikoId || p.id}|${sizeId || ''}|${m.join(',')}` : String(p.id);
+    const options = [sizeId ? z.name : null, ...mods.map((x) => (x.amount > 1 ? `${x.name} ×${x.amount}` : x.name))].filter(Boolean).join(', ');
+    const missing = groups.filter((g) => groupTotal(g, sel) < g.min).map((g) => g.name);
+    return {
+      key, sizeId, mods: mods.map(({ id, groupId, amount }) => ({ id, groupId, amount })), options: options || null,
+      price: Math.round(((z ? Number(z.price) : Number(p.price)) + extra) * 100) / 100, weight: z?.weight || null, missing,
+    };
+  }
+  const groupHint = (g) => [
+    g.min > 0 && g.max === 1 ? 'выберите 1' : g.min > 0 ? `минимум ${g.min}` : 'по желанию',
+    g.max > 1 ? `до ${g.max}` : null,
+    g.free > 0 && g.items.some((it) => it.price > 0) ? `${g.free} бесплатно` : null,
+  ].filter(Boolean).join(' · ');
+  function optionsHtml(p, sel) {
+    const sizes = p.sizes?.length > 1 ? p.sizes : [];
+    const short = (name) => esc(String(name || '').replace(/\s*см\.?$/i, '').slice(0, 6) || '•');
+    const sizesHtml = sizes.length ? `<div class="product__block"><div class="product__label">Размер</div>
+      <div class="opt-tiles">${sizes.map((z) => `<button class="opt-tile ${String(z.id) === String(sel.sizeId) ? 'is-on' : ''}" data-size="${esc(z.id)}">
+        <span class="opt-tile__circle opt-tile__circle--size">${short(z.name)}</span><span class="opt-tile__name">${esc(z.name)}</span><span class="opt-tile__price">${rub(z.price)}</span></button>`).join('')}</div></div>` : '';
+    const groupsHtml = groupsFor(p, sel).map((g, gi) => `<div class="product__block">
+      <div class="product__label product__label--row">${esc(g.name)}<span class="opt-hint ${groupTotal(g, sel) < g.min ? 'is-missing' : ''}">${esc(groupHint(g))}</span></div>
+      <div class="opt-tiles">${g.items.map((it) => {
+    const amt = sel.mods.get(String(it.id)) || 0;
+    const img = it.image ? imgSrc(it.image, 160) : null;
+    return `<button class="opt-tile ${amt ? 'is-on' : ''}" data-mod="${esc(it.id)}" data-group="${gi}">
+          ${img ? `<span class="opt-tile__circle"><img src="${esc(img)}" alt="" loading="lazy"></span>` : `<span class="opt-tile__circle">${esc(String(it.name || '?').slice(0, 1))}</span>`}
+          <span class="opt-tile__name">${esc(it.name)}</span>${it.price > 0 ? `<span class="opt-tile__price">+${rub(it.price)}</span>` : ''}${amt > 1 ? `<i class="opt-tile__qty">×${amt}</i>` : ''}</button>`;
+  }).join('')}</div></div>`).join('');
+    return sizesHtml + groupsHtml;
+  }
+  function toggleMod(p, sel, id, gi) {
+    const g = groupsFor(p, sel)[gi];
+    const it = g?.items.find((x) => String(x.id) === String(id));
+    if (!it) return;
+    const cur = sel.mods.get(String(it.id)) || 0;
+    if (g.max === 1) {
+      if (cur) { if (g.min === 0) sel.mods.delete(String(it.id)); return; }
+      for (const x of g.items) sel.mods.delete(String(x.id));
+      sel.mods.set(String(it.id), 1);
+      return;
+    }
+    const itemMax = it.max > 0 ? it.max : 1;
+    if (cur < itemMax && (!g.max || groupTotal(g, sel) < g.max)) sel.mods.set(String(it.id), cur + 1);
+    else if (cur) sel.mods.delete(String(it.id));
+    else toast(`В «${g.name}» можно выбрать не больше ${g.max}`);
+  }
+
+  /** Экран блюда (шторка): фото, метки, название, выбор, описание, КБЖУ, аллергены, кнопка. Его же рисует превью админки. */
+  function productDetailHtml(p, sel = null) {
     const grams = gramsOf(p.weight);
     const perDish = S.nutri === 'dish' && grams;
     const k = perDish ? grams / 100 : 1;
@@ -1119,7 +1236,11 @@
     const nutri = [['Белки', p.fiberAmount], ['Жиры', p.fatAmount], ['Углеводы', p.carbohydrateAmount], ['Ккал', p.energyAmount]]
       .filter(([, v]) => v != null);
     const allergens = [...(p.allergensText || []), ...(p.allergens || []).map((a) => a.name || a)].filter(Boolean);
-    const qty = S.cart[String(p.id)]?.qty || 0;
+    const r = sel ? resolveSel(p, sel) : null;
+    const lineQty = r ? S.cart[r.key]?.qty || 0 : S.cart[String(p.id)]?.qty || 0;
+    const qty = qtyOf(p);
+    const price = r ? r.price : Number(p.price) || 0;
+    const weight = r?.weight ? `${r.weight} г` : p.weight;
     const stopped = isStopped(p);
     const toggle = grams ? `<div class="nutri-toggle">
         <button data-nutri="dish" class="${perDish ? 'is-active' : ''}">Блюдо</button><button data-nutri="100" class="${perDish ? '' : 'is-active'}">100 грамм</button></div>` : '';
@@ -1129,7 +1250,8 @@
       <div class="product__info">
         ${tagsHtml(p, { text: true })}
         <h2 class="product__name">${esc(p.name)}</h2>
-        ${p.weight || p.stopBalance ? `<div class="product__weight">${esc(p.weight || '')}${p.stopBalance && !stopped ? `${p.weight ? ' · ' : ''}осталось ${Number(p.stopBalance)} шт.` : ''}</div>` : ''}
+        ${weight || p.stopBalance ? `<div class="product__weight">${esc(weight || '')}${p.stopBalance && !stopped ? `${weight ? ' · ' : ''}осталось ${Number(p.stopBalance)} шт.` : ''}</div>` : ''}
+        ${sel && !stopped ? optionsHtml(p, sel) : ''}
         ${p.description ? `<div class="product__block"><div class="product__label">Описание</div><p>${esc(p.description)}</p></div>` : ''}
         ${nutri.length ? `<div class="product__block"><div class="product__label product__label--row">Пищевая ценность${toggle}</div>
           <div class="nutri">${nutri.map(([label, v]) => `<div><b>${fmt(v)}</b>${label}</div>`).join('')}</div></div>` : ''}
@@ -1137,9 +1259,10 @@
       </div>
       <div class="product__cta">
         ${stopped ? `<button class="btn btn--dark btn--center" disabled>${Number(p.price) ? 'Закончился' : 'Скоро в продаже'}</button>`
-    : qty ? `<div class="btn btn--dark btn--qty"><button data-dec="${esc(p.id)}" aria-label="Убрать">${ICONS.minus}</button>
-          <span>${rub(qty * p.price)}<i></i>${qty}</span><button data-inc="${esc(p.id)}" aria-label="Добавить">${ICONS.plus}</button></div>`
-      : `<button class="btn btn--dark btn--center" data-inc="${esc(p.id)}">Добавить • ${rub(p.price)}</button>`}
+    : r?.missing.length ? `<button class="btn btn--dark btn--center btn--muted" data-need>Выберите: ${esc(r.missing.join(', '))}</button>`
+      : lineQty ? `<div class="btn btn--dark btn--qty"><button data-dec="${esc(p.id)}" aria-label="Убрать">${ICONS.minus}</button>
+          <span>${rub(lineQty * price)}<i></i>${lineQty}</span><button data-inc="${esc(p.id)}" aria-label="Добавить">${ICONS.plus}</button></div>`
+        : `<button class="btn btn--dark btn--center" data-inc="${esc(p.id)}">Добавить • ${rub(price)}</button>`}
       </div>`;
   }
 
@@ -1148,14 +1271,23 @@
     const r = findProduct(id) ? null : (S.ai.results || []).find((x) => String(x.productId) === String(id));
     const p = findProduct(id) || (r && { id: r.productId, iikoId: r.iikoId, name: r.name, price: r.price, image: r.image, weight: r.weight, description: r.description });
     if (!p) return;
-    const draw = () => productDetailHtml(p);
+    const sel = hasOptions(p) ? initSel(p) : null;
+    const draw = () => productDetailHtml(p, sel);
     openSheet(`<div id="product-sheet">${draw()}</div>`, (sheet) => {
       sheet.addEventListener('click', (e) => {
         const inc = e.target.closest('[data-inc]'); const dec = e.target.closest('[data-dec]'); const nutri = e.target.closest('[data-nutri]');
-        if (inc) changeQty(p, 1); else if (dec) changeQty(p, -1); else if (nutri) S.nutri = nutri.dataset.nutri; else return;
+        const size = e.target.closest('[data-size]'); const mod = e.target.closest('[data-mod]'); const need = e.target.closest('[data-need]');
+        if (sel && (inc || dec)) { const v = resolveSel(p, sel); changeQty(p, inc ? 1 : -1, inc ? { sel: v } : { key: v.key }); }
+        else if (inc) changeQty(p, 1);
+        else if (dec) changeQty(p, -1);
+        else if (nutri) S.nutri = nutri.dataset.nutri;
+        else if (size && sel) { sel.sizeId = size.dataset.size; sel.mods = new Map(); for (const g of groupsFor(p, sel)) fillDefaults(g, sel); }
+        else if (mod && sel) toggleMod(p, sel, mod.dataset.mod, Number(mod.dataset.group));
+        else if (need) { toast(`Выберите: ${resolveSel(p, sel).missing.join(', ')}`, true); return; }
+        else return;
         e.stopPropagation();
         const box = $('#product-sheet'); // шторку могла сменить форма входа за стол
-        if (box) { box.innerHTML = draw(); watchLiveVideos(box); }
+        if (box) { const top = box.closest('.sheet')?.scrollTop; box.innerHTML = draw(); watchLiveVideos(box); if (top != null) box.closest('.sheet').scrollTop = top; }
       });
     }, { cls: 'sheet--product' });
   }
@@ -1640,6 +1772,13 @@
     const t = e.target;
     const goBtn = t.closest('[data-go]');
     if (goBtn) { go(goBtn.dataset.go); return; }
+    const lineInc = t.closest('#app [data-line-inc]'); const lineDec = t.closest('#app [data-line-dec]');
+    if (lineInc || lineDec) {
+      const key = (lineInc || lineDec).dataset.lineInc || (lineInc || lineDec).dataset.lineDec;
+      const line = S.cart[key];
+      if (line) changeQty(line.product, lineInc ? 1 : -1, { key });
+      return;
+    }
     const inc = t.closest('#app [data-inc]'); const dec = t.closest('#app [data-dec]');
     if (inc || dec) {
       const id = (inc || dec).dataset.inc || (inc || dec).dataset.dec;
@@ -1647,6 +1786,8 @@
         const r = (S.ai.results || []).find((x) => String(x.productId) === String(id));
         return r && { id: r.productId, iikoId: r.iikoId, name: r.name, price: r.price, image: r.image, weight: r.weight };
       })();
+      // Блюдо с выбором (размер, соус, основа) добавляется из карточки — там выбор
+      if (product && hasOptions(product)) { openProduct(product.id); return; }
       if (product) changeQty(product, inc ? 1 : -1);
       return;
     }
@@ -1655,7 +1796,7 @@
       // Удалить из корзины всё неотправленное; уже переданное официанту остаётся
       const key = remove.dataset.remove;
       const line = S.cart[key];
-      if (line) changeQty(line.product, lockedQty(key) - line.qty);
+      if (line) changeQty(line.product, lockedQty(key) - line.qty, { key });
       return;
     }
     const banner = t.closest('[data-banner]');
@@ -1762,7 +1903,7 @@
   }
   /** Товары в корзине — актуальными данными меню (цена, стоп, остаток). */
   function syncCartProducts() {
-    for (const [k, l] of Object.entries(S.cart)) { const p = findProduct(k); if (p) S.cart[k] = { ...l, product: p }; }
+    for (const [k, l] of Object.entries(S.cart)) { const p = findProduct(l.product.id); if (p) S.cart[k] = { ...l, product: p }; }
   }
   let catalogTimer = null;
   function startCatalogRefresh() {

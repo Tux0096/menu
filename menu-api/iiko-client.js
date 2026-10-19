@@ -161,6 +161,22 @@ export async function getRestaurantSections(organizationId, terminalGroupId) {
  */
 const servicePrint = () => process.env.IIKO_SERVICE_PRINT !== 'false';
 
+/**
+ * Позиция заказа iiko: блюдо, размер (productSizeId) и модификаторы гостя.
+ * productGroupId — группа модификаторов из внешнего меню (обязательна для групповых модификаторов).
+ */
+function orderItem(item) {
+  const mods = (item.modifiers || []).filter((m) => m.productId && m.amount > 0);
+  return {
+    productId: item.productId,
+    type: 'Product',
+    amount: item.amount,
+    ...(item.productSizeId ? { productSizeId: item.productSizeId } : {}),
+    ...(mods.length ? { modifiers: mods.map((m) => ({ productId: m.productId, amount: m.amount, ...(m.productGroupId ? { productGroupId: m.productGroupId } : {}) })) } : {}),
+    ...(item.comment ? { comment: item.comment } : {}),
+  };
+}
+
 export async function createTableOrder({
   organizationId,
   terminalGroupId,
@@ -173,12 +189,7 @@ export async function createTableOrder({
     terminalGroupId,
     order: {
       tableIds,
-      items: items.map((item) => ({
-        productId: item.productId,
-        type: 'Product',
-        amount: item.amount,
-        ...(item.comment ? { comment: item.comment } : {}),
-      })),
+      items: items.map(orderItem),
       guests: { count: guestCount },
     },
     createOrderSettings: { servicePrint: servicePrint() },
@@ -193,12 +204,7 @@ export async function addItemsToOrder({
   const res = await iikoPost('/api/1/order/add_items', {
     organizationId,
     orderId,
-    items: items.map((item) => ({
-      productId: item.productId,
-      type: 'Product',
-      amount: item.amount,
-      ...(item.comment ? { comment: item.comment } : {}),
-    })),
+    items: items.map(orderItem),
     addOrderItemsSettings: { servicePrint: servicePrint() },
   });
   // Ошибка добавления (заказ закрыт, позиция в стоп-листе) — позиции не помечаем отправленными, официант повторит.

@@ -159,7 +159,9 @@ const tagStyle = (b: string) => {
 };
 const tagLabel = (b: string) => (BADGES[b] || b).replace(/\s*\(.*\)$/, '');
 const setupPoint = ref<NetworkPoint | null>(null);
-const categoriesOpen = ref(false);
+// Подвкладки: блюда (общие карточки) и разделы меню (порядок, названия, картинки шторки «Меню»)
+const view = ref<'dishes' | 'sections'>(route.query.tab === 'sections' ? 'sections' : 'dishes');
+watch(view, (v) => navigateTo({ query: { ...route.query, tab: v === 'sections' ? 'sections' : undefined } }, { replace: true }));
 
 // ---------- общая карточка блюда
 const editItem = ref<NetworkItem | null>(null);
@@ -177,7 +179,6 @@ function openItem(it: NetworkItem, tab: 'card' | 'availability' = 'card') {
       icon="i-heroicons-table-cells"
       description="Одна карточка блюда — на всех точках: фото, описание, метка, КБЖУ. Блюда, цены и стоп-лист приходят из iiko каждой точки (кухня и бар). Нажмите на блюдо, чтобы заполнить карточку; на «в меню: N из M» — чтобы отметить, на каких точках его видят гости."
     >
-      <UButton icon="i-heroicons-photo" color="white" @click="categoriesOpen = true">Картинки разделов</UButton>
       <UButton icon="i-heroicons-arrow-path" color="white" :loading="loading" aria-label="Обновить" @click="load" />
     </PageHeader>
 
@@ -210,6 +211,24 @@ function openItem(it: NetworkItem, tab: 'card' | 'availability' = 'card') {
       </p>
     </div>
 
+    <div class="mb-4 inline-flex rounded-xl bg-white p-1 ring-1 ring-brand-100" role="tablist" aria-label="Раздел меню сети">
+      <button
+        v-for="t in [{ v: 'dishes', l: 'Блюда', i: 'i-heroicons-squares-2x2' }, { v: 'sections', l: 'Разделы меню', i: 'i-heroicons-bars-arrow-down' }] as const"
+        :key="t.v"
+        type="button"
+        role="tab"
+        :aria-selected="view === t.v"
+        class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition"
+        :class="view === t.v ? 'bg-brand-500 text-white' : 'text-slate-600 hover:bg-cream'"
+        @click="view = t.v"
+      >
+        <UIcon :name="t.i" class="h-4 w-4" />{{ t.l }}
+      </button>
+    </div>
+
+    <MenuSections v-if="view === 'sections'" />
+
+    <template v-else>
     <div class="panel-box mb-4 space-y-3 p-3 sm:p-4">
       <div class="flex flex-col gap-2 md:flex-row md:flex-wrap md:items-center">
         <UInput v-model="q" icon="i-heroicons-magnifying-glass" placeholder="Найти блюдо" class="md:w-72" />
@@ -312,8 +331,9 @@ function openItem(it: NetworkItem, tab: 'card' | 'availability' = 'card') {
       </template>
     </div>
 
+    </template>
+
     <NetworkCardEditor :item="editItem" :points="points" :tab="editTab" @close="editItem = null" @saved="load" />
     <PointIikoSetup :point="setupPoint" @close="setupPoint = null" @saved="load" />
-    <MenuCategoriesEditor :open="categoriesOpen" @close="categoriesOpen = false" />
   </div>
 </template>

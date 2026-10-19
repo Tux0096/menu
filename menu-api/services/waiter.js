@@ -8,12 +8,13 @@ import {
 } from '../iiko-client.js';
 import { createWaiterNotification } from './waiter-notifications.js';
 import { getSource, listSources, MAIN, productSourceMap } from './sources.js';
-import { menuIndex, priceLine, stopProblems } from './menu-pricing.js';
+import { menuIndex, priceLine, priceVariant, stopProblems } from './menu-pricing.js';
 import { withSessionMutex } from '../lib/session-mutex.js';
 import {
   getSessionContext,
   getSessionView,
   httpError,
+  lineName,
   lockSession,
   mapSession,
   recalcTotal,
@@ -114,6 +115,9 @@ export async function updateOrder(sessionId, staff, { items = [], guestCount, se
     }
     const index = await menuIndex(ctx.restaurant);
     const newQty = new Map();
+    // Выбор гостя (размер, модификаторы) у неотправленной строки: приложение официанта присылает её id —
+    // берём выбор из прежней строки, если в запросе его нет
+    const prevRow = new Map(ctx.items.filter((x) => !x.is_locked).map((x) => [x.id, x]));
 
     await client.query('DELETE FROM table_order_items WHERE session_id = $1 AND is_locked = FALSE', [sessionId]);
     const nextBatch = Math.max(0, ...ctx.items.filter((i) => i.is_locked).map((i) => i.batch_no)) + 1;
@@ -125,16 +129,24 @@ export async function updateOrder(sessionId, staff, { items = [], guestCount, se
       const key = String(it.iikoProductId);
       newQty.set(key, (newQty.get(key) || 0) + qty);
       // Цена и название — из меню ресторана, не из запроса
-      const { price, name } = priceLine(index, key, { qty, totalQty: newQty.get(key), prevQty: prevQty.get(key) || 0, clientName: it.name });
+      const priced = priceLine(index, key, { qty, totalQty: newQty.get(key), prevQty: prevQty.get(key) || 0, clientName: it.name });
+      // Размер и модификаторы: из запроса, иначе из прежней строки; блюдо без выбора — варианты по умолчанию из iiko
+      const was = it.id ? prevRow.get(it.id) : null;
+      const entry = index.get(key);
+      const sizeId = it.sizeId !== undefined ? it.sizeId : was?.size_id || null;
+      const mods = Array.isArray(it.modifiers) ? it.modifiers : was?.modifiers || [];
+      const v = entry.sizes.length || entry.groups.length || sizeId || mods.length ? priceVariant(entry, key, { sizeId, modifiers: mods }) : null;
+      const price = v ? v.price : priced.price;
       await client.query(
         `INSERT INTO table_order_items
            (session_id, product_id, iiko_product_id, name, price, quantity, line_total, seat_number, course, batch_no, is_locked,
-            guest_id, guest_name, source)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12,$13)`,
-        [sessionId, it.productId || null, it.iikoProductId, name,
+            guest_id, guest_name, source, size_id, size_name, modifiers, options_text)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12,$13,$14,$15,$16,$17)`,
+        [sessionId, it.productId || null, it.iikoProductId, lineName(priced.name, v),
           price, qty, price * qty, it.seatNumber || null, it.course || null, nextBatch,
           guestOf(it.seatNumber)?.id || null, guestOf(it.seatNumber)?.name || null,
-          sources.get(String(it.iikoProductId)) || 'main'],
+          sources.get(String(it.iikoProductId)) || 'main',
+          v?.sizeId || null, v?.sizeName || null, v?.mods.length ? JSON.stringify(v.mods) : null, v?.text || null],
       );
     }
     await recalcTotal(client, sessionId);
@@ -219,6 +231,9 @@ async function sendToKitchenNow(sessionId, staff) {
           .map((i) => ({
             productId: i.iiko_product_id,
             amount: i.quantity,
+            // Размер и модификаторы гостя (из внешнего меню iiko): iiko сам считает их цену
+            productSizeId: i.size_id || undefined,
+            modifiers: (i.modifiers || []).map((m) => ({ productId: m.id, amount: m.amount, productGroupId: m.groupId || undefined })),
             comment: [i.guest_name || null, i.seat_number ? `место ${i.seat_number}` : null, i.course ? `курс ${i.course}` : null]
               .filter(Boolean).join(', ') || undefined,
           }));
