@@ -1,4 +1,5 @@
 /** Публичное API: рестораны, меню, конфиг гостевого меню, QR, картинки, проверка здоровья. */
+import { createHash } from 'crypto';
 import express from 'express';
 import { h } from '../lib/http.js';
 import pool from '../db/pool.js';
@@ -47,7 +48,23 @@ router.get('/api/v1/restaurants/:slug', h(async (req) => {
   return { id: r.id, name: r.name, address: r.address, slug: r.slug, phone: r.phone, tablesCount: r.tables_count };
 }));
 
-router.get('/api/v1/restaurants/:slug/catalog', h(async (req) => getRestaurantCatalog(await resolveRestaurant(req.params.slug))));
+// Каталог гостя: готовый JSON и ETag по содержимому (без времени выгрузки) — повторный запрос без изменений
+// получает 304 без пересборки и без 80 КБ трафика
+const catalogJson = new WeakMap();
+router.get('/api/v1/restaurants/:slug/catalog', h(async (req, res) => {
+  const catalog = await getRestaurantCatalog(await resolveRestaurant(req.params.slug));
+  let ready = catalogJson.get(catalog);
+  if (!ready) {
+    const body = JSON.stringify(catalog);
+    const { fetchedAt, ...content } = catalog;
+    ready = { body, etag: `"c-${createHash('sha1').update(JSON.stringify(content)).digest('base64url').slice(0, 20)}"` };
+    catalogJson.set(catalog, ready);
+  }
+  res.set('ETag', ready.etag);
+  res.set('Cache-Control', 'no-cache');
+  if (req.get('If-None-Match') === ready.etag) return res.status(304).end();
+  res.type('json').send(ready.body);
+}));
 
 router.get('/api/v1/config', h(async (req) => {
   const r = await resolveRestaurant(req.query.restaurant);

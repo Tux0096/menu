@@ -12,6 +12,7 @@ import { listSources } from '../services/sources.js';
 import { paySettingsForAdmin, savePaySettings } from '../services/payments.js';
 import { listStopLists, refreshStopLists } from '../services/stoplist.js';
 import { getRestaurantCatalog, invalidateCatalogCache } from '../services/catalog.js';
+import { bumpCatalogVersion } from '../lib/catalog-version.js';
 import { audit, listStaff, saveStaff, staffAuth } from '../services/staff-auth.js';
 import {
   deleteOverride, deleteRow, getAdminMenu, listAudit, listFeedback, listRestaurants, listRows, saveOverride, saveRow,
@@ -37,6 +38,11 @@ const CONTENT_ROUTES = [['GET', /^\/menu$/], ['*', /^\/network-menu/], ['GET', /
 admin.use((req, res, next) => {
   const content = CONTENT_ROUTES.some(([m, re]) => (m === '*' || m === req.method) && re.test(req.path));
   return staffAuth('admin', content ? ['marketing'] : [])(req, res, next);
+});
+// Любая успешная правка в админке может менять то, что видит гость, — сбрасываем готовый каталог
+admin.use((req, res, next) => {
+  if (req.method !== 'GET') res.on('finish', () => { if (res.statusCode < 400) bumpCatalogVersion(); });
+  next();
 });
 admin.get('/menu', h(async (req) => getAdminMenu(await staffRestaurant(req), { force: req.query.refresh === '1' })));
 

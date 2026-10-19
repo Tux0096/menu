@@ -1,6 +1,7 @@
 /**
  * Доступ персонала к ресторанам и визитам: сотрудник, привязанный к ресторану, работает только в нём.
  */
+import { uuidOrNull } from './uuid.js';
 import pool from '../db/pool.js';
 import { httpError } from './http.js';
 import { QR_RESTAURANT_SLUG } from './qr-config.js';
@@ -32,7 +33,7 @@ export async function staffRestaurant(req) {
 /** Визит доступен сотруднику: привязанный к ресторану видит только визиты своего ресторана */
 export async function assertStaffSession(req, sessionId) {
   const own = req.staff?.restaurantId;
-  const { rows } = await pool.query('SELECT restaurant_id FROM table_sessions WHERE id::text = $1', [String(sessionId)]);
+  const { rows } = await pool.query('SELECT restaurant_id FROM table_sessions WHERE id = $1', [uuidOrNull(sessionId)]);
   if (!rows[0] || (own && rows[0].restaurant_id !== own)) throw httpError(404, 'Визит не найден');
 }
 

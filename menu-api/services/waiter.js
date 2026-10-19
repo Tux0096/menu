@@ -14,6 +14,7 @@ import { menuIndex, priceLine, priceVariant, stopProblems } from './menu-pricing
 import { withSessionMutex } from '../lib/session-mutex.js';
 import {
   getSessionContext,
+  getSessionContexts,
   getSessionView,
   httpError,
   lineName,
@@ -39,12 +40,7 @@ export async function listActiveSessions(restaurantId) {
        updated_at DESC`,
     [restaurantId],
   );
-  const result = [];
-  for (const row of rows) {
-    const ctx = await getSessionContext(row.id);
-    if (ctx) result.push(mapSession(ctx));
-  }
-  return result;
+  return (await getSessionContexts(rows.map((r) => r.id))).map((ctx) => mapSession(ctx));
 }
 
 function assertEditable(ctx, staff) {

@@ -11,12 +11,24 @@
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon.svg">
   <title>Фуджи — меню</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <!-- Шрифт не задерживает показ меню: страница рисуется сразу системным, затем подменяется -->
-  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Wix+Madefor+Display:wght@400;500;600;700&display=swap" onload="this.onload=null;this.rel='stylesheet'">
-  <noscript><link href="https://fonts.googleapis.com/css2?family=Wix+Madefor+Display:wght@400;500;600;700&display=swap" rel="stylesheet"></noscript>
+  <!-- Шрифт со своего сервера (без запросов к Google): кириллица — заранее, показ не ждёт (font-display: swap) -->
+  <link rel="preload" as="font" type="font/woff2" href="/ui/fonts/wix-madefor-display-cyrillic.woff2" crossorigin>
   <link rel="stylesheet" href="/app.css">
+  <script>
+    // Меню начинает грузиться сразу, параллельно со скриптом приложения: на медленной сети — на секунду раньше
+    (function () {
+      try {
+        var q = new URLSearchParams(location.search);
+        var slug = q.get('restaurant') || q.get('r') || JSON.parse(localStorage.getItem('fm:restaurant') || 'null');
+        if (!slug || !window.fetch) return;
+        window.__catalogEarly = {
+          slug: slug,
+          p: fetch('/api/v1/restaurants/' + encodeURIComponent(slug) + '/catalog')
+            .then(function (r) { return r.ok ? r.json() : null; }).catch(function () { return null; }),
+        };
+      } catch (e) { /* без ранней загрузки меню загрузит приложение */ }
+    })();
+  </script>
 </head>
 <body>
   <div id="app" class="app">

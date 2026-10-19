@@ -529,6 +529,8 @@ const SOFT_INDEXES = [
      WHERE a.session_id = b.session_id AND a.status = 'completed' AND b.status = 'completed'
        AND a.method <> 'cloudpayments' AND b.method <> 'cloudpayments'
        AND (a.created_at, a.id::text) > (b.created_at, b.id::text)`,
+  // Поиск блюда по ID из iiko в тексте (карточки админки, стоп-лист, кассы) — по индексу, а не перебором
+  'CREATE INDEX IF NOT EXISTS idx_products_iiko_text ON products ((iiko_id::text))',
   // Стоп-лист по кассе и размеру: старый ключ (точка + товар) смешивал кухню и бар
   'ALTER TABLE stop_lists DROP CONSTRAINT IF EXISTS stop_lists_pkey',
   'CREATE UNIQUE INDEX IF NOT EXISTS idx_stop_lists_key ON stop_lists(restaurant_id, source, product_id, size_key)',

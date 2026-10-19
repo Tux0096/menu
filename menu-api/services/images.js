@@ -7,7 +7,7 @@ import axios from 'axios';
 import { createHash } from 'crypto';
 import { lookup as dnsLookup } from 'dns';
 import { isIP } from 'net';
-import { mkdir, readFile, rename, writeFile } from 'fs/promises';
+import { mkdir, readdir, readFile, rename, stat, unlink, utimes, writeFile } from 'fs/promises';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import sharp from 'sharp';
@@ -117,31 +117,81 @@ async function sourceBytes(url) {
   return Buffer.from(data);
 }
 
+// Версия настроек сжатия в ключе кэша: сменили настройки — файлы пересоберутся (прогрев после запуска)
+const ENCODE_VERSION = 'v2';
+const cacheFile = (url, w) => join(CACHE_DIR, `${createHash('sha1').update(`${url}|${w}|${ENCODE_VERSION}`).digest('hex')}.webp`);
+
+// Не больше трёх пережатий одновременно: всплеск новых фото не съедает память и процессор сервера
+let running = 0;
+const waiting = [];
+async function withSlot(fn) {
+  if (running >= 3) await new Promise((r) => waiting.push(r));
+  running += 1;
+  try { return await fn(); } finally { running -= 1; waiting.shift()?.(); }
+}
+
+/**
+ * Сжатие: WebP 70 и прозрачность 80 — на фото блюд без фона на 23% легче прежних 78/4 при том же виде.
+ * limitInputPixels — защита от огромных загрузок (до ~40 Мп).
+ */
+async function encode(data, w, animated) {
+  return withSlot(() => sharp(data, { failOn: 'none', animated, limitInputPixels: 40_000_000 })
+    .rotate()
+    .resize({ width: w, withoutEnlargement: true })
+    .webp({ quality: 70, alphaQuality: 80, effort: 5 })
+    .toBuffer());
+}
+const isAnimated = async (url, data) => /\.gif(\?|$)/i.test(url)
+  || (await sharp(data, { failOn: 'none', limitInputPixels: 40_000_000 }).metadata().catch(() => ({}))).pages > 1;
+
+async function store(file, out) {
+  await mkdir(CACHE_DIR, { recursive: true });
+  const tmp = `${file}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  await writeFile(tmp, out);
+  await rename(tmp, file);
+}
+
 /** WebP нужной ширины: из кэша на диске или скачать оригинал и уменьшить. Анимация (GIF/WebP) сохраняется. */
 export async function resizedImage(url, width) {
   const w = pickWidth(width);
-  const file = join(CACHE_DIR, `${createHash('sha1').update(`${url}|${w}`).digest('hex')}.webp`);
+  const file = cacheFile(url, w);
   try {
-    return await readFile(file);
+    const buf = await readFile(file);
+    touch(file);
+    return buf;
   } catch {}
   const key = file;
   if (inflight.has(key)) return inflight.get(key);
   const job = (async () => {
     const data = await sourceBytes(url);
-    const animated = /\.gif(\?|$)/i.test(url) || (await sharp(data, { failOn: 'none' }).metadata().catch(() => ({}))).pages > 1;
-    const out = await sharp(data, { failOn: 'none', animated })
-      .rotate()
-      .resize({ width: w, withoutEnlargement: true })
-      .webp({ quality: 78, effort: 4 })
-      .toBuffer();
-    await mkdir(CACHE_DIR, { recursive: true });
-    const tmp = `${file}.${process.pid}.tmp`;
-    await writeFile(tmp, out);
-    await rename(tmp, file);
+    const out = await encode(data, w, await isAnimated(url, data));
+    await store(file, out);
     return out;
   })().finally(() => inflight.delete(key));
   inflight.set(key, job);
   return job;
+}
+
+// Отметка «файл нужен»: кэш, которым давно не пользовались (фото удалённых блюд), чистится раз в сутки
+const touched = new Set();
+function touch(file) {
+  if (touched.has(file)) return;
+  touched.add(file);
+  if (touched.size > 20000) touched.clear();
+  const now = new Date();
+  utimes(file, now, now).catch(() => {});
+}
+
+export async function pruneImageCache(maxAgeDays = 45) {
+  let removed = 0;
+  const limit = Date.now() - maxAgeDays * 86_400_000;
+  for (const name of await readdir(CACHE_DIR).catch(() => [])) {
+    const f = join(CACHE_DIR, name);
+    const st = await stat(f).catch(() => null);
+    if (st && st.mtimeMs < limit) { await unlink(f).catch(() => {}); removed += 1; }
+  }
+  if (removed) console.log(`Кэш картинок: удалено ${removed} старых файлов`);
+  return removed;
 }
 
 /** Express-обработчик GET /img?u=<url>&w=<ширина>. */
@@ -160,19 +210,35 @@ export async function imageHandler(req, res) {
   }
 }
 
-/** После запуска и выгрузки меню: заранее готовим картинки, чтобы первый гость не ждал. */
-export async function warmImages({ widths = [320, 480, 720, 1280], concurrency = 3 } = {}) {
+/**
+ * После запуска и выгрузки меню: заранее готовим картинки всех размеров, чтобы первый гость не ждал.
+ * Оригинал скачивается один раз на все недостающие размеры.
+ */
+export async function warmImages({ widths = IMG_WIDTHS, concurrency = 3 } = {}) {
   const urls = [...await allowedUrls()].filter((u) => /^https?:\/\//i.test(u) || MEDIA_RE.test(u));
   let i = 0;
   let done = 0;
   const worker = async () => {
     while (i < urls.length) {
       const u = urls[i++];
+      const missing = [];
       for (const w of widths) {
-        try { await resizedImage(u, w); done++; } catch {}
+        const file = cacheFile(u, w);
+        if (await stat(file).then(() => true, () => false)) { touch(file); done++; } else missing.push([w, file]);
       }
+      if (!missing.length) continue;
+      try {
+        const data = await sourceBytes(u);
+        const animated = await isAnimated(u, data);
+        for (const [w, file] of missing) {
+          if (inflight.has(file)) { await inflight.get(file).catch(() => {}); done++; continue; }
+          await store(file, await encode(data, w, animated));
+          done++;
+        }
+      } catch {}
     }
   };
   await Promise.all(Array.from({ length: concurrency }, worker));
   if (urls.length) console.log(`Картинки меню: готово ${done} из ${urls.length * widths.length}`);
+  await pruneImageCache().catch(() => {});
 }

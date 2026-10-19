@@ -5,6 +5,7 @@
  *   is_locked = FALSE — черновик гостя / дозаказ, ещё не отправлен на кухню;
  *   is_locked = TRUE  — отправлено в iiko, гость не может убрать.
  */
+import { uuidOrNull } from '../lib/uuid.js';
 import pool from '../db/pool.js';
 import { isValidQrKey, QR_RESTAURANT_SLUG, QR_SIGNED_REQUIRED } from '../lib/qr-config.js';
 import {
@@ -94,6 +95,33 @@ export async function resolveIikoTableId(restaurant, tableNumber, source = 'main
 
 // ── Чтение сессии ───────────────────────────────────────────────────────────
 
+/** Несколько визитов сразу (зал официанта): 4 запроса на все столы вместо 4 на каждый. */
+export async function getSessionContexts(ids) {
+  if (!ids.length) return [];
+  const { rows: sessions } = await pool.query(
+    `SELECT s.*, g.name AS guest_name, g.phone AS guest_phone, g.visits_count AS guest_visits
+     FROM table_sessions s LEFT JOIN guests g ON g.id = s.guest_id WHERE s.id = ANY($1::uuid[])`,
+    [ids],
+  );
+  const { rows: rr } = await pool.query('SELECT * FROM restaurants WHERE id = ANY($1::uuid[])',
+    [[...new Set(sessions.map((x) => x.restaurant_id))]]);
+  const { rows: items } = await pool.query(
+    'SELECT * FROM table_order_items WHERE session_id = ANY($1::uuid[]) ORDER BY batch_no, created_at', [ids],
+  );
+  const guestIds = [...new Set(sessions.flatMap((x) => x.guest_ids || []))];
+  const { rows: guests } = guestIds.length
+    ? await pool.query('SELECT id, name FROM guests WHERE id = ANY($1::uuid[])', [guestIds]) : { rows: [] };
+  const restaurantOf = new Map(rr.map((r) => [r.id, r]));
+  const guestOf = new Map(guests.map((g) => [g.id, g]));
+  const byId = new Map(sessions.map((session) => [session.id, {
+    session,
+    restaurant: restaurantOf.get(session.restaurant_id),
+    items: items.filter((i) => i.session_id === session.id),
+    guests: (session.guest_ids || []).map((id) => guestOf.get(id)).filter(Boolean),
+  }]));
+  return ids.map((id) => byId.get(id)).filter(Boolean);
+}
+
 export async function getSessionContext(sessionId, client = pool) {
   const { rows } = await client.query(
     `SELECT s.*, g.name AS guest_name, g.phone AS guest_phone, g.visits_count AS guest_visits
@@ -125,7 +153,7 @@ export function tableGuests(ctx) {
 
 /** Гость может работать только со столом, к которому присоединился. */
 export async function assertGuestAtTable(sessionId, guestId) {
-  const { rows } = await pool.query('SELECT guest_ids FROM table_sessions WHERE id::text = $1', [String(sessionId)]);
+  const { rows } = await pool.query('SELECT guest_ids FROM table_sessions WHERE id = $1', [uuidOrNull(sessionId)]);
   if (!rows[0]) throw httpError(404, 'Визит не найден — отсканируйте QR-код ещё раз');
   if (!(rows[0].guest_ids || []).includes(guestId)) {
     throw httpError(403, 'Вы не присоединились к этому столу — отсканируйте QR-код ещё раз', { code: 'NOT_AT_TABLE' });

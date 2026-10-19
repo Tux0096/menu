@@ -8,6 +8,7 @@ import pool from '../db/pool.js';
 import { cleanMenuName, menuKey } from '../lib/menu-key.js';
 import { orderGroups } from './menu-order.js';
 import { getStopIndex } from './stoplist.js';
+import { bumpCatalogVersion, catalogVersion } from '../lib/catalog-version.js';
 
 const TTL_MS = parseInt(process.env.CATALOG_TTL_MS || '300000', 10);
 const rawCache = new Map(); // restaurantId -> { at, source, data }
@@ -363,7 +364,19 @@ function applyOverride(product, o) {
  * Каталог для гостя: { products, groups, stopList: string[], source }.
  * Позиции из стоп-листа остаются видимыми (гость видит их, но не может заказать).
  */
+const built = new Map(); // restaurantId -> { at, version, result }
+const BUILT_TTL_MS = 15_000;
+
 export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
+  const hit = built.get(restaurant.id);
+  if (!force && hit && hit.version === catalogVersion() && Date.now() - hit.at < BUILT_TTL_MS) return hit.result;
+  const version = catalogVersion();
+  const result = await buildRestaurantCatalog(restaurant, { force });
+  built.set(restaurant.id, { at: Date.now(), version, result });
+  return result;
+}
+
+async function buildRestaurantCatalog(restaurant, { force = false } = {}) {
   const raw = await loadRawCatalog(restaurant, { force });
   const [overrides, byName, iikoStop, catSettings, modContent] = await Promise.all([
     getOverrides(restaurant.id),
@@ -468,6 +481,7 @@ export async function getAvailableProducts(restaurant) {
 }
 
 export function invalidateCatalogCache(restaurantId = null) {
+  bumpCatalogVersion();
   if (restaurantId) {
     rawCache.delete(restaurantId);
   } else {

@@ -62,7 +62,7 @@
     if (g.image) return imgSrc(g.image, 200);
     const name = String(g.name || '').toLowerCase();
     const hit = CAT_IMAGES.find(([k]) => name.includes(k));
-    return hit ? UI(`cats/${hit[1]}.png`) : null;
+    return hit ? UI(`cats/${hit[1]}.webp`) : null;
   };
   /** Вес порции в граммах (для КБЖУ «на блюдо»): «235 г», «0,3 кг»; иначе null. */
   const gramsOf = (w) => {
@@ -112,7 +112,9 @@
     }
     // Фото проявляется плавно один раз; загруженные и битые адреса запоминаются, чтобы перерисовка не мигала
     const ok = src && !IMG_BROKEN.has(src);
-    return `<div class="${cls}">${ok ? `<img src="${esc(src)}"${srcset} alt="" ${lazy} decoding="async" class="${IMG_LOADED.has(src) ? 'is-loaded' : ''}" onload="fujiImgLoaded(this)" onerror="fujiImgFailed(this)">` : emojiFor(p)}</div>`;
+    // Карточка блюда: пока грузится большое фото, видно уже скачанное маленькое из списка (без белого экрана)
+    const preview = hero && ok && proxied(p.image) ? ` style="--preview:url('${esc(imgSrc(p.image, 480))}')"` : '';
+    return `<div class="${cls}${preview ? ' has-preview' : ''}"${preview}>${ok ? `<img src="${esc(src)}"${srcset} alt="" ${lazy} decoding="async" class="${IMG_LOADED.has(src) ? 'is-loaded' : ''}" onload="fujiImgLoaded(this)" onerror="fujiImgFailed(this)">` : emojiFor(p)}</div>`;
   };
   const IMG_LOADED = new Set();
   const IMG_BROKEN = new Set();
@@ -520,7 +522,7 @@
     const count = cartCount();
     const item = (key, label, attr, iconName) => {
       const active = S.tab === key;
-      const icon = key === 'ai' ? `<img src="${UI('nav-ai.png')}" alt="" class="nav__orb">`
+      const icon = key === 'ai' ? `<img src="${UI('nav-ai.webp')}" alt="" class="nav__orb">`
         : `<img src="${UI(`nav-${iconName}${active ? '-active' : ''}.svg`)}" alt="">`;
       return `<button class="nav__item ${active ? 'is-active' : ''}" ${attr} aria-label="${label}">
         <span class="nav__icon nav__icon--${key}">${icon}${key === 'order' && count ? `<span class="badge" data-key="badge-${count}">${count}</span>` : ''}</span><span class="nav__label">${label}</span></button>`;
@@ -780,9 +782,9 @@
       }).join('')}</div>`;
     }
     const head = hasResults
-      ? `<section class="ai-head"><img class="ai-head__orb ${loading ? 'is-thinking' : ''}" src="${UI('ai-orb.png')}" alt="">
+      ? `<section class="ai-head"><img class="ai-head__orb ${loading ? 'is-thinking' : ''}" src="${UI('ai-orb.webp')}" alt="">
           <div><div class="ai-head__title">Fuji AI</div><div class="ai-head__sub">${esc(loading ? 'Подбираю…' : error ? 'Не получилось' : (S.ai.label || 'Вот что я подобрал:'))}</div></div></section>`
-      : `<section class="ai-hero"><img class="ai-orb" src="${UI('ai-orb.png')}" alt="">
+      : `<section class="ai-hero"><img class="ai-orb" src="${UI('ai-orb.webp')}" alt="">
           <h1>Спросите Fuji AI</h1><div class="ai-hero__hello">${esc(hello)}</div></section>`;
     return `${topbar()}<main class="screen screen--center screen--ai">
       ${head}
@@ -916,7 +918,7 @@
 
   function renderMenu() {
     if (!S.catalog && S.catalogError) {
-      return `${topbar()}<main class="screen"><div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.png')}" alt="">
+      return `${topbar()}<main class="screen"><div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.webp')}" alt="">
         <div class="empty__title">Меню не загрузилось</div><div>${esc(S.catalogError)}</div>
         <button class="btn btn--dark btn--center empty__btn" data-action="reload-catalog">Повторить</button></div></main>`;
     }
@@ -935,10 +937,10 @@
       ${sections.length ? sections.map((s, i) => `<h2 class="section-title" id="cat-${esc(s.id)}">${esc(s.name)}</h2>
         <div class="list ${i === sections.length - 1 && !S.menu.search ? 'list--last' : ''}">${s.items.map((p) => dishCard(p)).join('')}</div>`).join('')
     : S.catalog.products?.length
-      ? `<div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.png')}" alt="">
+      ? `<div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.webp')}" alt="">
           <div class="empty__title">Ничего не нашлось</div><div>Спросите Fuji AI — он подберёт похожее</div>
           <button class="btn btn--dark btn--center empty__btn" data-action="ask-ai-search">Спросить AI: «${esc(S.menu.search.trim().slice(0, 40))}»</button></div>`
-      : `<div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.png')}" alt="">Меню ресторана ещё загружается из iiko.<br>Загляните чуть позже или позовите официанта.</div>`}
+      : `<div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.webp')}" alt="">Меню ресторана ещё загружается из iiko.<br>Загляните чуть позже или позовите официанта.</div>`}
     </main>`;
   }
 
@@ -1881,7 +1883,11 @@
     }
     catalogBusy = true;
     try {
-      const fresh = await api('GET', `/api/v1/restaurants/${encodeURIComponent(S.restaurant || '')}/catalog`, null, { timeout: 20000 });
+      // Первый раз — меню, которое страница начала грузить ещё до приложения (index.html)
+      const early = window.__catalogEarly;
+      window.__catalogEarly = null;
+      const fresh = (early && early.slug === S.restaurant && await early.p)
+        || await api('GET', `/api/v1/restaurants/${encodeURIComponent(S.restaurant || '')}/catalog`, null, { timeout: 20000 });
       S.catalog = fresh;
       S.catalogError = null;
       saveCatalogCopy(fresh);
