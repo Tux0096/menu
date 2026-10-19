@@ -72,6 +72,9 @@
       headers: { 'Content-Type': 'application/json', ...(S.token ? { Authorization: `Bearer ${S.token}` } : {}) },
       body: body ? JSON.stringify(body) : undefined,
     });
+    // Сервер продлил вход (смена дольше 12 часов) — запоминаем новый токен
+    const fresh = res.headers.get('X-Staff-Token');
+    if (fresh && S.token && fresh !== S.token) { S.token = fresh; ls.set('token', fresh); }
     const data = await res.json().catch(() => ({}));
     if (res.status === 401 && S.token) { logout(); throw new Error('Сессия истекла — войдите снова'); }
     if (!res.ok) { const e = new Error(data.error || `Ошибка ${res.status}`); e.status = res.status; e.code = data.code; throw e; }
