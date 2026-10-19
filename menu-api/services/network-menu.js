@@ -43,6 +43,8 @@ async function pointInfo(r, allowed, catalog) {
   };
 }
 
+const CARD_EXTRA = ['video', 'weight', 'energy', 'proteins', 'fats', 'carbs', 'allergens', 'recommended', 'choices'];
+
 export async function getNetworkMenu(restaurants) {
   const allowed = await accessibleOrgIds().catch(() => null);
   const points = [];
@@ -60,6 +62,8 @@ export async function getNetworkMenu(restaurants) {
     if (!it.description && extra.description) it.description = extra.description;
     if (!it.badge && extra.badge) it.badge = extra.badge;
     if (!it.cardSize && extra.cardSize) it.cardSize = extra.cardSize;
+    // Остальное содержимое карточки (вес, КБЖУ, аллергены…) — чтобы редактор открывался заполненным
+    for (const k of CARD_EXTRA) if (it[k] == null && extra[k] != null && extra[k] !== '') it[k] = extra[k];
   };
 
   const catalogs = new Map();
@@ -90,6 +94,19 @@ export async function getNetworkMenu(restaurants) {
         description: p.description || null,
         badge: p.badge || null,
         cardSize: p.cardSize || null,
+        video: p.video || null,
+        weight: p.weight || null,
+        energy: p.energyAmount ?? null,
+        proteins: p.fiberAmount ?? null,
+        fats: p.fatAmount ?? null,
+        carbs: p.carbohydrateAmount ?? null,
+        allergens: [...new Set([...(p.allergensText || []), ...(p.allergens || []).map((a) => a?.name || a)].filter(Boolean))].join(', ') || null,
+        recommended: p.isRecommended ? true : null,
+        // Что гость выбирает в блюде (размер, соус, основа) — из iiko; настраивается во вкладке «Модификаторы»
+        choices: [
+          ...((p.sizes || []).length > 1 ? ['Размер'] : []),
+          ...(p.modifierGroups || []).map((g) => g.name).filter(Boolean),
+        ].join(', ') || null,
       });
     }
     // Скрытые в админке (в каталоге их нет): берём цену и раздел из выгрузки iiko

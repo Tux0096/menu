@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import pool from '../db/pool.js';
 import { createLimiter, httpError, sendError } from '../lib/http.js';
 import { hashPassword, signToken, verifyPassword, verifyToken } from '../lib/passwords.js';
@@ -162,7 +163,9 @@ export async function listStaff(actor = null) {
 }
 
 export async function saveStaff(data, actor = null) {
-  const login = String(data.login || '').trim().toLowerCase();
+  // Официант входит по PIN: логин и пароль ему не обязательны — логин создаётся сам, пароль случайный (входа по нему нет)
+  const pinOnly = data.role === 'waiter' && !data.id && !String(data.login || '').trim();
+  const login = pinOnly ? `waiter-${randomBytes(4).toString('hex')}` : String(data.login || '').trim().toLowerCase();
   if (!login || !data.name || !ROLES.has(data.role)) throw httpError(400, 'Логин, имя и роль обязательны');
   // Администратор одного ресторана не может завести сотрудника «на все рестораны» или править чужих
   const own = actor?.restaurantId || null;
@@ -192,11 +195,14 @@ export async function saveStaff(data, actor = null) {
     staffCache.delete(data.id);
     return mapStaff(rows[0]);
   }
-  if (!data.password) throw httpError(400, 'Задайте пароль');
+  if (data.role === 'waiter' && !pin) throw httpError(400, 'Официанту нужен PIN — по нему он входит в терминал');
+  if (data.role === 'waiter' && !restaurantId) throw httpError(400, 'Выберите ресторан официанта — PIN действует в своём ресторане');
+  if (!data.password && !(data.role === 'waiter')) throw httpError(400, 'Задайте пароль');
+  const password = data.password || randomBytes(24).toString('hex');
   const { rows } = await pool.query(
     `INSERT INTO staff_users (login, name, role, restaurant_id, password_hash, pin_hash)
      VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-    [login, String(data.name).slice(0, 100), data.role, restaurantId, hashPassword(data.password), pinHash],
+    [login, String(data.name).slice(0, 100), data.role, restaurantId, hashPassword(password), pinHash],
   ).catch((e) => {
     if (e.code === '23505') throw httpError(409, 'Такой логин уже есть');
     throw e;

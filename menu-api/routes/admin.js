@@ -122,6 +122,23 @@ admin.post('/network-menu/availability', h(async (req) => {
   audit(req.staff, 'menu.availability', 'product', req.body.productId, { restaurant: r.slug, available, name: req.body.productName });
   return { ok: true };
 }));
+// Массово: показать или скрыть отмеченные блюда (каждое — на точках, где оно есть). Одним запросом, до 300 позиций
+admin.post('/network-menu/availability/batch', h(async (req) => {
+  const list = Array.isArray(req.body?.items) ? req.body.items.slice(0, 300) : [];
+  if (!list.length) throw httpError(400, 'Отметьте блюда');
+  const available = req.body.available !== false;
+  const byPoint = new Map();
+  let updated = 0;
+  for (const x of list) {
+    if (!x?.restaurant || !x?.productId) continue;
+    if (!byPoint.has(x.restaurant)) byPoint.set(x.restaurant, await staffRestaurantBySlug(req, x.restaurant));
+    const r = byPoint.get(x.restaurant);
+    await saveOverride(r.id, String(x.productId), { is_hidden: !available, product_name: x.productName });
+    updated++;
+  }
+  audit(req.staff, 'menu.availability', 'product', 'batch', { available, count: updated, points: [...byPoint.keys()] });
+  return { ok: true, updated };
+}));
 // Карточка позиции сразу на нескольких точках: у каждой точки свой ID блюда в iiko
 admin.post('/network-menu/card', h(async (req) => {
   requireBody(req.body, 'targets');

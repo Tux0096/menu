@@ -81,12 +81,15 @@ function edit(u?: Staff) {
   takeSnapshot();
 }
 
+// Новый официант — только имя, ресторан и PIN: логин и пароль ему не нужны (входит по PIN)
+const waiterPinOnly = computed(() => form.role === 'waiter' && !form.id);
 const error = computed(() => {
   if (!form.name.trim()) return 'Впишите имя';
-  if (!form.login.trim()) return 'Впишите логин';
-  if (!form.id && !form.password) return 'Задайте пароль';
+  if (!waiterPinOnly.value && !form.login.trim()) return 'Впишите логин';
+  if (!form.id && !form.password && form.role !== 'waiter') return 'Задайте пароль';
   if (form.pin && !/^\d{4,6}$/.test(form.pin)) return 'PIN — 4–6 цифр';
-  if (form.role === 'waiter' && !form.id && !form.pin) return 'Официанту нужен PIN — по нему он входит в приложение';
+  if (form.role === 'waiter' && !form.id && !form.pin) return 'Официанту нужен PIN — по нему он входит в терминал';
+  if (form.role === 'waiter' && !form.restaurantId && rests.value.length > 1) return 'Выберите ресторан официанта — PIN действует в своём ресторане';
   return '';
 });
 
@@ -102,7 +105,7 @@ async function save() {
       name: form.name.trim(),
       login: form.login.trim(),
       role: form.role,
-      restaurantId: form.restaurantId,
+      restaurantId: form.restaurantId || (form.role === 'waiter' && rests.value.length === 1 ? rests.value[0]!.id : ''),
       isActive: form.isActive,
       clearPin: form.clearPin,
     };
@@ -179,16 +182,16 @@ function randomPin() {
         <form class="space-y-4" @submit.prevent="save">
           <div class="grid gap-4 sm:grid-cols-2">
             <UFormGroup label="Имя" required><UInput v-model="form.name" autofocus /></UFormGroup>
-            <UFormGroup label="Логин" required><UInput v-model="form.login" autocomplete="off" /></UFormGroup>
+            <UFormGroup v-if="!waiterPinOnly" label="Логин" required><UInput v-model="form.login" autocomplete="off" /></UFormGroup>
             <UFormGroup label="Роль"><USelect v-model="form.role" :options="roleOptions" /></UFormGroup>
             <UFormGroup label="Ресторан"><USelect v-model="form.restaurantId" :options="restaurantOptions" /></UFormGroup>
           </div>
           <p class="rounded-xl bg-cream p-3 text-xs text-slate-600">{{ ROLE_INFO[form.role] }}</p>
           <div class="grid gap-4 sm:grid-cols-2">
-            <UFormGroup :label="form.id ? 'Новый пароль' : 'Пароль'" :required="!form.id" :help="form.id ? 'Пусто — не менять' : undefined">
+            <UFormGroup v-if="!waiterPinOnly" :label="form.id ? 'Новый пароль' : 'Пароль'" :required="!form.id" :help="form.id ? 'Пусто — не менять' : undefined">
               <UInput v-model="form.password" type="password" autocomplete="new-password" />
             </UFormGroup>
-            <UFormGroup label="PIN для приложения официанта" :help="form.hasPin ? 'Задан. Пусто — не менять' : '4–6 цифр, у каждого свой'">
+            <UFormGroup label="PIN для терминала официанта" :help="form.hasPin ? 'Задан. Пусто — не менять' : '4–6 цифр, у каждого свой'">
               <UInput v-model="form.pin" inputmode="numeric" :maxlength="6" autocomplete="off" :placeholder="form.hasPin ? 'PIN задан' : ''" :disabled="form.clearPin">
                 <template #trailing>
                   <UButton size="2xs" color="gray" variant="link" :padded="false" :disabled="form.clearPin" @click="randomPin">случайный</UButton>

@@ -1258,7 +1258,7 @@
     const fmt = (v) => (Math.round(v * k * 10) / 10).toLocaleString('ru-RU');
     const nutri = [['Белки', p.fiberAmount], ['Жиры', p.fatAmount], ['Углеводы', p.carbohydrateAmount], ['Ккал', p.energyAmount]]
       .filter(([, v]) => v != null);
-    const allergens = [...(p.allergensText || []), ...(p.allergens || []).map((a) => a.name || a)].filter(Boolean);
+    const allergens = [...new Set([...(p.allergensText || []), ...(p.allergens || []).map((a) => a.name || a)].filter(Boolean))];
     const r = sel ? resolveSel(p, sel) : null;
     const lineQty = r ? S.cart[r.key]?.qty || 0 : S.cart[String(p.id)]?.qty || 0;
     const qty = qtyOf(p);

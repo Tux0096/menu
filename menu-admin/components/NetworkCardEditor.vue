@@ -40,7 +40,14 @@ watch(
     tab.value = props.tab ?? 'card';
     previewSlug.value = '';
     // Своё название — только если отличается от названия в iiko; пусто — гость видит название из iiko
-    Object.assign(form, blank(), { name: it.iikoName && it.name !== it.iikoName ? it.name : '', image_url: it.image ?? '', description: it.description ?? '', badge: it.badge ?? '', card_size: it.cardSize ?? '' });
+    // Карточка открывается заполненной тем, что гость видит сейчас (своё из админки или из iiko)
+    const str = (v: unknown) => (v == null ? '' : String(v));
+    Object.assign(form, blank(), {
+      name: it.iikoName && it.name !== it.iikoName ? it.name : '', image_url: it.image ?? '', video_url: it.video ?? '',
+      description: it.description ?? '', badge: it.badge ?? '', card_size: it.cardSize ?? '', weight: it.weight ?? '',
+      energy: str(it.energy), proteins: str(it.proteins), fats: str(it.fats), carbs: str(it.carbs),
+      allergens: it.allergens ?? '', is_recommended: Boolean(it.recommended),
+    });
     initial.value = { ...form };
     targets.value = available.value.map((p) => p.slug);
     takeSnapshot();
@@ -312,7 +319,7 @@ async function setAll(visible: boolean) {
             <UTextarea v-model="form.description" :rows="3" :maxlength="400" autoresize />
           </UFormGroup>
           <div class="grid gap-4 sm:grid-cols-2">
-            <UFormGroup label="Вес / объём" help="Например «235 г» — по нему считается КБЖУ на порцию"><UInput v-model="form.weight" placeholder="не менять" /></UFormGroup>
+            <UFormGroup label="Вес / объём" help="Например «235 г» — по нему считается КБЖУ на порцию"><UInput v-model="form.weight" placeholder="как в iiko" /></UFormGroup>
           </div>
           <UFormGroup label="Метки на фото" help="Можно несколько. Гость видит значки в списке и подписи в карточке блюда.">
             <div class="flex flex-wrap gap-2">
@@ -357,7 +364,14 @@ async function setAll(visible: boolean) {
             <UFormGroup label="Жиры"><UInput v-model="form.fats" inputmode="decimal" placeholder="—" /></UFormGroup>
             <UFormGroup label="Углеводы"><UInput v-model="form.carbs" inputmode="decimal" placeholder="—" /></UFormGroup>
           </div>
-          <UFormGroup label="Аллергены" help="Через запятую; пусто — не менять"><UInput v-model="form.allergens" /></UFormGroup>
+          <UFormGroup label="Аллергены" help="Через запятую; пусто — как в iiko"><UInput v-model="form.allergens" /></UFormGroup>
+        </section>
+
+        <section v-if="item.choices" class="space-y-2">
+          <h3 class="panel-section-title">Выбор у гостя</h3>
+          <p class="text-sm">{{ item.choices }}</p>
+          <p class="text-xs text-slate-500">Варианты и цены приходят из iiko. Названия и фото вариантов — во вкладке «Модификаторы».</p>
+          <UButton size="xs" color="white" icon="i-heroicons-adjustments-horizontal" :to="{ path: '/network-menu', query: { tab: 'modifiers', q: item.iikoName || item.name } }" @click="emit('close')">Открыть модификаторы</UButton>
         </section>
 
         <p class="rounded-xl bg-cream p-3 text-xs text-slate-600">

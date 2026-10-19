@@ -239,6 +239,17 @@ export interface NetworkItem {
   badge: string | null;
   /** 'big' — большая карточка в списке гостя */
   cardSize?: string | null;
+  // Содержимое карточки, как его видит гость сейчас (своё или из iiko)
+  video?: string | null;
+  weight?: string | null;
+  energy?: number | null;
+  proteins?: number | null;
+  fats?: number | null;
+  carbs?: number | null;
+  allergens?: string | null;
+  recommended?: boolean | null;
+  /** Что гость выбирает в блюде: «Размер, Соус» */
+  choices?: string | null;
   points: Record<string, NetworkCell>;
 }
 

@@ -13,7 +13,10 @@ const imageAccept = IMAGE_TYPES.join(',');
 const list = ref<ModGroup[] | null>(null);
 const initial = ref('');
 const loadError = ref('');
-const q = ref('');
+const route = useRoute();
+// Из карточки блюда («Открыть модификаторы») — сразу с поиском по блюду
+const q = ref(typeof route.query.q === 'string' ? route.query.q : '');
+const noPhoto = ref(false);
 async function load() {
   loadError.value = '';
   try {
@@ -26,13 +29,18 @@ async function load() {
 onMounted(load);
 const snapshot = () => JSON.stringify((list.value ?? []).map((g) => [g.key, g.title, g.items.map((i) => [i.key, i.title])]));
 const dirty = computed(() => Boolean(list.value) && snapshot() !== initial.value);
+const emit = defineEmits<{ 'update:dirty': [boolean] }>();
+watch(dirty, (v) => emit('update:dirty', v), { immediate: true });
+useLeaveGuard(dirty);
 
+const hasPhoto = (i: ModItem) => Boolean(i.image || i.iikoImage);
 const filtered = computed(() => {
   const s = q.value.trim().toLowerCase();
-  if (!s) return list.value ?? [];
-  return (list.value ?? []).filter((g) => [g.iikoName, g.title, g.auto, ...g.dishes, ...g.items.flatMap((i) => [i.iikoName, i.title])]
-    .some((x) => String(x || '').toLowerCase().includes(s)));
+  return (list.value ?? []).filter((g) => (!s || [g.iikoName, g.title, g.auto, ...g.dishes, ...g.items.flatMap((i) => [i.iikoName, i.title])]
+    .some((x) => String(x || '').toLowerCase().includes(s)))
+    && (!noPhoto.value || g.items.some((i) => !hasPhoto(i))));
 });
+const visibleItems = (g: ModGroup) => (noPhoto.value ? g.items.filter((i) => !hasPhoto(i)) : g.items);
 const withoutImages = computed(() => (list.value ?? []).reduce((n, g) => n + g.items.filter((i) => !i.image && !i.iikoImage).length, 0));
 
 const saving = ref(false);
@@ -105,6 +113,7 @@ const rule = (g: ModGroup) => [
         Соусы, основа вока, добавки — из iiko. Здесь — понятные гостю названия и картинки. Общие для всех точек.
         <span v-if="withoutImages" class="text-amber-700">Без картинки: {{ withoutImages }} (у гостя — первая буква).</span>
       </div>
+      <label v-if="withoutImages" class="flex items-center gap-2 text-sm"><UToggle v-model="noPhoto" /> Только без фото</label>
       <UButton color="white" :disabled="!dirty || saving" @click="reset">Отменить</UButton>
       <UButton :loading="saving" :disabled="!dirty" icon="i-heroicons-check" @click="save">Сохранить</UButton>
     </div>
@@ -124,7 +133,7 @@ const rule = (g: ModGroup) => [
         </div>
       </div>
       <ul class="grid gap-x-6 gap-y-1 p-3 sm:grid-cols-2">
-        <li v-for="i in g.items" :key="i.key" class="flex items-center gap-3 rounded-lg px-1 py-1.5">
+        <li v-for="i in visibleItems(g)" :key="i.key" class="flex items-center gap-3 rounded-lg px-1 py-1.5">
           <div class="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-full bg-cream ring-1 ring-brand-100">
             <img v-if="i.image || i.iikoImage" :src="thumbUrl(i.image || i.iikoImage, 160)" alt="" class="h-full w-full object-cover" />
             <span v-else class="text-sm text-slate-400">{{ (i.title || i.auto).slice(0, 1) }}</span>
