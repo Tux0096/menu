@@ -310,6 +310,13 @@ export interface MenuCategory {
   image: string | null;
   /** Картинка раздела из iiko — гость видит её, пока своей нет */
   iikoImage?: string | null;
+  /** Своё название для гостей (пусто — как в iiko) */
+  title: string;
+  /** Вкладка у гостя: '' — авто, kitchen, bar */
+  tab: string;
+  /** Раздел скрыт у гостей и официанта */
+  hidden: boolean;
+  sortOrder: number | null;
   isBar: boolean;
   points: number;
   items: number;

@@ -233,6 +233,56 @@ function priceForOrg(prices, organizationId) {
   return 0;
 }
 
+/**
+ * Размеры и группы модификаторов позиции внешнего меню — с ценами этой организации.
+ * { sizes: [{ id, name, price, weight, isDefault, groups }] } — если размеров несколько;
+ * { groups: [...] } — один размер с модификаторами; null — выбирать нечего.
+ * Группа: { id (itemGroupId — нужен iiko в заказе), name, min, max, free, items: [{ id, name, price, weight, image, def, max }] }.
+ */
+function itemOptions(item, organizationId) {
+  const groupsOf = (size) => (size.itemModifierGroups || []).filter((g) => !g.isHidden).map((g) => {
+    const r = g.restrictions || {};
+    const items = (g.items || []).filter((m) => !m.isHidden && (m.itemId || m.id)).map((m) => {
+      const mr = m.restrictions || {};
+      return {
+        id: String(m.itemId || m.id),
+        name: String(m.name || '').slice(0, 120),
+        price: priceForOrg(m.prices, organizationId) || 0,
+        weight: m.portionWeightGrams ? Math.round(m.portionWeightGrams) : null,
+        image: m.buttonImageUrl || null,
+        def: Number(mr.byDefault) || 0,
+        max: Number(mr.maxQuantity) || 0,
+      };
+    });
+    if (!items.length) return null;
+    return {
+      id: g.itemGroupId ? String(g.itemGroupId) : null,
+      name: String(g.name || '').slice(0, 120),
+      min: Number(r.minQuantity) || 0,
+      max: Number(r.maxQuantity) || 0,
+      free: Number(r.freeQuantity) || 0,
+      items,
+    };
+  }).filter(Boolean);
+  const sizes = (item.itemSizes || []).filter((z) => !z.isHidden)
+    .map((z) => ({ z, price: priceForOrg(z.prices, organizationId) })).filter((x) => x.price > 0);
+  if (sizes.length > 1) {
+    return {
+      sizes: sizes.map(({ z, price }) => ({
+        id: z.sizeId ? String(z.sizeId) : null,
+        name: String(z.sizeName || z.sizeCode || '').slice(0, 60),
+        price,
+        weight: z.portionWeightGrams ? Math.round(z.portionWeightGrams) : null,
+        isDefault: Boolean(z.isDefault),
+        image: z.buttonImageUrl || null,
+        groups: groupsOf(z),
+      })),
+    };
+  }
+  const groups = sizes.length ? groupsOf(sizes[0].z) : [];
+  return groups.length ? { groups } : null;
+}
+
 /** Меню ресторана из внешнего меню iiko: цены и доступность — для организации ресторана. */
 async function syncFromExternalMenu(restaurant, token, menu, organizationId, preloaded = null, source = 'main') {
   const data = preloaded || await requestExternalMenu(token, menu, [organizationId]);
@@ -266,10 +316,12 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
         fats: n.fats ?? null,
         carbs: n.carbs ?? null,
         order: ci * 1000 + ii,
+        options: itemOptions(item, organizationId),
       });
     }
   }
-  console.log(`  внешнее меню «${menu.name}»: ${rows.length} блюд с ценой для ресторана`);
+  console.log(`  внешнее меню «${menu.name}»: ${rows.length} блюд с ценой для ресторана`
+    + ` (с размерами ${rows.filter((r) => r.options?.sizes).length}, с модификаторами ${rows.filter((r) => r.options?.groups || r.options?.sizes?.some((z) => z.groups.length)).length})`);
   if (!rows.length) {
     // Разбор, почему пусто: сколько разделов и позиций, как в меню записаны цены (без ключей и токенов)
     const all = categories.flatMap((c) => c.items || []);
@@ -327,12 +379,12 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
       await client.query(
         `INSERT INTO products
            (iiko_id, restaurant_id, name, slug, description, price, weight, image_url,
-            category_id, sort_order, is_published, energy, proteins, fats, carbs, source, sku)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,$11,$12,$13,$14,$15,$16)
+            category_id, sort_order, is_published, energy, proteins, fats, carbs, source, sku, options)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,TRUE,$11,$12,$13,$14,$15,$16,$17)
          ON CONFLICT (restaurant_id, iiko_id) DO NOTHING`,
         [r.id, restaurant.id, r.name, r.name, r.description, r.price, r.weight, r.image,
           r.category.id, (source === 'main' ? 0 : 100000) + r.order, r.energy, r.proteins, r.fats, r.carbs, r.source || source,
-          r.sku ? String(r.sku).slice(0, 50) : null],
+          r.sku ? String(r.sku).slice(0, 50) : null, r.options ? JSON.stringify(r.options) : null],
       );
     }
     await client.query('COMMIT');

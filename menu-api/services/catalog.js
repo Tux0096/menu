@@ -19,7 +19,7 @@ async function getCatalogFromDb(restaurantId) {
   const { rows: products } = await pool.query(
     `SELECT p.id, p.iiko_id, p.name, p.slug, p.description, p.price, p.old_price,
             p.weight, p.image_url, p.category_id, p.sort_order, p.is_published,
-            p.energy, p.proteins, p.fats, p.carbs, p.source, p.sku
+            p.energy, p.proteins, p.fats, p.carbs, p.source, p.sku, p.options
      FROM products p
      WHERE p.restaurant_id = $1 AND p.is_published = TRUE AND p.price > 0
      ORDER BY p.sort_order`,
@@ -84,6 +84,9 @@ async function getCatalogFromDb(restaurantId) {
       fiberAmount: num(p.proteins),
       fatAmount: num(p.fats),
       carbohydrateAmount: num(p.carbs),
+      // Размеры и модификаторы из внешнего меню iiko (с ценами точки)
+      sizes: p.options?.sizes || [],
+      modifierGroups: p.options?.groups || [],
       groupModifiers: [],
       modifiers: [],
       filters: [],
@@ -238,10 +241,41 @@ export async function getContentByName(restaurantId) {
   return map;
 }
 
-/** Картинки разделов из админки: ключ названия раздела → ссылка. */
-export async function getCategoryImages() {
-  const { rows } = await pool.query('SELECT key, image_url FROM category_content WHERE image_url IS NOT NULL');
-  return new Map(rows.map((r) => [r.key, r.image_url]));
+/** Разделы из админки: ключ названия раздела (из iiko) → картинка, своё название, порядок, вкладка, скрытие. */
+export async function getCategorySettings() {
+  const { rows } = await pool.query('SELECT key, image_url, title, sort_order, tab, is_hidden FROM category_content');
+  return new Map(rows.map((r) => [r.key, {
+    image: r.image_url || null, title: r.title || null, sortOrder: r.sort_order ?? null, tab: r.tab || null, hidden: Boolean(r.is_hidden),
+  }]));
+}
+
+/**
+ * Применить настройки разделов к меню точки: скрытые разделы убираются вместе с блюдами,
+ * заданный порядок идёт первым (остальные — после, в порядке сайта), своё название и вкладка — поверх iiko.
+ */
+function applyCategorySettings(groups, products, settings) {
+  const byId = new Map();
+  const out = [];
+  for (const g of groups) {
+    const s = settings.get(menuKey(g.name));
+    if (s?.hidden) { byId.set(String(g.id), null); continue; }
+    const next = s ? {
+      ...g,
+      iikoName: g.name,
+      name: s.title || g.name,
+      image: s.image || g.image || null,
+      order: s.sortOrder != null ? -1e6 + s.sortOrder : g.order,
+      isBar: s.tab ? s.tab === 'bar' : g.isBar,
+    } : g;
+    byId.set(String(g.id), next);
+    out.push(next);
+  }
+  const visible = products.filter((p) => byId.get(String(p.parentGroup)) !== null);
+  for (const p of visible) {
+    const g = byId.get(String(p.parentGroup));
+    if (g?.iikoName) p.parentGroupName = g.name;
+  }
+  return { groups: out.sort((a, b) => a.order - b.order), products: visible };
 }
 
 function normalizeLegacyStopList(stopList, terminalId) {
@@ -281,12 +315,12 @@ function applyOverride(product, o) {
  */
 export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
   const raw = await loadRawCatalog(restaurant, { force });
-  const [overrides, byName, iikoStop, balances, catImages] = await Promise.all([
+  const [overrides, byName, iikoStop, balances, catSettings] = await Promise.all([
     getOverrides(restaurant.id),
     getContentByName(restaurant.id).catch(() => new Map()),
     loadIikoStopList(restaurant),
     getStopBalances(restaurant.id).catch(() => new Map()),
-    getCategoryImages().catch(() => new Map()),
+    getCategorySettings().catch(() => new Map()),
   ]);
 
   const stop = normalizeLegacyStopList(raw.data.stopList, restaurant.terminal_id);
@@ -309,6 +343,14 @@ export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
     const p = o ? applyOverride(base, o) : base;
     if (!p.parentGroupName) p.parentGroupName = groupName.get(p.parentGroup) || null;
     p.isInStopList = stop.has(String(p.id)) || stop.has(String(p.iikoId));
+    // Модификаторы на стопе в iiko не предлагаем; обязательный выбор без вариантов — блюдо недоступно
+    if (p.sizes?.length || p.modifierGroups?.length) {
+      const prune = (groups) => (groups || []).map((g) => ({ ...g, items: g.items.filter((m) => !stop.has(String(m.id))) }));
+      p.sizes = (p.sizes || []).map((z) => ({ ...z, groups: prune(z.groups) }));
+      p.modifierGroups = prune(p.modifierGroups);
+      const blocked = (groups) => groups.some((g) => g.min > 0 && !g.items.length);
+      if (p.sizes.length ? p.sizes.every((z) => blocked(z.groups)) : blocked(p.modifierGroups)) p.isInStopList = true;
+    }
     // Ограниченный остаток в iiko («осталось N») — официант видит, сколько ещё можно предложить
     const left = p.isInStopList ? null : balances.get(String(p.id)) ?? balances.get(String(p.iikoId));
     if (left) p.stopBalance = left;
@@ -319,12 +361,12 @@ export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
   // Порядок считает сервер — одинаково у гостя, официанта и в приложении.
   const ranked = products.map((p, i) => ({ ...p, order: (Number(p.order) || i) - (p.priority || 0) * 1e7 }))
     .sort((a, b) => a.order - b.order);
+  // Разделы из админки главнее iiko: картинка, название, порядок, вкладка, скрытие
+  const sections = applyCategorySettings(orderGroups(raw.data.groups, barGroups(ranked)), ranked, catSettings);
   return {
     ...raw.data,
-    // Картинка раздела из админки главнее картинки из iiko
-    groups: orderGroups(raw.data.groups, barGroups(ranked))
-      .map((g) => (catImages.get(menuKey(g.name)) ? { ...g, image: catImages.get(menuKey(g.name)) } : g)),
-    products: ranked,
+    groups: sections.groups,
+    products: sections.products,
     stopList: [...stop],
     source: raw.source,
     fetchedAt: raw.fetchedAt || new Date(raw.at).toISOString(),

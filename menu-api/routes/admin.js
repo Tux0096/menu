@@ -18,7 +18,7 @@ import {
   tableQrSvg, tableUrl, updateRestaurant,
 } from '../services/admin.js';
 import { staffRestaurant } from '../lib/staff-scope.js';
-import { getCategoryList, getNetworkMenu, getNetworkMenuPoints, setCategoryImage } from '../services/network-menu.js';
+import { getCategoryList, getNetworkMenu, getNetworkMenuPoints, saveCategorySettings, setCategoryImage } from '../services/network-menu.js';
 import { syncIikoMenu } from '../services/background-jobs.js';
 import { getCashdesks, getIikoSetup, setCashdesk, setIikoSetup, setSectionRoute } from '../services/cashdesks.js';
 
@@ -62,6 +62,14 @@ admin.post('/network-menu/categories', h(async (req) => {
   const res = await setCategoryImage(String(req.body.name), image);
   if (!res) throw httpError(400, 'Нет названия раздела');
   audit(req.staff, 'menu.category.image', 'category', String(req.body.name), { image });
+  return res;
+}));
+// Разделы меню: порядок, своё название, вкладка «Кухня/Бар», скрытие — одним списком
+admin.put('/network-menu/categories', h(async (req) => {
+  if (req.staff.restaurantId) throw httpError(403, 'Разделы меню общие для сети — их настраивает сотрудник без привязки к точке');
+  if (!Array.isArray(req.body?.items)) throw httpError(400, 'Нет списка разделов');
+  const res = await saveCategorySettings(req.body.items);
+  audit(req.staff, 'menu.categories', 'category', '', { count: res.saved });
   return res;
 }));
 admin.post('/network-menu/availability', h(async (req) => {

@@ -191,6 +191,74 @@ r = await api('POST', '/api/v1/admin/point-info?restaurant=novo-sadovaya', { wor
 assert.ok(r.status === 401 || r.status === 403, 'официант не меняет карточку точки');
 step('адрес и время работы точки: сохраняются админом, гость видит, официанту нельзя');
 
+// Разделы меню: порядок, своё название, вкладка, скрытие — у гостя сразу
+{
+  const cats0 = ok(await api('GET', '/api/v1/admin/network-menu/categories', null, A), 'cats list');
+  assert.ok(cats0.length > 2, 'разделы есть');
+  const reordered = [cats0[2], cats0[0], ...cats0.slice(1).filter((c) => c.key !== cats0[2].key)]
+    .map((c, i) => ({ name: c.name, title: i === 0 ? 'Первый раздел' : c.title, tab: c.tab, hidden: c.key === cats0[1].key }));
+  ok(await api('PUT', '/api/v1/admin/network-menu/categories', { items: reordered }, A), 'cats save');
+  const cat3 = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog sections');
+  assert.equal(cat3.groups[0].name, 'Первый раздел', 'свой порядок и название у гостя');
+  assert.ok(!cat3.groups.some((g) => (g.iikoName || g.name) === cats0[1].name), 'скрытого раздела у гостя нет');
+  assert.ok(!cat3.products.some((p) => p.parentGroupName === cats0[1].name), 'и его блюд тоже');
+  const cats1 = ok(await api('GET', '/api/v1/admin/network-menu/categories', null, A), 'cats list 2');
+  assert.ok(cats1.find((c) => c.key === cats0[1].key)?.hidden, 'скрытый раздел виден в админке');
+  // вернуть как было (порядок — как до теста, без своих названий/скрытия, если их не было)
+  ok(await api('PUT', '/api/v1/admin/network-menu/categories', { items: cats0.map((c) => ({ name: c.name, title: c.title, tab: c.tab, hidden: c.hidden })) }, A), 'cats restore');
+  step('разделы меню: порядок, название и скрытие из админки — у гостя');
+}
+
+// Модификаторы и размеры: выбор гостя → цена с сервера → строка заказа → в iiko
+{
+  const cat4 = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog mods');
+  const wok = cat4.products.find((p) => p.modifierGroups?.length && !p.isInStopList);
+  const pizza = cat4.products.find((p) => p.sizes?.length > 1 && !p.isInStopList);
+  if (!wok || !pizza) step('модификаторы: в этом меню нет блюд с выбором — пропуск');
+  else {
+    const g2 = { 'X-Guest-Token': login.token };
+    const sm = ok(await api('POST', '/api/v1/table/enter', { restaurantSlug: 'novo-sadovaya', tableNumber: `${TABLE}m` }, g2), 'enter mods');
+    const [base, sauce, extra] = wok.modifierGroups;
+    const chicken = extra.items.find((m) => m.price > 0);
+    const wokLine = {
+      productId: wok.id, iikoProductId: wok.iikoId || wok.id, name: wok.name, quantity: 2,
+      modifiers: [{ id: base.items[1].id, groupId: base.id, amount: 1 }, { id: sauce.items[2].id, groupId: sauce.id, amount: 1 },
+        { id: chicken.id, groupId: extra.id, amount: 2 }],
+    };
+    const big = pizza.sizes.find((z) => !z.isDefault);
+    const pizzaLine = { productId: pizza.id, iikoProductId: pizza.iikoId || pizza.id, name: pizza.name, quantity: 1, sizeId: big.id };
+    const plainWok = { productId: wok.id, iikoProductId: wok.iikoId || wok.id, name: wok.name, quantity: 1 }; // без выбора — по умолчанию
+    let sv = ok(await api('POST', '/api/v1/table-order/cart', { sessionId: sm.sessionId, items: [wokLine, pizzaLine, plainWok, { ...wokLine, price: 1 }] }, g2), 'cart mods');
+    const lines = sv.items.filter((i) => String(i.iikoProductId) === String(wok.iikoId || wok.id));
+    const chosen = lines.find((i) => i.modifiers.some((m) => m.id === chicken.id));
+    assert.equal(chosen.quantity, 4, 'одинаковый выбор — одна строка (2 + 2)');
+    assert.equal(chosen.price, wok.price + chicken.price * 2, 'цена = блюдо + 2 × курица (цена клиента не принимается)');
+    assert.ok(chosen.name.includes(base.items[1].name) && chosen.name.includes(sauce.items[2].name), 'выбор виден в названии для официанта');
+    const def = lines.find((i) => i !== chosen);
+    assert.ok(def && def.modifiers.some((m) => m.groupId === sauce.id), 'без выбора — обязательный соус по умолчанию');
+    const pz = sv.items.find((i) => String(i.iikoProductId) === String(pizza.iikoId || pizza.id));
+    assert.equal(pz.price, big.price); assert.equal(pz.sizeId, String(big.id));
+    r = await api('POST', '/api/v1/table-order/cart', { sessionId: sm.sessionId, items: [{ ...wokLine, modifiers: [{ id: '00000000-0000-4000-8000-000000000999', amount: 1 }] }] }, g2);
+    assert.equal(r.status, 400, 'несуществующий модификатор отклоняется');
+    r = await api('POST', '/api/v1/table-order/cart', { sessionId: sm.sessionId, items: [{ ...wokLine, modifiers: [...wokLine.modifiers, { id: sauce.items[0].id, groupId: sauce.id, amount: 1 }] }] }, g2);
+    assert.equal(r.status, 400, 'два соуса при «выберите 1» отклоняются');
+    // официант отправляет на кухню: выбор сохраняется, позиции заблокированы
+    sv = ok(await api('POST', '/api/v1/table/submit-to-waiter', { sessionId: sm.sessionId, items: sv.items.map((i) => ({ productId: i.productId, iikoProductId: i.iikoProductId, name: i.name, quantity: i.quantity, sizeId: i.sizeId, modifiers: i.modifiers })) }, g2), 'submit mods');
+    ok(await api('POST', `/api/v1/waiter/session/${sm.sessionId}/take`, {}, W), 'take mods');
+    // официант сохраняет корзину из приложения (без полей выбора, только id строк) — выбор не теряется
+    const wv = ok(await api('GET', `/api/v1/waiter/session/${sm.sessionId}`, null, W), 'waiter view');
+    ok(await api('POST', `/api/v1/waiter/session/${sm.sessionId}/cart`, { items: wv.items.map((i) => ({ id: i.id, productId: i.productId, iikoProductId: i.iikoProductId, name: i.name, quantity: i.quantity, seatNumber: 1 })) }, W), 'waiter cart mods');
+    sv = ok(await api('POST', `/api/v1/waiter/session/${sm.sessionId}/send-to-production`, {}, W), 'send mods');
+    const sent = sv.items.find((i) => i.modifiers.some((m) => m.id === chicken.id));
+    assert.ok(sent?.isLocked && sent.quantity === 4, 'вариант с выбором ушёл на кухню');
+    assert.ok(sv.items.find((i) => i.sizeId === String(big.id))?.isLocked, 'размер пиццы ушёл на кухню');
+    // гость сохраняет корзину после отправки — отправленные варианты не теряются и не считаются убранными
+    ok(await api('POST', '/api/v1/table-order/cart', { sessionId: sm.sessionId, items: sv.items.map((i) => ({ productId: i.productId, iikoProductId: i.iikoProductId, name: i.name, quantity: i.quantity, sizeId: i.sizeId, modifiers: i.modifiers })) }, g2), 'cart after send');
+    ok(await api('POST', `/api/v1/waiter/session/${sm.sessionId}/close`, {}, W), 'close mods');
+    step('модификаторы и размеры: цена с сервера, обязательный выбор, отправка на кухню, официант не теряет выбор');
+  }
+}
+
 // Безопасность: AI-отзыв — только от гостя, заголовки безопасности, внутренние адреса в /img
 r = await api('POST', '/api/v1/ai/feedback', { query: 'x', productId: p1.id });
 assert.equal(r.status, 401); step('отзыв о подсказке AI без входа гостя не принимается (401)');
