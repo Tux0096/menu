@@ -19,6 +19,7 @@ export async function menuIndex(restaurant) {
       isInStopList: Boolean(p.isInStopList),
       balance: Number(p.stopBalance) > 0 ? Number(p.stopBalance) : null, // ограниченный остаток в iiko
       base: p.basePrice ?? null,
+      sizeId: p.sizeId ?? null, // единственный продаваемый размер из нескольких в iiko
       sizes: p.sizes || [],
       groups: p.modifierGroups || [],
     };

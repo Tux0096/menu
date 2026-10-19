@@ -111,7 +111,7 @@ async function findMenuOrganization(token, restaurant, orgs) {
   return null;
 }
 
-/** Цены прейскуранта кассы: «товар|размер» → цена (размер пустой — цена без размера). Ошибка — пустая карта. */
+/** Цены прейскуранта кассы: «товар|размер» → цена (размер пустой — цена без размера). Ошибка — исключение. */
 async function nomenclaturePrices(token, organizationId) {
   const map = new Map();
   try {
@@ -121,12 +121,12 @@ async function nomenclaturePrices(token, organizationId) {
         const v = Number(sp.price?.currentPrice) || 0;
         if (!(v > 0) || sp.price?.isIncludedInMenu === false) continue;
         map.set(`${p.id}|${sp.sizeId || ''}`, v);
-        if (!map.has(`${p.id}|`)) map.set(`${p.id}|`, v);
       }
     }
     console.log(`  прейскурант кассы: ${map.size} цен для позиций с нулевой ценой во внешнем меню`);
   } catch (e) {
-    console.log(`  прейскурант кассы недоступен: ${e.response?.status || e.message}`);
+    // Без прейскуранта пицца и воки «пропали бы» на полчаса — оставляем прежнюю выгрузку точки
+    throw new Error(`прейскурант кассы недоступен (${e.response?.status || e.message}) — меню точки не перезаписано`);
   }
   return map;
 }
@@ -311,7 +311,7 @@ function optionGroups(size, priceOf) {
   }).filter(Boolean);
 }
 
-export function itemOptions(sizes) {
+export function itemOptions(sizes, multi = false) {
   if (sizes.length > 1) {
     return {
       sizes: sizes.map(({ z, price, groups }) => ({
@@ -326,9 +326,12 @@ export function itemOptions(sizes) {
     };
   }
   const [one] = sizes;
-  if (!one?.groups.length) return null;
+  if (!one) return null;
+  // Продаётся один размер из нескольких (у пиццы «по умолчанию» без цены) — его ID нужен iiko в заказе
+  const sizeId = multi && one.z.sizeId ? String(one.z.sizeId) : null;
+  if (!one.groups.length) return sizeId ? { sizeId } : null;
   // Цена блюда без выбора (может быть 0 — вок, где платная основа); у гостя — «от» с самым дешёвым выбором
-  return { groups: one.groups, base: one.price };
+  return { groups: one.groups, base: one.price, ...(sizeId ? { sizeId } : {}) };
 }
 
 /**
@@ -355,8 +358,8 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
   // В заказ iiko цену не передаём — касса считает по своему прейскуранту, так что гость видит ту же сумму.
   const needNom = categories.some((c) => (c.items || []).some((i) => (i.itemSizes || []).some((z) => !priceForOrg(z.prices, organizationId))));
   const nom = needNom ? await nomenclaturePrices(token, organizationId) : new Map();
-  const priceOf = (prices, itemId, sizeId) => priceForOrg(prices, organizationId)
-    || nom.get(`${itemId}|${sizeId || ''}`) || nom.get(`${itemId}|`) || 0;
+  // Размер берёт только свою цену прейскуранта: цена другого размера — это другая сумма на кассе
+  const priceOf = (prices, itemId, sizeId) => priceForOrg(prices, organizationId) || nom.get(`${itemId}|${sizeId || ''}`) || 0;
   // Отчёт для админки: раздел → сколько позиций у гостей, сколько скрыто и без цены (например, «нет пиццы»)
   const report = [];
   for (const [ci, cat] of categories.entries()) {
@@ -395,7 +398,7 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
         fats: n.fats ?? null,
         carbs: n.carbs ?? null,
         order: ci * 1000 + ii,
-        options: itemOptions(sizes),
+        options: itemOptions(sizes, (item.itemSizes || []).filter((z) => !z.isHidden).length > 1),
       });
     }
   }
@@ -417,6 +420,14 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
       console.log(`  пример «${sample.name}»: цены ${JSON.stringify(sample.itemSizes[0].prices || null).slice(0, 400)};`
         + ` организация источника ${organizationId}`);
     }
+    return 0;
+  }
+  // Меню вдруг стало вдвое меньше (сбой iiko, раздел случайно скрыли) — не перезаписываем, прежнее остаётся у гостей
+  const prev = Number((await pool.query('SELECT COUNT(*)::int AS n FROM products WHERE restaurant_id = $1 AND source = $2',
+    [restaurant.id, source])).rows[0]?.n) || 0;
+  if (prev >= 40 && rows.length < prev * 0.5 && process.env.SYNC_ALLOW_SHRINK !== 'true') {
+    console.log(`  ! в меню ${rows.length} блюд вместо ${prev} — выгрузка не записана, проверьте внешнее меню в iikoWeb`
+      + ' (если так и задумано — SYNC_ALLOW_SHRINK=true)');
     return 0;
   }
 

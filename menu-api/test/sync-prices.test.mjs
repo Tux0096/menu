@@ -7,7 +7,7 @@ const ORG = 'org-1';
 const pr = (v) => [{ organizations: [ORG], price: v }];
 const priceOf = (nom = new Map()) => (prices, itemId, sizeId) => {
   const v = (prices || []).find((p) => p.organizations.includes(ORG))?.price || 0;
-  return v || nom.get(`${itemId}|${sizeId || ''}`) || nom.get(`${itemId}|`) || 0;
+  return v || nom.get(`${itemId}|${sizeId || ''}`) || 0;
 };
 
 test('пицца: у размера по умолчанию 0, у 30 и 40 см — цены', () => {
@@ -48,4 +48,22 @@ test('цена 0 во внешнем меню — берём прейскура�
 test('бесплатные единицы группы не входят в «от»', () => {
   assert.equal(minRequired([{ min: 2, free: 1, items: [{ price: 50 }, { price: 80 }] }]), 50);
   assert.equal(minRequired([{ min: 0, items: [{ price: 50 }] }]), 0);
+});
+
+test('продаётся один размер из нескольких — его ID сохраняется для заказа iiko', () => {
+  const item = { itemId: 'p3', itemSizes: [
+    { sizeId: 'd', isDefault: true, prices: pr(0) },
+    { sizeId: 's30', sizeName: '30 см', prices: pr(699) },
+  ] };
+  const sizes = sellableSizes(item, priceOf());
+  assert.equal(sizes.length, 1);
+  assert.deepEqual(itemOptions(sizes, true), { sizeId: 's30' });
+  assert.equal(itemOptions(sizes, false), null);
+});
+
+test('размер без своей цены в прейскуранте не берёт цену другого размера', () => {
+  const item = { itemId: 'p4', itemSizes: [{ sizeId: 's25', prices: pr(0) }, { sizeId: 's30', prices: pr(0) }] };
+  const strict = (nom) => (prices, itemId, sizeId) => nom.get(`${itemId}|${sizeId || ''}`) || 0;
+  const sizes = sellableSizes(item, strict(new Map([['p4|s30', 650]])));
+  assert.deepEqual(sizes.map((x) => x.z.sizeId), ['s30']);
 });
