@@ -160,8 +160,64 @@ const tagStyle = (b: string) => {
 const tagLabel = (b: string) => (BADGES[b] || b).replace(/\s*\(.*\)$/, '');
 const setupPoint = ref<NetworkPoint | null>(null);
 // Подвкладки: блюда (общие карточки) и разделы меню (порядок, названия, картинки шторки «Меню»)
-const view = ref<'dishes' | 'sections' | 'modifiers'>(route.query.tab === 'sections' || route.query.tab === 'modifiers' ? route.query.tab : 'dishes');
-watch(view, (v) => navigateTo({ query: { ...route.query, tab: v === 'dishes' ? undefined : v } }, { replace: true }));
+type View = 'dishes' | 'sections' | 'modifiers';
+const view = ref<View>(route.query.tab === 'sections' || route.query.tab === 'modifiers' ? route.query.tab : 'dishes');
+watch(view, (v) => navigateTo({ query: { ...route.query, tab: v === 'dishes' ? undefined : v, q: v === 'modifiers' ? route.query.q : undefined } }, { replace: true }));
+// «Открыть модификаторы» из карточки блюда — та же страница, другая вкладка
+watch(() => route.query.tab, (t) => { if (t === 'sections' || t === 'modifiers') view.value = t; });
+// Разделы и модификаторы сохраняются кнопкой: при переключении вкладки несохранённое не теряем молча
+const tabDirty = ref(false);
+async function switchView(v: View) {
+  if (v === view.value) return;
+  if (tabDirty.value && !(await confirm({ title: 'Уйти без сохранения?', description: 'Изменения на этой вкладке не сохранены и пропадут.', confirmLabel: 'Уйти без сохранения', danger: true }))) return;
+  tabDirty.value = false;
+  view.value = v;
+}
+
+// ---------- массово: показать / скрыть отмеченные блюда (на выбранной точке или на всех, где блюдо есть)
+const selected = ref<Set<string>>(new Set());
+watch([q, group, chip, section, pointFilter], () => (selected.value = new Set()));
+function toggleSelect(it: NetworkItem) {
+  const next = new Set(selected.value);
+  if (next.has(it.key)) next.delete(it.key);
+  else next.add(it.key);
+  selected.value = next;
+}
+const allShownSelected = computed(() => visibleRows.value.length > 0 && visibleRows.value.every((it) => selected.value.has(it.key)));
+function toggleAllShown() {
+  selected.value = allShownSelected.value ? new Set() : new Set(visibleRows.value.filter((it) => cellsOf(it).length).map((it) => it.key));
+}
+const batchBusy = ref(false);
+async function batchAvailability(available: boolean) {
+  const chosen = items.value.filter((it) => selected.value.has(it.key));
+  const targets = chosen.flatMap((it) => points.value
+    .filter((p) => (!pointFilter.value || p.slug === pointFilter.value) && it.points[p.slug])
+    .map((p) => ({ restaurant: p.slug, productId: it.points[p.slug]!.productId, productName: it.iikoName || it.name })));
+  if (!targets.length) {
+    notify.error('У отмеченных блюд нет позиций в iiko на этой точке');
+    return;
+  }
+  const where = pointFilter.value ? `на точке «${shortName(points.value.find((p) => p.slug === pointFilter.value)!)}»` : 'на всех точках, где они есть';
+  const ok = await confirm({
+    title: available ? `Показать гостям: ${chosen.length}?` : `Скрыть от гостей: ${chosen.length}?`,
+    description: `${available ? 'Блюда снова появятся в меню' : 'Гости перестанут видеть блюда'} ${where}. Стоп-лист iiko это не меняет.`,
+    confirmLabel: available ? 'Показать' : 'Скрыть',
+    danger: !available,
+  });
+  if (!ok) return;
+  batchBusy.value = true;
+  try {
+    const res = await useAuthFetch<{ updated: number }>('/admin/network-menu/availability/batch', { method: 'POST', body: { items: targets, available } }, { restaurant: false });
+    menu.invalidate();
+    notify.success(available ? 'Блюда показаны гостям' : 'Блюда скрыты от гостей', `Позиций на точках: ${res.updated}`);
+    selected.value = new Set();
+    await load();
+  } catch (e) {
+    notify.error(e, 'Не удалось изменить');
+  } finally {
+    batchBusy.value = false;
+  }
+}
 
 // ---------- общая карточка блюда
 const editItem = ref<NetworkItem | null>(null);
@@ -220,14 +276,14 @@ function openItem(it: NetworkItem, tab: 'card' | 'availability' = 'card') {
         :aria-selected="view === t.v"
         class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition"
         :class="view === t.v ? 'bg-brand-500 text-white' : 'text-slate-600 hover:bg-cream'"
-        @click="view = t.v"
+        @click="switchView(t.v)"
       >
         <UIcon :name="t.i" class="h-4 w-4" />{{ t.l }}
       </button>
     </div>
 
-    <MenuSections v-if="view === 'sections'" />
-    <MenuModifiers v-else-if="view === 'modifiers'" />
+    <MenuSections v-if="view === 'sections'" v-model:dirty="tabDirty" />
+    <MenuModifiers v-else-if="view === 'modifiers'" :key="String(route.query.q || '')" v-model:dirty="tabDirty" />
 
     <template v-else>
     <div class="panel-box mb-4 space-y-3 p-3 sm:p-4">
@@ -275,8 +331,14 @@ function openItem(it: NetworkItem, tab: 'card' | 'availability' = 'card') {
         <UButton color="white" icon="i-heroicons-x-mark" @click="resetFilters">Сбросить фильтры</UButton>
       </EmptyState>
       <template v-else>
+        <div v-if="selected.size" class="sticky top-0 z-10 flex flex-wrap items-center gap-2 border-b border-brand-100 bg-white px-4 py-2.5">
+          <span class="mr-auto text-sm font-medium">Отмечено: {{ selected.size }}</span>
+          <UButton size="xs" color="white" icon="i-heroicons-eye" :loading="batchBusy" @click="batchAvailability(true)">Показать гостям</UButton>
+          <UButton size="xs" color="white" icon="i-heroicons-eye-slash" :loading="batchBusy" @click="batchAvailability(false)">Скрыть от гостей</UButton>
+          <UButton size="xs" color="gray" variant="ghost" icon="i-heroicons-x-mark" aria-label="Снять отметки" @click="selected = new Set()" />
+        </div>
         <div class="hidden grid-cols-[minmax(0,1fr)_170px_150px_120px] gap-3 bg-cream px-4 py-2.5 text-xs text-slate-500 md:grid">
-          <span>Блюдо</span><span>Гости видят</span><span>Цена</span><span />
+          <span class="flex items-center gap-3"><UCheckbox :model-value="allShownSelected" aria-label="Отметить все показанные" @update:model-value="toggleAllShown" />Блюдо</span><span>Гости видят</span><span>Цена</span><span />
         </div>
         <ul class="divide-y divide-brand-50">
           <li v-for="it in visibleRows" :key="it.key">
@@ -290,6 +352,9 @@ function openItem(it: NetworkItem, tab: 'card' | 'availability' = 'card') {
               @keydown.enter.prevent="openItem(it)"
             >
               <div class="flex min-w-0 items-center gap-3">
+                <div class="-m-2 flex p-2" @click.stop @keydown.enter.stop>
+                  <UCheckbox :model-value="selected.has(it.key)" :disabled="!cellsOf(it).length" :aria-label="`Отметить ${it.name}`" @update:model-value="toggleSelect(it)" />
+                </div>
                 <div class="h-10 w-10 shrink-0 overflow-hidden rounded-lg bg-brand-50">
                   <img v-if="it.image" :src="thumbUrl(it.image)" alt="" class="h-full w-full object-cover" loading="lazy" @error="hideBrokenImage" />
                   <UIcon v-else name="i-heroicons-photo" class="m-2.5 h-5 w-5 text-brand-200" />
@@ -317,7 +382,7 @@ function openItem(it: NetworkItem, tab: 'card' | 'availability' = 'card') {
                 <UButton size="xs" color="white" icon="i-heroicons-pencil-square" @click.stop="openItem(it)">Карточка</UButton>
               </div>
               <!-- мобильная сводка -->
-              <div class="col-span-2 flex items-center gap-2 pl-[3.25rem] text-xs md:hidden">
+              <div class="col-span-2 flex items-center gap-2 pl-[5.25rem] text-xs md:hidden">
                 <button type="button" class="rounded-full px-2 py-0.5 ring-1" :class="summary(it).status.cls" @click.stop="openItem(it, 'availability')">{{ summary(it).status.label }}</button>
                 <span class="font-semibold">{{ summary(it).price }}</span>
               </div>

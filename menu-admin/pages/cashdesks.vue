@@ -177,7 +177,7 @@ const kitchenCount = computed(() => (data.value?.sections ?? []).filter((s) => s
           </div>
           <UInput v-model="q" icon="i-heroicons-magnifying-glass" placeholder="Раздел" class="sm:w-64" />
         </div>
-        <EmptyState v-if="!data.sections.length" icon="i-heroicons-book-open" title="Меню точки пустое" description="Выгрузите меню из iiko в разделе «Меню точки»." />
+        <EmptyState v-if="!data.sections.length" icon="i-heroicons-book-open" title="Меню точки пустое" description="Выгрузите меню из iiko: «Меню сети» → «Обновить из iiko» у точки." />
         <EmptyState v-else-if="!barOn" compact icon="i-heroicons-check-circle" title="Все разделы уходят на кухонную кассу" description="Выберите кассу бара выше, чтобы разделить заказ." />
         <EmptyState v-else-if="!sections.length" compact icon="i-heroicons-magnifying-glass" title="Ничего не нашлось" />
         <div v-else class="overflow-x-auto">

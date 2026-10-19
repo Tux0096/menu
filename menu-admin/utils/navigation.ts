@@ -26,7 +26,7 @@ export const NAV_GROUPS: { key: NavGroupKey; title: string }[] = [
 
 // Права — как в menu-api (app.js): администратор — всё; управляющий — сводка зала и отзывы;
 // маркетинг — карточки блюд, баннеры и AI-подсказки (без стоп-листа, сотрудников и оплаты).
-// Официант работает в приложении на телефоне, в админку не входит.
+// Официант работает в терминале официанта (of.menu.franchise-fuji.ru) на телефоне, в админку не входит.
 const ADMIN: StaffRole[] = ['admin'];
 const HALL: StaffRole[] = ['admin', 'manager'];
 const CONTENT: StaffRole[] = ['admin', 'marketing'];
@@ -49,7 +49,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/cashdesks', label: 'Кассы', icon: 'i-heroicons-calculator', roles: ADMIN, group: 'restaurant', hint: 'Какой раздел меню на какую кассу iiko уходит: кухня или бар' },
   { to: '/payments', label: 'Оплата', icon: 'i-heroicons-credit-card', roles: ADMIN, group: 'restaurant', hint: 'Онлайн-оплата CloudPayments и типы оплат iiko' },
 
-  { to: '/staff', label: 'Сотрудники', icon: 'i-heroicons-users', roles: ADMIN, group: 'system', hint: 'Доступы в админку и PIN для приложения официанта' },
+  { to: '/staff', label: 'Сотрудники', icon: 'i-heroicons-users', roles: ADMIN, group: 'system', hint: 'Доступы в админку и PIN для терминала официанта' },
   { to: '/audit', label: 'Журнал изменений', icon: 'i-heroicons-clipboard-document-list', roles: ADMIN, group: 'system' },
 ];
 
@@ -62,9 +62,9 @@ export const ROLE_LABELS: Record<StaffRole, string> = {
 
 /** Что может каждая роль — показывается в карточке сотрудника */
 export const ROLE_INFO: Record<StaffRole, string> = {
-  waiter: 'Столы и заказы гостей в приложении «Фуджи Официант» (вход по PIN). В админку не входит.',
-  manager: 'Сводка зала, отзывы гостей. В приложении официанта — всё, что может официант.',
-  marketing: 'Контент меню: карточки блюд, фото и видео, метки «Хит/Новинка», баннеры, AI-подсказки. Без стоп-листа, сотрудников и оплаты.',
+  waiter: 'Столы и заказы гостей в терминале официанта of.menu.franchise-fuji.ru (вход по PIN). В админку не входит.',
+  manager: 'Сводка зала, отзывы гостей. В терминале официанта — всё, что может официант.',
+  marketing: 'Контент меню: карточки блюд, фото и видео, метки «Хит/Новинка», баннеры, AI-подсказки. Стоп-лист — только просмотр. Без сотрудников и оплаты.',
   admin: 'Всё: сотрудники и доступы, стоп-лист, QR-коды столов, оплата, контент и статистика.',
 };
 

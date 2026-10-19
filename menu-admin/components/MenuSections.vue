@@ -23,6 +23,9 @@ onMounted(load);
 
 const snapshot = () => JSON.stringify((list.value ?? []).map((c) => [c.key, c.title, c.tab, c.hidden]));
 const dirty = computed(() => Boolean(list.value) && snapshot() !== initial.value);
+const emit = defineEmits<{ 'update:dirty': [boolean] }>();
+watch(dirty, (v) => emit('update:dirty', v), { immediate: true });
+useLeaveGuard(dirty);
 
 // Вкладка у гостя: своя или по умолчанию (бар — напитки и касса бара)
 const tabOf = (c: MenuCategory) => (c.tab === 'bar' || (!c.tab && c.isBar) ? 'bar' : 'kitchen');

@@ -6,6 +6,20 @@ useHead({ title: 'Журнал изменений — Фуджи' });
 // Понятные названия действий (menu-api: audit(…, action, …))
 const ACTIONS: Record<string, string> = {
   login: 'Вход',
+  'login.pin': 'Вход официанта по PIN',
+  'login.iiko': 'Вход через iiko',
+  'menu.card.network': 'Карточка блюда (сеть)',
+  'menu.availability': 'Показ блюда на точке',
+  'menu.categories': 'Разделы меню',
+  'menu.category.image': 'Картинка раздела',
+  'menu.modifiers': 'Названия модификаторов',
+  'menu.modifier.image': 'Картинка модификатора',
+  'cashdesk.route': 'Раздел → касса',
+  'cashdesk.terminal': 'Касса точки',
+  'restaurant.iiko_setup': 'Настройки iiko точки',
+  'restaurant.info': 'Карточка точки',
+  'qr.signed_required': 'Вход только по QR',
+  'table.close_unpaid': 'Стол закрыт без оплаты',
   'menu.override': 'Карточка блюда',
   'menu.override.delete': 'Карточка — как в iiko',
   'menu.sync': 'Перевыгрузка меню из iiko',
@@ -25,6 +39,16 @@ const ACTIONS: Record<string, string> = {
   'table.close': 'Стол закрыт',
 };
 const actionLabel = (a: string) => ACTIONS[a] ?? a;
+// Фильтр по виду действия
+const KINDS = [
+  { value: '', label: 'Все действия' },
+  { value: 'menu', label: 'Меню и карточки', test: (a: string) => a.startsWith('menu.') || a === 'media.upload' },
+  { value: 'marketing', label: 'Баннеры и AI-подсказки', test: (a: string) => a.startsWith('promos.') || a.startsWith('chips.') },
+  { value: 'orders', label: 'Заказы и столы', test: (a: string) => a.startsWith('order.') || a.startsWith('table.') },
+  { value: 'settings', label: 'Настройки и сотрудники', test: (a: string) => /^(staff|restaurant|payments|source|cashdesk|qr)\./.test(a) },
+  { value: 'login', label: 'Входы', test: (a: string) => a.startsWith('login') },
+];
+const kind = ref('');
 
 const rows = ref<AuditRow[] | null>(null);
 const loadError = ref('');
@@ -47,7 +71,9 @@ const hideLogins = ref(true);
 const filtered = computed(() => {
   const query = q.value.trim().toLowerCase();
   return (rows.value ?? []).filter((a) => {
-    if (hideLogins.value && a.action === 'login') return false;
+    if (hideLogins.value && !kind.value && a.action.startsWith('login')) return false;
+    const k = KINDS.find((x) => x.value === kind.value);
+    if (k?.test && !k.test(a.action)) return false;
     if (!query) return true;
     return `${a.staff_name ?? ''} ${actionLabel(a.action)} ${a.entity_id ?? ''} ${JSON.stringify(a.payload ?? {})}`.toLowerCase().includes(query);
   });
@@ -79,7 +105,8 @@ const columns = [
 
     <div class="panel-box mb-4 flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:p-4">
       <UInput v-model="q" icon="i-heroicons-magnifying-glass" placeholder="Сотрудник, действие, блюдо" class="sm:w-80" />
-      <label class="flex items-center gap-2 text-sm"><UToggle v-model="hideLogins" /> Скрыть входы</label>
+      <USelect v-model="kind" :options="KINDS.map(({ value, label }) => ({ value, label }))" class="sm:w-60" aria-label="Вид действия" />
+      <label v-if="!kind" class="flex items-center gap-2 text-sm"><UToggle v-model="hideLogins" /> Скрыть входы</label>
     </div>
 
     <LoadError v-if="loadError && !rows" :message="loadError" @retry="load" />

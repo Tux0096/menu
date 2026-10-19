@@ -35,6 +35,7 @@ function fill(p: PaySettings) {
 }
 const snapshot = ref('');
 const dirty = computed(() => snapshot.value !== '' && JSON.stringify(form) !== snapshot.value);
+useLeaveGuard(dirty);
 
 async function load() {
   loadError.value = '';
