@@ -779,9 +779,9 @@
     }
     const head = hasResults
       ? `<section class="ai-head"><img class="ai-head__orb ${loading ? 'is-thinking' : ''}" src="${UI('ai-orb.png')}" alt="">
-          <div><div class="ai-head__title">Fudji AI</div><div class="ai-head__sub">${esc(loading ? 'Подбираю…' : error ? 'Не получилось' : (S.ai.label || 'Вот что я подобрал:'))}</div></div></section>`
+          <div><div class="ai-head__title">Fuji AI</div><div class="ai-head__sub">${esc(loading ? 'Подбираю…' : error ? 'Не получилось' : (S.ai.label || 'Вот что я подобрал:'))}</div></div></section>`
       : `<section class="ai-hero"><img class="ai-orb" src="${UI('ai-orb.png')}" alt="">
-          <h1>Спросите Fudji AI</h1><div class="ai-hero__hello">${esc(hello)}</div></section>`;
+          <h1>Спросите Fuji AI</h1><div class="ai-hero__hello">${esc(hello)}</div></section>`;
     return `${topbar()}<main class="screen screen--center screen--ai">
       ${head}
       ${hasResults ? '' : bannersHtml('ai')}
@@ -934,7 +934,7 @@
         <div class="list ${i === sections.length - 1 && !S.menu.search ? 'list--last' : ''}">${s.items.map((p) => dishCard(p)).join('')}</div>`).join('')
     : S.catalog.products?.length
       ? `<div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.png')}" alt="">
-          <div class="empty__title">Ничего не нашлось</div><div>Спросите Fudji AI — он подберёт похожее</div>
+          <div class="empty__title">Ничего не нашлось</div><div>Спросите Fuji AI — он подберёт похожее</div>
           <button class="btn btn--dark btn--center empty__btn" data-action="ask-ai-search">Спросить AI: «${esc(S.menu.search.trim().slice(0, 40))}»</button></div>`
       : `<div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.png')}" alt="">Меню ресторана ещё загружается из iiko.<br>Загляните чуть позже или позовите официанта.</div>`}
     </main>`;

@@ -57,7 +57,8 @@ async function getCatalogFromDb(restaurantId) {
     const n = Number(String(w).replace(',', '.'));
     if (!Number.isFinite(n)) return String(w);
     if (n <= 0) return null;
-    return n < 10 ? `${Math.round(n * 1000)} г` : `${Math.round(n)} г`;
+    // Меньше 10 — килограммы из номенклатуры; больше — число без единицы (её ставит каталог: бар — мл, кухня — г)
+    return n < 10 ? `${Math.round(n * 1000)} г` : String(Math.round(n));
   };
   return {
     groups,
@@ -85,8 +86,8 @@ async function getCatalogFromDb(restaurantId) {
       fatAmount: num(p.fats),
       carbohydrateAmount: num(p.carbs),
       // Размеры и модификаторы из внешнего меню iiko (с ценами точки), с понятными гостю названиями
-      sizes: (p.options?.sizes || []).map((z) => ({ ...z, groups: cleanGroups(z.groups) })),
-      modifierGroups: cleanGroups(p.options?.groups),
+      sizes: p.options?.sizes || [],
+      modifierGroups: p.options?.groups || [],
       groupModifiers: [],
       modifiers: [],
       filters: [],
@@ -105,11 +106,11 @@ async function getCatalogFromDb(restaurantId) {
  * Служебное название группы («мод к поке», «мод+Люб.ролл за 1р») заменяется понятным по составу: «Соус на выбор»…
  */
 // \b в JS не работает с кириллицей — границы слова пробелами
-const cleanModText = (t) => {
+export const cleanModText = (t) => {
   const v = String(t || '').replace(/(^|\s)ЗАЛ\.?(?=\s|$)/g, ' ').replace(/^[\s\-–—•*]+/, '').replace(/[\s*]+$/, '').replace(/\s+/g, ' ').trim();
   return v ? v[0].toUpperCase() + v.slice(1) : v;
 };
-function groupTitle(name, items) {
+export function groupTitle(name, items) {
   const n = cleanModText(name);
   const all = items.map((m) => m.name.toLowerCase()).join(' ');
   if (n && !/^мод([.+\s]|$)/i.test(n)) return n;
@@ -119,11 +120,27 @@ function groupTitle(name, items) {
   if (/лапш|удон|фунчоз|рис\b/.test(all)) return 'Основа на выбор';
   return 'На выбор';
 }
-function cleanGroups(groups) {
+/**
+ * Группы модификаторов для гостя: понятные названия и картинки. Своё название/картинка из админки (modifier_content)
+ * главнее; иначе название без служебных пометок iiko. iikoName — исходное название (ключ настроек).
+ */
+function decorateGroups(groups, content = new Map()) {
   return (groups || []).map((g) => {
-    const items = (g.items || []).map((m) => ({ ...m, name: cleanModText(m.name) || m.name }));
-    return { ...g, name: groupTitle(g.name, items), iikoName: g.name, items };
+    const gName = g.iikoName || g.name;
+    const items = (g.items || []).map((m) => {
+      const mName = m.iikoName || m.name;
+      const c = content.get(`item:${menuKey(mName)}`);
+      return { ...m, iikoName: mName, name: c?.title || cleanModText(mName) || mName, image: c?.image || m.image || null };
+    });
+    const c = content.get(`group:${menuKey(gName)}`);
+    return { ...g, iikoName: gName, name: c?.title || groupTitle(gName, items), items };
   });
+}
+
+/** Настройки модификаторов из админки: «item:ключ» / «group:ключ» → { title, image }. */
+export async function getModifierContent() {
+  const { rows } = await pool.query('SELECT kind, key, title, image_url FROM modifier_content');
+  return new Map(rows.map((r) => [`${r.kind}:${r.key}`, { title: r.title || null, image: r.image_url || null }]));
 }
 
 async function saveSnapshot(restaurantId, source, data) {
@@ -341,12 +358,13 @@ function applyOverride(product, o) {
  */
 export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
   const raw = await loadRawCatalog(restaurant, { force });
-  const [overrides, byName, iikoStop, balances, catSettings] = await Promise.all([
+  const [overrides, byName, iikoStop, balances, catSettings, modContent] = await Promise.all([
     getOverrides(restaurant.id),
     getContentByName(restaurant.id).catch(() => new Map()),
     loadIikoStopList(restaurant),
     getStopBalances(restaurant.id).catch(() => new Map()),
     getCategorySettings().catch(() => new Map()),
+    getModifierContent().catch(() => new Map()),
   ]);
 
   const stop = normalizeLegacyStopList(raw.data.stopList, restaurant.terminal_id);
@@ -371,7 +389,7 @@ export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
     p.isInStopList = stop.has(String(p.id)) || stop.has(String(p.iikoId));
     // Модификаторы на стопе в iiko не предлагаем; обязательный выбор без вариантов — блюдо недоступно
     if (p.sizes?.length || p.modifierGroups?.length) {
-      const prune = (groups) => (groups || []).map((g) => ({ ...g, items: g.items.filter((m) => !stop.has(String(m.id))) }));
+      const prune = (groups) => decorateGroups(groups, modContent).map((g) => ({ ...g, items: g.items.filter((m) => !stop.has(String(m.id))) }));
       p.sizes = (p.sizes || []).map((z) => ({ ...z, groups: prune(z.groups) }));
       p.modifierGroups = prune(p.modifierGroups);
       const blocked = (groups) => groups.some((g) => g.min > 0 && !g.items.length);
@@ -389,6 +407,11 @@ export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
     .sort((a, b) => a.order - b.order);
   // Разделы из админки главнее iiko: картинка, название, порядок, вкладка, скрытие
   const sections = applyCategorySettings(orderGroups(raw.data.groups, barGroups(ranked)), ranked, catSettings);
+  // Вес без единицы (в iiko «порц»): напитки бара — в мл, остальное — в граммах
+  const barIds = new Set(sections.groups.filter((g) => g.isBar).map((g) => String(g.id)));
+  for (const p of sections.products) {
+    if (/^\d+$/.test(String(p.weight || ''))) p.weight = `${p.weight} ${barIds.has(String(p.parentGroup)) ? 'мл' : 'г'}`;
+  }
   return {
     ...raw.data,
     groups: sections.groups,

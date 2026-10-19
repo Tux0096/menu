@@ -18,7 +18,9 @@ import {
   tableQrSvg, tableUrl, updateRestaurant,
 } from '../services/admin.js';
 import { staffRestaurant } from '../lib/staff-scope.js';
-import { getCategoryList, getNetworkMenu, getNetworkMenuPoints, saveCategorySettings, setCategoryImage } from '../services/network-menu.js';
+import {
+  getCategoryList, getModifierList, getNetworkMenu, getNetworkMenuPoints, saveCategorySettings, saveModifierTitles, setCategoryImage, setModifierImage,
+} from '../services/network-menu.js';
 import { syncIikoMenu } from '../services/background-jobs.js';
 import { getCashdesks, getIikoSetup, setCashdesk, setIikoSetup, setSectionRoute } from '../services/cashdesks.js';
 
@@ -71,6 +73,39 @@ admin.put('/network-menu/categories', h(async (req) => {
   const res = await saveCategorySettings(req.body.items);
   audit(req.staff, 'menu.categories', 'category', '', { count: res.saved });
   return res;
+}));
+// Модификаторы: свои названия групп и вариантов, картинки вариантов — общие для сети
+admin.get('/network-menu/modifiers', h(async (req) => getModifierList(await staffRestaurants(req))));
+admin.put('/network-menu/modifiers', h(async (req) => {
+  if (req.staff.restaurantId) throw httpError(403, 'Модификаторы общие для сети — их настраивает сотрудник без привязки к точке');
+  const res = await saveModifierTitles(req.body || {});
+  audit(req.staff, 'menu.modifiers', 'modifier', '', { count: res.saved });
+  return res;
+}));
+admin.post('/network-menu/modifiers/image', h(async (req) => {
+  if (req.staff.restaurantId) throw httpError(403, 'Модификаторы общие для сети — их настраивает сотрудник без привязки к точке');
+  requireBody(req.body, 'name');
+  const image = req.body.image ? String(req.body.image) : null;
+  if (image && !/^(\/media\/|https:\/\/)/.test(image)) throw httpError(400, 'Картинка — загруженный файл или ссылка https://');
+  const res = await setModifierImage(String(req.body.name), image);
+  if (!res) throw httpError(400, 'Нет названия варианта');
+  audit(req.staff, 'menu.modifier.image', 'modifier', String(req.body.name), { image });
+  return res;
+}));
+// Отчёт выгрузки iiko: какие разделы и позиции внешнего меню не попали к гостям и почему (скрыты, нет цены для точки)
+admin.get('/network-menu/sync-report', h(async (req) => {
+  const restaurants = await staffRestaurants(req);
+  const { rows } = await pool.query(
+    `SELECT restaurant_id, source, menu_name, report, created_at FROM menu_sync_reports WHERE restaurant_id = ANY($1::uuid[])`,
+    [restaurants.map((r) => r.id)],
+  );
+  return rows.map((x) => {
+    const r = restaurants.find((y) => y.id === x.restaurant_id);
+    return {
+      restaurant: r?.name || '', slug: r?.slug || '', source: x.source, menuName: x.menu_name, at: x.created_at,
+      sections: (x.report || []).filter((c) => c.hidden || c.noPrice || c.hiddenItems || !c.shown),
+    };
+  }).sort((a, b) => a.restaurant.localeCompare(b.restaurant, 'ru'));
 }));
 admin.post('/network-menu/availability', h(async (req) => {
   requireBody(req.body, 'restaurant', 'productId');

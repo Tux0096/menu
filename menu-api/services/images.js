@@ -32,6 +32,16 @@ async function allowedUrls() {
      UNION SELECT image_url FROM promo_blocks WHERE image_url IS NOT NULL`,
   );
   allowed = new Set(rows.map((r) => r.u));
+  // Картинки разделов и модификаторов (из админки и из внешнего меню iiko) — отдельным запросом: если что-то
+  // не поддерживается базой, основные картинки меню всё равно работают
+  try {
+    const { rows: extra } = await pool.query(
+      `SELECT image_url AS u FROM category_content WHERE image_url IS NOT NULL
+       UNION SELECT image_url FROM modifier_content WHERE image_url IS NOT NULL
+       UNION SELECT DISTINCT jsonb_path_query(options, '$.**.image') #>> '{}' FROM products WHERE options IS NOT NULL`,
+    );
+    for (const r of extra) if (r.u) allowed.add(r.u);
+  } catch (e) { console.warn('img: картинки модификаторов не загружены в список:', e.message); }
   allowedAt = Date.now();
   return allowed;
 }

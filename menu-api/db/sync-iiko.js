@@ -283,6 +283,19 @@ function itemOptions(item, organizationId) {
   return groups.length ? { groups } : null;
 }
 
+/**
+ * Вес/объём порции с единицей из iiko: напитки (л, мл) — в мл, еда (кг, г) — в граммах.
+ * Единица не указана («порц») — только число: единицу поставит каталог (бар — мл, кухня — г).
+ */
+export function portionText(grams, unit) {
+  const n = Math.round(Number(grams) || 0);
+  if (!n) return null;
+  const u = String(unit || '').trim().toLowerCase();
+  if (/^(л|l|литр|мл|ml)/.test(u)) return n >= 1000 && n % 100 === 0 ? `${n / 1000} л` : `${n} мл`;
+  if (/^(кг|kg|г|g|гр)/.test(u)) return `${n} г`;
+  return String(n);
+}
+
 /** Меню ресторана из внешнего меню iiko: цены и доступность — для организации ресторана. */
 async function syncFromExternalMenu(restaurant, token, menu, organizationId, preloaded = null, source = 'main') {
   const data = preloaded || await requestExternalMenu(token, menu, [organizationId]);
@@ -290,14 +303,22 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
   const rows = [];
   // Во внешних меню агрегаторов (OrderMaster) все разделы бывают помечены скрытыми — тогда пометка ничего не значит
   const allHidden = categories.length > 0 && categories.every((c) => c.isHidden);
+  // Отчёт для админки: раздел → сколько позиций у гостей, сколько скрыто и без цены (например, «нет пиццы»)
+  const report = [];
   for (const [ci, cat] of categories.entries()) {
-    if (cat.isHidden && !allHidden) continue;
+    const rep = { name: cat.name, hidden: Boolean(cat.isHidden && !allHidden), total: (cat.items || []).length, shown: 0, hiddenItems: 0, noPrice: 0, examples: [] };
+    report.push(rep);
+    if (rep.hidden) continue;
     for (const [ii, item] of (cat.items || []).entries()) {
-      if (item.isHidden) continue;
+      if (item.isHidden) { rep.hiddenItems += 1; continue; }
       const size = (item.itemSizes || []).find((z) => z.isDefault) || (item.itemSizes || [])[0];
-      if (!size) continue;
-      const price = priceForOrg(size.prices, organizationId);
-      if (!(price > 0)) continue; // блюдо не продаётся в этом ресторане
+      const price = size ? priceForOrg(size.prices, organizationId) : 0;
+      if (!(price > 0)) { // блюдо не продаётся в этом ресторане
+        rep.noPrice += 1;
+        if (rep.examples.length < 3) rep.examples.push(String(item.name || '').slice(0, 60));
+        continue;
+      }
+      rep.shown += 1;
       // КБЖУ на 100 г — массив по организациям (NutritionInfoDto.organizations); берём запись этого ресторана
       const nutr = [].concat(size.nutritionPerHundredGrams || [], size.nutritions || []).filter((x) => x && typeof x === 'object');
       const n = nutr.find((x) => (x.organizations || []).includes(organizationId))
@@ -309,7 +330,7 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
         sku: item.sku || null,
         description: item.description || null,
         price,
-        weight: size.portionWeightGrams ? `${Math.round(size.portionWeightGrams)} г` : null,
+        weight: portionText(size.portionWeightGrams, item.measureUnit || size.measureUnit || size.measureUnitType),
         image: size.buttonImageUrl || item.imageUrl || (item.imageUrls || [])[0] || null,
         energy: n.energy ?? null,
         proteins: n.proteins ?? null,
@@ -320,6 +341,11 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
       });
     }
   }
+  await pool.query(
+    `INSERT INTO menu_sync_reports (restaurant_id, source, menu_name, report, created_at) VALUES ($1, $2, $3, $4, NOW())
+     ON CONFLICT (restaurant_id, source) DO UPDATE SET menu_name = EXCLUDED.menu_name, report = EXCLUDED.report, created_at = NOW()`,
+    [restaurant.id, source, menu.name || null, JSON.stringify(report)],
+  ).catch((e) => console.warn('  отчёт выгрузки не сохранён:', e.message));
   console.log(`  внешнее меню «${menu.name}»: ${rows.length} блюд с ценой для ресторана`
     + ` (с размерами ${rows.filter((r) => r.options?.sizes).length}, с модификаторами ${rows.filter((r) => r.options?.groups || r.options?.sizes?.some((z) => z.groups.length)).length})`);
   if (!rows.length) {
@@ -490,7 +516,8 @@ async function syncRestaurant(restaurant, token, orgs = [], externalMenu = null,
     for (const [i, p] of relevantProducts.entries()) {
       const imageUrl = p.imageLinks?.[0] ?? null;
       const price = p.sizePrices?.[0]?.price?.currentPrice ?? 0;
-      const weight = p.weight ? String(p.weight) : null;
+      // Вес в номенклатуре — в кг (или л): напитки — в мл, остальное каталог переведёт в граммы
+      const weight = p.weight ? (/^(л|l|литр)/i.test(String(p.measureUnit || '')) ? portionText(Number(p.weight) * 1000, 'мл') : String(p.weight)) : null;
 
       await client.query(
         `INSERT INTO products

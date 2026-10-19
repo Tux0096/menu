@@ -417,6 +417,25 @@ const SCHEMA = `
   ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS size_name VARCHAR(100);
   ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS modifiers JSONB;
   ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS options_text VARCHAR(300);
+  -- Модификаторы из админки: своё название и картинка варианта, название группы — по названию в iiko
+  CREATE TABLE IF NOT EXISTS modifier_content (
+    kind VARCHAR(10) NOT NULL,
+    key VARCHAR(200) NOT NULL,
+    name VARCHAR(200) NOT NULL,
+    title VARCHAR(120),
+    image_url TEXT,
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (kind, key)
+  );
+  -- Отчёт выгрузки внешнего меню iiko по разделам: сколько позиций попало к гостям и почему остальные нет
+  CREATE TABLE IF NOT EXISTS menu_sync_reports (
+    restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+    source VARCHAR(30) NOT NULL,
+    menu_name TEXT,
+    report JSONB NOT NULL DEFAULT '[]',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    PRIMARY KEY (restaurant_id, source)
+  );
   -- Ключи онлайн-оплаты по ресторанам (задаёт администратор в админке «Оплата»)
   CREATE TABLE IF NOT EXISTS restaurant_payment_settings (
     restaurant_id UUID PRIMARY KEY REFERENCES restaurants(id) ON DELETE CASCADE,
