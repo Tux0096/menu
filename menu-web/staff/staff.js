@@ -292,6 +292,45 @@
     const [label, tone] = STAGES[stage] || [it.kitchenLabel || 'на кухне', ''];
     return `<span class="pill pill--stage" data-tone="${tone}">${esc(stage === 'accepted' && it.kitchenLabel ? it.kitchenLabel : label)}</span>`;
   }
+  // ── Алкоголь: 18+ и правила точки (сервер: lib/alco-rules.js; позиции помечает каталог) ──
+  const alcoRules = () => S.catalog?.alcohol || null;
+  const catalogItem = (it) => (S.catalog?.products || []).find((p) => String(p.id) === String(it.productId) || String(p.iikoId) === String(it.iikoProductId));
+  const isAlcoItem = (it) => Boolean(it.isAlcohol || catalogItem(it)?.isAlcohol);
+  /** Продаётся ли алкоголь сейчас: каталог открыт при входе на стол, поэтому после nextChangeAt считаем смену сами. */
+  function alcoOpenNow() {
+    const a = alcoRules();
+    if (!a) return true;
+    if (!a.enabled) return false;
+    return a.nextChangeAt && Date.now() >= Date.parse(a.nextChangeAt) ? !a.open : a.open !== false;
+  }
+  const alcoClosedText = () => {
+    const a = alcoRules();
+    if (a && !a.enabled) return 'На этой точке алкоголь не продаётся';
+    return a?.from ? `Алкоголь продаём с ${a.from} до ${a.to}` : 'Алкоголь сейчас не продаётся';
+  };
+  /** Плашка над заказом с алкоголем: правила точки, подтвердил ли гость 18+, проверка документа, предупреждение вне часов. */
+  function alcoBoxHtml(items) {
+    const a = alcoRules();
+    const alco = items.filter(isAlcoItem);
+    if (!a || !alco.length) return '';
+    const qty = alco.reduce((n, i) => n + i.quantity, 0);
+    const unconfirmed = alco.filter((i) => !i.ageConfirmed);
+    const pendingAlco = alco.filter((i) => !i.isLocked);
+    const open = alcoOpenNow();
+    const status = a.requireAgeConfirm === false ? ''
+      : unconfirmed.length ? `<span class="pill" data-tone="wait">Гость не подтверждал 18+ — проверьте документ${alco.length > unconfirmed.length ? ` (${unconfirmed.reduce((n, i) => n + i.quantity, 0)} шт.)` : ''}</span>`
+        : '<span class="pill" data-tone="ok">✓ Гость подтвердил 18+</span>';
+    return `<div class="alco-box ${open || !pendingAlco.length ? '' : 'is-warn'}">
+      <div class="alco-box__head"><span class="tag-18">18+</span><b>В заказе алкоголь · ${qty} шт.</b>${status}${a.requireDocCheck ? '<span class="pill" data-tone="bad">Проверьте документ</span>' : ''}</div>
+      <div class="alco-box__rules">${esc(a.rulesText || '')}</div>
+      ${!open && pendingAlco.length ? `<div class="alco-box__warn">⚠ Сейчас алкоголь не продаём: ${esc(alcoClosedText())}. Не принимайте заказ, пока не уточните.</div>` : ''}
+    </div>`;
+  }
+  /** Предупреждение официанту: добавляет алкоголь вне часов продажи точки (не запрет — решает он). */
+  function warnAlcoClosed(p) {
+    if (p && p.isAlcohol && !alcoOpenNow()) toast(`${alcoClosedText()} — сейчас алкоголь не продаём`, true);
+  }
+
   function editorHtml() {
     const s = S.sessions.find((x) => x.sessionId === S.openId);
     if (!s || !S.edit) return '';
@@ -309,19 +348,20 @@
 
     // «Набор (Ролл, Суп)» → название и состав отдельной строкой мелким текстом
     const nameOnly = (it) => (it.options && String(it.name).endsWith(`(${it.options})`) ? String(it.name).slice(0, -it.options.length - 3).trim() : it.name);
+    const tag18 = (it) => (isAlcoItem(it) ? ` <span class="tag-18" title="${it.ageConfirmed ? 'Гость подтвердил 18+' : 'Гость 18+ не подтверждал'}">18+${it.ageConfirmed ? ' ✓' : ''}</span>` : '');
     const optsLine = (it) => (it.options ? `<div class="trow__comp">${esc(it.options)}</div>` : '');
     const row = (it, idx) => {
       const served = it.servedAt || it.kitchenStatus === 'Served';
       const src = ''; // кухня/бар делятся только при отправке в iiko — в интерфейсе одно меню
       if (it.isLocked) {
         return `<div class="trow is-sent ${served ? 'is-served' : ''} ${it.isReady ? 'is-ready' : ''}">
-          <div class="trow__main"><div class="trow__name">${esc(nameOnly(it))} <span class="muted">×${it.quantity}</span></div>${optsLine(it)}
+          <div class="trow__main"><div class="trow__name">${esc(nameOnly(it))}${tag18(it)} <span class="muted">×${it.quantity}</span></div>${optsLine(it)}
             <div class="trow__meta">${src}${stagePill(it)}${it.course ? ` · курс ${it.course}` : ''}${cookLine(it)}</div></div>
           ${it.isReady && !served ? `<button class="btn btn--sm btn--dark" data-served-item="${esc(it.id)}">Вынесено</button>` : `<b class="trow__sum">${rub(it.price * it.quantity)}</b>`}
         </div>`;
       }
       return `<div class="trow is-new">
-        <div class="trow__main"><div class="trow__name">${esc(nameOnly(it))}</div>${optsLine(it)}
+        <div class="trow__main"><div class="trow__name">${esc(nameOnly(it))}${tag18(it)}</div>${optsLine(it)}
           <div class="trow__meta">${src}${rub(it.price)} · <b style="color:var(--ok)">новое</b></div></div>
         <div class="qty"><button class="icon-btn" data-qty="${idx}" data-d="-1" aria-label="Меньше">−</button><b>${it.quantity}</b><button class="icon-btn icon-btn--dark" data-qty="${idx}" data-d="1" aria-label="Больше">+</button></div>
         <div class="trow__opts">
@@ -352,6 +392,7 @@
       ${(s.removedItems || []).filter((r) => Date.now() - new Date(r.at).getTime() < 30 * 60_000).length ? `<div class="note-box note-box--warn"><b>На кассе удалено:</b> ${s.removedItems.filter((r) => Date.now() - new Date(r.at).getTime() < 30 * 60_000).slice(-5).reverse().map((r) => `${esc(r.name)} ×${r.quantity}`).join('; ')}</div>` : ''}
       ${assignBoxHtml(s)}
       ${lockedByOther ? '<div class="error-box">Стол сейчас редактирует другой официант</div>' : ''}
+      ${alcoBoxHtml(e.items)}
       ${s.readyCount ? `<div class="ready-box"><span>🔔 Готово на кухне: ${s.items.filter((i) => i.isReady).map((i) => `${esc(i.name)} ×${i.quantity}${i.guestName ? ` — ${esc(i.guestName)}` : ''}`).join(', ')}</span>
         <button class="btn btn--sm btn--dark" data-served>Вынесено всё</button></div>` : ''}
       ${(s.billRequests || []).length ? `<div class="bill-box"><b>Счёт запрошен</b>${s.billRequests.map((r) => `<div>${esc(r.by ? `${r.by}: ` : '')}${r.part === 'bar' ? 'бар (кухня оплачена онлайн), ' : ''}${r.scope === 'table' ? 'за весь стол' : esc((r.names || []).join(' и '))} — <b>${rub(r.amount)}</b>${r.method ? ` <span class="pill" data-tone="wait">${r.method === 'cash' ? 'наличными' : 'картой'}</span>` : ''} <span class="muted">${dateTime(r.at)}</span></div>`).join('')}</div>` : ''}
@@ -413,7 +454,7 @@
         ${products.length ? `<input class="inp" id="prod-search" style="width:100%" placeholder="Поиск: название или артикул" value="${esc(S.productSearch)}" autocomplete="off">
           ${q ? '' : `<div class="picker__cats">${groups.map((g) => `<button class="${g.id === S.pickCat ? 'is-active' : ''}" data-pick-cat="${esc(g.id)}">${esc(g.name)}</button>`).join('')}</div>`}
           <div class="pick-list">${found.map((p) => { const n = inCart(p); return `<button class="pick-item" data-add="${esc(p.id)}" ${p.isInStopList ? 'disabled' : ''}>
-            <span class="pick-item__name">${esc(p.name)}${p.isInStopList ? ' <span class="pill" data-tone="bad">стоп</span>' : ''}${p.sku ? ` <span class="muted" style="font-size:11px">арт. ${esc(p.sku)}</span>` : ''}</span>
+            <span class="pick-item__name">${esc(p.name)}${p.isAlcohol ? ` <span class="tag-18">18+</span>${alcoOpenNow() ? '' : ' <span class="pill" data-tone="wait">не продаём</span>'}` : ''}${p.isInStopList ? ' <span class="pill" data-tone="bad">стоп</span>' : ''}${p.sku ? ` <span class="muted" style="font-size:11px">арт. ${esc(p.sku)}</span>` : ''}</span>
             <span class="pick-item__price">${hasVariants(p) ? '<span class="pill" style="font-size:10px">выбор</span> от ' : ''}${rub(p.price)}</span><span class="pick-item__add ${n ? 'has' : ''}">${n || '+'}</span></button>`; }).join('') || '<div class="muted" style="padding:12px">Ничего не найдено</div>'}</div>`
     : '<div class="error-box">Меню этого ресторана пустое — выгрузите его из iiko (админка → «Меню и стоп-лист»).</div>'}
       </div>
@@ -1150,6 +1191,7 @@
   // Выбор строки: «+» прибавляет только к строке с тем же выбором (вок без выбора не сливается с воком гостя «с говядиной»)
   const variantOf = (i) => `${i.sizeId || ''}|${(i.modifiers || []).map((m) => `${m.id}:${m.amount || 1}`).sort().join(',')}`;
   function addLine(p, seat, v) {
+    warnAlcoClosed(p);
     const key = v ? variantOf(v) : '|';
     const existing = S.edit.items.find((i) => !i.isLocked && String(i.productId) === String(p.id)
       && (Number(i.seatNumber) || null) === seat && variantOf(i) === key);
@@ -1492,6 +1534,9 @@
       }
       if (q('[data-save]')) { await saveEdit(); toast('Правки сохранены — гость видит актуальный заказ'); render(); return; }
       if (q('[data-send]')) {
+        // Алкоголь вне часов продажи точки: отправить можно, но только осознанно
+        if (!alcoOpenNow() && S.edit.items.some((i) => !i.isLocked && isAlcoItem(i))
+          && !confirm(`${alcoClosedText()}. Всё равно отправить алкоголь на кухню?`)) return;
         const btn = q('[data-send]'); btn.disabled = true; btn.textContent = 'Отправляем в iiko…';
         if (S.edit.dirty) await saveEdit();
         try {

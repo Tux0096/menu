@@ -178,6 +178,18 @@ export interface PaySettings {
   iikoCardTypeId: string | null;
 }
 
+/** Правила продажи алкоголя точки (GET/POST /admin/alcohol) */
+export interface AlcoholRules {
+  enabled: boolean;
+  from: string;
+  to: string;
+  tz: string;
+  text: string;
+  requireAgeConfirm: boolean;
+  requireDocCheck: boolean;
+  preview: { open: boolean; rulesText: string; closedMessage: string | null };
+}
+
 export interface Feedback {
   id: string;
   rating: number;

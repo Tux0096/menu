@@ -48,6 +48,7 @@ export const NAV_ITEMS: NavItem[] = [
 
   { to: '/qr', label: 'QR-коды столов', icon: 'i-heroicons-qr-code', roles: ADMIN, group: 'restaurant' },
   { to: '/cashdesks', label: 'Кассы', icon: 'i-heroicons-calculator', roles: ADMIN, group: 'restaurant', hint: 'Какой раздел меню на какую кассу iiko уходит: кухня или бар' },
+  { to: '/alcohol', label: 'Алкоголь', icon: 'i-heroicons-shield-check', roles: ADMIN, group: 'restaurant', hint: 'Продажа алкоголя на точке: часы, 18+, правила для гостей и официантов' },
   { to: '/payments', label: 'Оплата', icon: 'i-heroicons-credit-card', roles: ADMIN, group: 'restaurant', hint: 'Онлайн-оплата CloudPayments и типы оплат iiko' },
 
   { to: '/staff', label: 'Сотрудники', icon: 'i-heroicons-users', roles: ADMIN, group: 'system', hint: 'Доступы в админку и PIN для терминала официанта' },

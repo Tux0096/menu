@@ -35,6 +35,7 @@ import {
   rubText, billText, callText, cookSlowText, newOrderText, readyText, readyWaitText, reorderText, removedText, waitText,
 } from '../lib/notification-text.js';
 import { getSource, productSourceMap } from './sources.js';
+import { alcoholView, assertAgeConfirmed, assertAlcoSale } from '../lib/alco-rules.js';
 import { menuIndex, priceLine, priceVariant, rowVariantKey, variantKey } from './menu-pricing.js';
 import { assertLunchRows } from './business-lunch.js';
 import { stopListLoadedAt } from './stoplist.js';
@@ -202,6 +203,8 @@ function mapItem(row) {
     guestId: row.guest_id || null,
     guestName: row.guest_name || null,
     source: row.source || 'main',
+    // Гость подтвердил 18+ при добавлении (у позиций официанта нет); isAlcohol дописывает getSessionView
+    ageConfirmed: Boolean(row.age_confirmed_at),
     course: row.course || null,
     batchNo: row.batch_no,
     isLocked: row.is_locked,
@@ -326,6 +329,11 @@ export async function getSessionView(sessionId) {
       if (p?.isInStopList) i.isStopped = true;
       else if (p?.balance) i.stopBalance = p.balance;
     }
+    // Алкоголь: 18+ на позициях и правила точки над заказом (официант видит до принятия)
+    for (const i of view.items) {
+      if (index.get(String(i.iikoProductId))?.alcohol || index.get(String(i.productId))?.alcohol) i.isAlcohol = true;
+    }
+    view.alcohol = alcoholView(index.alcoRules, view.items);
   }
   await attachCookInfo(view, ctx.restaurant).catch(() => {});
   view.stoppedPending = view.items.filter((i) => i.isStopped).map((i) => i.name);
@@ -541,7 +549,7 @@ async function recalcTotal(client, sessionId) {
  * Сохранить корзину гостя (полный список позиций, включая уже отправленные).
  * Отправленные на кухню позиции убрать нельзя; сверх них — черновик/дозаказ.
  */
-async function writeGuestCart(client, ctx, cartItems, guestId) {
+async function writeGuestCart(client, ctx, cartItems, guestId, { ageConfirmed = false } = {}) {
   const { session } = ctx;
   // У каждого гостя своя корзина: трогаем только его позиции, чужие и добавленные официантом — нет
   guestId = guestId || null;
@@ -585,6 +593,12 @@ async function writeGuestCart(client, ctx, cartItems, guestId) {
     const prevQtySum = rows.reduce((n, r) => n + r.quantity, 0);
     const priced = priceLine(index, key, { qty: pendingQty, prevQty: prevQtySum, clientName: line.name });
     const entry = index.get(key);
+    // Алкоголь: только в часы продажи точки и с подтверждением 18+ (в этом запросе или у уже сохранённой строки)
+    if (entry.alcohol) {
+      assertAlcoSale(index.alcoRules);
+      assertAgeConfirmed(index.alcoRules, ageConfirmed || (rows.length > 0 && rows.every((r) => r.age_confirmed_at)));
+    }
+    const ageStamp = entry.alcohol && ageConfirmed;
     const v = entry.sizes.length || entry.groups.length || line.sizeId || line.modifiers.length
       ? priceVariant(entry, key, { sizeId: line.sizeId, modifiers: line.modifiers }) : null;
     const price = v ? v.price : priced.price;
@@ -596,6 +610,7 @@ async function writeGuestCart(client, ctx, cartItems, guestId) {
         if (parseFloat(r.price) !== price) {
           await client.query('UPDATE table_order_items SET price = $2, line_total = $2 * quantity, updated_at = NOW() WHERE id = $1', [r.id, price]);
         }
+        if (ageStamp && !r.age_confirmed_at) await client.query('UPDATE table_order_items SET age_confirmed_at = NOW() WHERE id = $1', [r.id]);
       }
       continue;
     }
@@ -604,21 +619,22 @@ async function writeGuestCart(client, ctx, cartItems, guestId) {
       keep.add(first.id);
       await client.query(
         `UPDATE table_order_items SET name = $2, price = $3, quantity = $4, line_total = $5, course = $6,
-           size_id = $7, size_name = $8, modifiers = $9, options_text = $10, updated_at = NOW() WHERE id = $1`,
+           size_id = $7, size_name = $8, modifiers = $9, options_text = $10,
+           age_confirmed_at = CASE WHEN $11 THEN COALESCE(age_confirmed_at, NOW()) ELSE age_confirmed_at END, updated_at = NOW() WHERE id = $1`,
         [first.id, lineName(priced.name, v), price, pendingQty, price * pendingQty, course,
-          v?.sizeId || null, v?.sizeName || null, v?.mods.length ? JSON.stringify(v.mods) : null, v?.text || null],
+          v?.sizeId || null, v?.sizeName || null, v?.mods.length ? JSON.stringify(v.mods) : null, v?.text || null, ageStamp],
       );
       continue;
     }
     await client.query(
       `INSERT INTO table_order_items
          (session_id, product_id, iiko_product_id, name, price, quantity, line_total, seat_number, course, batch_no, is_locked,
-          guest_id, guest_name, source, size_id, size_name, modifiers, options_text)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12,$13,$14,$15,$16,$17)`,
+          guest_id, guest_name, source, size_id, size_name, modifiers, options_text, age_confirmed_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12,$13,$14,$15,$16,$17, CASE WHEN $18 THEN NOW() END)`,
       [session.id, line.productId, key, lineName(priced.name, v), price, pendingQty, price * pendingQty,
         me?.seat || null, course, nextBatch,
         guestId, me?.name || null, sources.get(key) || 'main',
-        v?.sizeId || null, v?.sizeName || null, v?.mods.length ? JSON.stringify(v.mods) : null, v?.text || null],
+        v?.sizeId || null, v?.sizeName || null, v?.mods.length ? JSON.stringify(v.mods) : null, v?.text || null, ageStamp],
     );
   }
   const drop = items.filter((i) => !i.is_locked && !keep.has(i.id)).map((i) => i.id);
@@ -654,10 +670,10 @@ async function lockSession(client, sessionId) {
 }
 
 /** Автосохранение корзины (кейс 5). */
-export async function saveGuestCart(sessionId, cartItems, guestId) {
+export async function saveGuestCart(sessionId, cartItems, guestId, { ageConfirmed = false } = {}) {
   await withSessionMutex(sessionId, () => withTransaction(async (client) => {
     const ctx = await lockSession(client, sessionId);
-    await writeGuestCart(client, ctx, cartItems, guestId);
+    await writeGuestCart(client, ctx, cartItems, guestId, { ageConfirmed });
     const wf = ctx.session.workflow_status;
     const next = wf === WORKFLOW.BROWSING ? WORKFLOW.BUILDING_CART : wf;
     await client.query(
@@ -669,17 +685,20 @@ export async function saveGuestCart(sessionId, cartItems, guestId) {
 }
 
 /** «Передать официанту» / «Передать дозаказ» (кейсы 6, 9). */
-export async function submitToWaiter(sessionId, cartItems, guestId) {
+export async function submitToWaiter(sessionId, cartItems, guestId, { ageConfirmed = false } = {}) {
   let notify = null;
   await withSessionMutex(sessionId, () => withTransaction(async (client) => {
     const ctx = await lockSession(client, sessionId);
     assertOpen(ctx.session);
-    if (Array.isArray(cartItems)) await writeGuestCart(client, ctx, cartItems, guestId);
+    if (Array.isArray(cartItems)) await writeGuestCart(client, ctx, cartItems, guestId, { ageConfirmed });
     const fresh = await getSessionContext(sessionId, client);
     const pending = fresh.items.filter((i) => !i.is_locked);
     if (!pending.length) throw httpError(400, 'Корзина пуста — добавьте блюда из меню');
     // Бизнес-ланч уже в корзине, а время вышло — официанту его не передаём
-    assertLunchRows(await menuIndex(fresh.restaurant), pending.map((i) => ({ key: i.iiko_product_id || i.product_id })));
+    const index = await menuIndex(fresh.restaurant);
+    assertLunchRows(index, pending.map((i) => ({ key: i.iiko_product_id || i.product_id })));
+    // Алкоголь уже в корзине, а продажа закрылась — официанту его не передаём
+    if (pending.some((i) => index.get(String(i.iiko_product_id || i.product_id))?.alcohol)) assertAlcoSale(index.alcoRules);
 
     const isReorder = fresh.items.some((i) => i.is_locked);
     const status = isReorder ? WORKFLOW.REORDER_PENDING : WORKFLOW.CART_READY;

@@ -558,6 +558,10 @@ const SCHEMA = `
     created_at TIMESTAMPTZ DEFAULT NOW()
   );
   CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at DESC);
+  -- Правила продажи алкоголя на точке (lib/alco-rules.js): продаётся ли, часы, текст, 18+ и проверка документа; NULL — по умолчанию
+  ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS alcohol_rules JSONB;
+  -- Гость подтвердил тапом «Мне есть 18» при добавлении алкоголя (NULL — не подтверждал, например добавил официант)
+  ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS age_confirmed_at TIMESTAMPTZ;
 `;
 
 const DEFAULT_CHIPS = [
