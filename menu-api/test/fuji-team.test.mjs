@@ -25,3 +25,15 @@ test('точка из «Фуджи Тим» → наш ресторан', () => 
   assert.equal(matchRestaurant(R, ''), null);
   assert.equal(matchRestaurant(R, 'Дыбенко'), null, 'нет такой точки — выбор при входе');
 });
+
+test('подсказка запроса по структуре базы', async () => {
+  const { suggestStaffQuery } = await import('../lib/fuji-team.js');
+  const s = suggestStaffQuery([
+    { schema: 'public', name: 'restaurants', columns: [{ name: 'id' }, { name: 'name' }] },
+    { schema: 'public', name: 'employees', columns: [{ name: 'id' }, { name: 'tab_number' }, { name: 'full_name' }, { name: 'position' }, { name: 'point' }, { name: 'is_fired', type: 'boolean' }] },
+  ]);
+  assert.equal(s.table, 'public.employees');
+  assert.equal(s.query, 'SELECT "tab_number" AS code, "full_name" AS name, "position" AS position, "point" AS restaurant, NOT COALESCE("is_fired", false) AS active FROM "public"."employees"');
+  assert.equal(s.note, '');
+  assert.equal(suggestStaffQuery([{ schema: 'public', name: 'x', columns: [{ name: 'id' }] }]), null);
+});

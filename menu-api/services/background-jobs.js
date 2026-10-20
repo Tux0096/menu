@@ -9,6 +9,7 @@ import { invalidateCatalogCache, warmCatalogs } from './catalog.js';
 import { importOpenOrders } from './iiko-import.js';
 import { syncReserves, tickReserves } from './iiko-reserves.js';
 import { cleanupGuestPush, initGuestPush } from './guest-push.js';
+import { loadTeamSettings } from './fuji-team.js';
 import { refreshKitchenStatuses, runServiceChecks } from './table-session.js';
 
 // ── Меню и стоп-листы iiko ──────────────────────────────────────────────────
@@ -111,6 +112,7 @@ export function startBackgroundJobs() {
   setInterval(() => checkPendingPayments().catch((e) => console.warn('онлайн-оплата:', e.message)), 30000);
   setInterval(() => asBackground(refreshAllStopLists), parseInt(process.env.STOP_LIST_REFRESH_MS || '600000', 10));
   initGuestPush();
+  loadTeamSettings(); // запрос сотрудников «Фуджи Тим» из админки
   setInterval(cleanupExpired, 6 * 60 * 60 * 1000);
   setTimeout(cleanupExpired, 60_000).unref?.();
 }

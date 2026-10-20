@@ -2,9 +2,10 @@
  * Вход персонала на of. по табельному номеру iiko из базы «Фуджи Тим» (Postgres, доступ только на чтение).
  * В iiko при входе не ходим вовсе — ни за списком сотрудников, ни за сменой: лимит запросов ключа iiko на вход не влияет.
  *
- * Настройка (только на сервере, в .env; в репозиторий не попадает):
- *   FUJI_TEAM_DATABASE_URL — postgres://логин:пароль@хост:порт/база (пользователь только на чтение)
- *   FUJI_TEAM_STAFF_QUERY  — SELECT сотрудников, колонки (псевдонимы):
+ * Настройка:
+ *   FUJI_TEAM_DATABASE_URL — postgres://логин:пароль@хост:порт/база (пользователь только на чтение). Только на сервере:
+ *     GitHub Secret FUJI_TEAM_DATABASE_URL → деплой кладёт в .env base64 (FUJI_TEAM_DATABASE_URL_B64); в репозиторий не попадает.
+ *   Запрос сотрудников — в админке («Фуджи Тим», хранится в settings) или FUJI_TEAM_STAFF_QUERY; колонки (псевдонимы):
  *       code       — табельный номер iiko (обязательно)
  *       name       — ФИО: его видит гость («Ваш официант — Анна») и коллеги
  *       position   — должность: официант → waiter, администратор/менеджер → manager (lib/iiko-roles.js)
@@ -18,14 +19,31 @@ import pool from '../db/pool.js';
 import { createLimiter, httpError } from '../lib/http.js';
 import { hashPassword } from '../lib/passwords.js';
 import { roleForPositions } from '../lib/iiko-roles.js';
-import { matchRestaurant, normalizeCode } from '../lib/fuji-team.js';
+import { matchRestaurant, normalizeCode, suggestStaffQuery } from '../lib/fuji-team.js';
 
-export const fujiTeamEnabled = () => Boolean(process.env.FUJI_TEAM_DATABASE_URL && process.env.FUJI_TEAM_STAFF_QUERY);
+const SETTING = 'fuji_team';
+export function teamDatabaseUrl() {
+  if (process.env.FUJI_TEAM_DATABASE_URL) return process.env.FUJI_TEAM_DATABASE_URL;
+  const b64 = process.env.FUJI_TEAM_DATABASE_URL_B64;
+  return b64 ? Buffer.from(b64, 'base64').toString('utf8').trim() : '';
+}
+// Запрос из админки (settings) важнее env; держим в памяти, перечитываем при сохранении
+let savedQuery = null;
+export async function loadTeamSettings() {
+  try {
+    const { rows } = await pool.query('SELECT value FROM settings WHERE name = $1', [SETTING]);
+    savedQuery = String(rows[0]?.value?.query || '').trim() || null;
+  } catch { /* таблицы ещё нет — только env */ }
+  return { query: savedQuery };
+}
+export const teamQuery = () => savedQuery || String(process.env.FUJI_TEAM_STAFF_QUERY || '').trim() || '';
+export const fujiTeamEnabled = () => Boolean(teamDatabaseUrl() && teamQuery());
 
 let teamDb = null;
 function db() {
+  if (!teamDatabaseUrl()) throw httpError(503, 'База «Фуджи Тим» не подключена: нет FUJI_TEAM_DATABASE_URL на сервере');
   teamDb ||= new pg.Pool({
-    connectionString: process.env.FUJI_TEAM_DATABASE_URL,
+    connectionString: teamDatabaseUrl(),
     max: 2,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 5_000,
@@ -42,8 +60,8 @@ let cache = null;
 let loading = null;
 export async function teamStaff({ force = false } = {}) {
   if (!force && cache && Date.now() - cache.at < CACHE_MS) return cache.list;
-  loading ||= db().query(process.env.FUJI_TEAM_STAFF_QUERY)
-    .then(({ rows }) => {
+  loading ||= runStaffQuery(teamQuery())
+    .then((rows) => {
       const list = rows.map((r) => ({
         code: normalizeCode(r.code),
         name: String(r.name || '').trim().slice(0, 200),
@@ -62,6 +80,92 @@ export async function teamStaff({ force = false } = {}) {
     if (cache) return cache.list;
     throw httpError(503, 'База сотрудников «Фуджи Тим» недоступна — попробуйте через минуту');
   }
+}
+
+/** Запрос сотрудников — только чтение: одна инструкция SELECT/WITH, транзакция READ ONLY, не больше 20 000 строк. */
+async function runStaffQuery(sql) {
+  const q = String(sql || '').trim().replace(/;+\s*$/, '');
+  if (!/^(select|with)\b/i.test(q) || q.includes(';')) throw httpError(400, 'Запрос сотрудников — один SELECT');
+  const client = await db().connect();
+  try {
+    await client.query('BEGIN TRANSACTION READ ONLY');
+    const { rows } = await client.query(`SELECT * FROM (${q}) t LIMIT 20000`);
+    return rows;
+  } finally {
+    await client.query('ROLLBACK').catch(() => {});
+    client.release();
+  }
+}
+
+/** Структура базы для админки: таблицы и колонки (без данных) + примерное число строк. */
+export async function teamSchema() {
+  const { rows } = await db().query(
+    `SELECT c.table_schema, c.table_name, c.column_name, c.data_type
+     FROM information_schema.columns c
+     WHERE c.table_schema NOT IN ('pg_catalog', 'information_schema')
+     ORDER BY c.table_schema, c.table_name, c.ordinal_position`,
+  );
+  const tables = new Map();
+  for (const r of rows) {
+    const key = `${r.table_schema}.${r.table_name}`;
+    if (!tables.has(key)) tables.set(key, { schema: r.table_schema, name: r.table_name, columns: [] });
+    tables.get(key).columns.push({ name: r.column_name, type: r.data_type });
+  }
+  const list = [...tables.values()].slice(0, 300);
+  return { tables: list, suggestion: suggestStaffQuery(list) };
+}
+
+/** Проверка запроса из админки: сколько сотрудников, роли, точки и 5 примеров (табельный — в маске). */
+export async function testStaffQuery(sql) {
+  const rows = await runStaffQuery(sql);
+  if (rows.length && !('code' in rows[0])) throw httpError(400, 'В запросе нет колонки code (табельный номер) — добавьте «… AS code»');
+  const { rows: rests } = await pool.query('SELECT id, slug, name FROM restaurants WHERE is_disabled = FALSE');
+  const staff = rows.map((r) => ({
+    code: normalizeCode(r.code), name: String(r.name || '').trim(), position: String(r.position || '').trim(),
+    restaurant: String(r.restaurant || '').trim(), active: r.active === undefined || r.active === null ? true : Boolean(r.active),
+  })).filter((r) => r.code);
+  const active = staff.filter((r) => r.active);
+  const roles = { waiter: 0, manager: 0, none: 0 };
+  const points = new Map();
+  for (const r of active) {
+    roles[roleForPositions([r.position]) || 'none'] += 1;
+    const m = matchRestaurant(rests, r.restaurant);
+    const k = m ? m.name : r.restaurant ? `не найдена: ${r.restaurant}` : 'точка не указана';
+    points.set(k, (points.get(k) || 0) + 1);
+  }
+  const dup = active.length - new Set(active.map((r) => r.code)).size;
+  return {
+    total: staff.length, active: active.length, duplicates: dup, roles,
+    points: [...points.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
+    sample: active.slice(0, 5).map((r) => ({
+      code: r.code.length > 2 ? `${r.code.slice(0, -2).replace(/./g, '•')}${r.code.slice(-2)}` : '••',
+      name: r.name, position: r.position, restaurant: r.restaurant,
+    })),
+  };
+}
+
+export async function saveStaffQuery(sql) {
+  const q = String(sql || '').trim();
+  if (q) await testStaffQuery(q); // не сохраняем неработающий запрос
+  await pool.query(
+    `INSERT INTO settings (name, value, updated_at) VALUES ($1, $2, NOW())
+     ON CONFLICT (name) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+    [SETTING, { query: q }],
+  );
+  savedQuery = q || null;
+  cache = null;
+  return { query: q };
+}
+
+export async function teamStatus() {
+  const url = teamDatabaseUrl();
+  let connected = false; let error = null;
+  if (url) {
+    try { await db().query('SELECT 1'); connected = true; } catch (e) { error = e.message; }
+  }
+  let host = '';
+  try { host = url ? new URL(url).host : ''; } catch { /* неверная строка подключения */ }
+  return { configured: Boolean(url), host, connected, error, query: teamQuery(), queryFromEnv: !savedQuery && Boolean(process.env.FUJI_TEAM_STAFF_QUERY), enabled: fujiTeamEnabled() };
 }
 
 const byClient = createLimiter({ windowMs: 60_000, max: 5, message: 'Слишком много попыток — подождите минуту' });

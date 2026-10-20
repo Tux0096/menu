@@ -393,3 +393,26 @@ export interface PointInfo {
   address: string;
   workHours: string;
 }
+
+/** База сотрудников «Фуджи Тим» (вход на of. по табельному) */
+export interface FujiTeamStatus {
+  configured: boolean;
+  host: string;
+  connected: boolean;
+  error: string | null;
+  query: string;
+  queryFromEnv: boolean;
+  enabled: boolean;
+}
+export interface FujiTeamSchema {
+  tables: { schema: string; name: string; columns: { name: string; type: string }[] }[];
+  suggestion: { table: string; query: string; note: string } | null;
+}
+export interface FujiTeamTest {
+  total: number;
+  active: number;
+  duplicates: number;
+  roles: Record<'waiter' | 'manager' | 'none', number>;
+  points: { name: string; count: number }[];
+  sample: { code: string; name: string; position: string; restaurant: string }[];
+}
