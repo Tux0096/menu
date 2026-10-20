@@ -427,6 +427,17 @@ const SCHEMA = `
   ALTER TABLE category_content ADD COLUMN IF NOT EXISTS sort_order INT;
   ALTER TABLE category_content ADD COLUMN IF NOT EXISTS tab VARCHAR(10);
   ALTER TABLE category_content ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN NOT NULL DEFAULT FALSE;
+  -- Разделы кухни и бара с одним названием настраиваются отдельно: у раздела бара ключ «название|bar», старый ключ — у кухни.
+  -- Раздел, который есть только в баре, переезжает на новый ключ со своими настройками (копия; старая строка остаётся)
+  INSERT INTO category_content (key, name, image_url, title, sort_order, tab, is_hidden)
+  SELECT cc.key || '|bar', cc.name, cc.image_url, cc.title, cc.sort_order, cc.tab, cc.is_hidden
+    FROM category_content cc
+   WHERE cc.key NOT LIKE '%|bar'
+     AND EXISTS (SELECT 1 FROM products p JOIN categories c ON c.id = p.category_id
+                  WHERE p.source <> 'main' AND btrim(regexp_replace(replace(lower(c.name), 'ё', 'е'), '[^a-zа-я0-9]+', ' ', 'g')) = cc.key)
+     AND NOT EXISTS (SELECT 1 FROM products p JOIN categories c ON c.id = p.category_id
+                      WHERE p.source = 'main' AND btrim(regexp_replace(replace(lower(c.name), 'ё', 'е'), '[^a-zа-я0-9]+', ' ', 'g')) = cc.key)
+  ON CONFLICT (key) DO NOTHING;
   -- Размеры и модификаторы блюда из внешнего меню iiko (с ценами точки): { sizes: [...] } или { groups: [...] }
   ALTER TABLE products ADD COLUMN IF NOT EXISTS options JSONB;
   -- Блюдо стоит в нескольких разделах внешнего меню (бизнес-ланч из обычных блюд): { источник: [{ c: раздел, o: порядок }] }

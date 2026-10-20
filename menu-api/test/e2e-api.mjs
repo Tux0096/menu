@@ -197,7 +197,7 @@ step('адрес и время работы точки: сохраняются �
   const cats0 = ok(await api('GET', '/api/v1/admin/network-menu/categories', null, A), 'cats list');
   assert.ok(cats0.length > 2, 'разделы есть');
   const reordered = [cats0[2], cats0[0], ...cats0.slice(1).filter((c) => c.key !== cats0[2].key)]
-    .map((c, i) => ({ name: c.name, title: i === 0 ? 'Первый раздел' : c.title, tab: c.tab, hidden: c.key === cats0[1].key }));
+    .map((c, i) => ({ name: c.name, bar: c.bar, title: i === 0 ? 'Первый раздел' : c.title, tab: c.tab, hidden: c.key === cats0[1].key }));
   ok(await api('PUT', '/api/v1/admin/network-menu/categories', { items: reordered }, A), 'cats save');
   const cat3 = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog sections');
   assert.equal(cat3.groups[0].name, 'Первый раздел', 'свой порядок и название у гостя');
@@ -206,7 +206,7 @@ step('адрес и время работы точки: сохраняются �
   const cats1 = ok(await api('GET', '/api/v1/admin/network-menu/categories', null, A), 'cats list 2');
   assert.ok(cats1.find((c) => c.key === cats0[1].key)?.hidden, 'скрытый раздел виден в админке');
   // вернуть как было (порядок — как до теста, без своих названий/скрытия, если их не было)
-  ok(await api('PUT', '/api/v1/admin/network-menu/categories', { items: cats0.map((c) => ({ name: c.name, title: c.title, tab: c.tab, hidden: c.hidden })) }, A), 'cats restore');
+  ok(await api('PUT', '/api/v1/admin/network-menu/categories', { items: cats0.map((c) => ({ name: c.name, bar: c.bar, title: c.title, tab: c.tab, hidden: c.hidden })) }, A), 'cats restore');
   step('разделы меню: порядок, название и скрытие из админки — у гостя');
 }
 
