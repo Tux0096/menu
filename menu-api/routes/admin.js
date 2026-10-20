@@ -68,9 +68,9 @@ admin.post('/network-menu/categories', h(async (req) => {
   requireBody(req.body, 'name');
   const image = req.body.image ? String(req.body.image) : null;
   if (image && !/^(\/media\/|https:\/\/)/.test(image)) throw httpError(400, 'Картинка — загруженный файл или ссылка https://');
-  const res = await setCategoryImage(String(req.body.name), image);
+  const res = await setCategoryImage(String(req.body.name), image, req.body.bar === true);
   if (!res) throw httpError(400, 'Нет названия раздела');
-  audit(req.staff, 'menu.category.image', 'category', String(req.body.name), { image });
+  audit(req.staff, 'menu.category.image', 'category', String(req.body.name), { image, bar: req.body.bar === true });
   return res;
 }));
 // Разделы меню: порядок, своё название, вкладка «Кухня/Бар», скрытие — одним списком

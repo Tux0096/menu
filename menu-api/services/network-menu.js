@@ -2,15 +2,17 @@
  * Меню сети: все позиции точек, подключённых к iiko, в одной таблице и где каждая из них есть.
  *
  * У точек разные организации iiko, поэтому ID одного и того же блюда на точках разные, артикулов может не быть,
- * а цены свои у каждой точки. Позиции сводятся по названию (без регистра, «ё», пробелов и знаков).
+ * а цены свои у каждой точки. Позиции сводятся по названию (без регистра, «ё», пробелов и знаков);
+ * одноимённые блюда из разных разделов («Карбонара» в «Пасте» и в «Детском меню») — отдельные строки (lib/dish-key.js).
  * «Есть на точке» = блюдо есть во внешнем меню iiko этой точки и не скрыто в админке. Добавить точке блюдо,
  * которого нет в её iiko, нельзя — его заводят в iiko (меню iiko мы не меняем).
  */
 import pool from '../db/pool.js';
 import { accessibleOrgIds } from '../iiko-client.js';
-import { cleanModText, getRestaurantCatalog, groupTitle } from './catalog.js';
+import { cleanModText, getDishVariants, getRestaurantCatalog, groupTitle } from './catalog.js';
 import { getStopListIds } from './stoplist.js';
-import { cleanMenuName, menuKey } from '../lib/menu-key.js';
+import { categoryKey, cleanMenuName, menuKey } from '../lib/menu-key.js';
+import { dishRowKey } from '../lib/dish-key.js';
 
 export { menuKey };
 
@@ -49,11 +51,12 @@ export async function getNetworkMenu(restaurants) {
   const allowed = await accessibleOrgIds().catch(() => null);
   const points = [];
   const items = new Map();
-  // Ключ — по названию из iiko (переименование в админке не разрывает связь точек); бар — отдельной строкой
+  const variants = await getDishVariants().catch(() => new Map());
+  // Ключ — по названию из iiko (переименование в админке не разрывает связь точек); бар — отдельной строкой;
+  // одноимённое блюдо из другого раздела — своей строкой («название|раздел»)
   const put = (name, slug, cell, extra = {}) => {
-    const base = menuKey(extra.iikoName || name);
-    if (!base) return;
-    const key = cell.source && cell.source !== 'main' ? `${base}|${cell.source}` : base;
+    if (!menuKey(extra.iikoName || name)) return;
+    const key = dishRowKey(extra.iikoName || name, cell.source, variants.get(String(cell.productId)) || '');
     if (!items.has(key)) items.set(key, { key, name, iikoName: cleanMenuName(extra.iikoName || name), group: null, image: null, description: null, badge: null, cardSize: null, points: {} });
     const it = items.get(key);
     it.points[slug] = cell;
@@ -179,12 +182,13 @@ export async function getCategoryList(restaurants) {
     for (const p of catalog.products || []) used.set(String(p.parentGroup), (used.get(String(p.parentGroup)) || 0) + 1);
     for (const g of catalog.groups || []) {
       const iikoName = g.iikoName || g.name;
-      const key = menuKey(iikoName);
+      // Раздел бара — отдельная строка, даже если в кухне есть раздел с таким же названием
+      const key = categoryKey(iikoName, g.barSource);
       if (!key || !used.get(String(g.id))) continue;
       const c = content.get(key);
       const cur = list.get(key) || {
         key, name: iikoName, title: c?.title || '', image: c?.image_url || null, iikoImage: null,
-        isBar: Boolean(g.isBar), tab: c?.tab || '', hidden: false, sortOrder: c?.sort_order ?? null, points: 0, items: 0, position: list.size,
+        bar: Boolean(g.barSource), isBar: Boolean(g.isBar), tab: c?.tab || '', hidden: false, sortOrder: c?.sort_order ?? null, points: 0, items: 0, position: list.size,
       };
       // iikoImage — картинка раздела из iiko: гость видит её, пока своей нет
       if (!cur.iikoImage && g.image && g.image !== cur.image) cur.iikoImage = g.image;
@@ -195,7 +199,8 @@ export async function getCategoryList(restaurants) {
   }
   for (const c of rows.filter((r) => r.is_hidden && !list.has(r.key))) {
     list.set(c.key, {
-      key: c.key, name: c.name, title: c.title || '', image: c.image_url || null, iikoImage: null, isBar: c.tab === 'bar',
+      key: c.key, name: c.name, title: c.title || '', image: c.image_url || null, iikoImage: null,
+      bar: c.key.endsWith('|bar'), isBar: c.tab === 'bar',
       tab: c.tab || '', hidden: true, sortOrder: c.sort_order ?? null, points: 0, items: 0, position: 1e6 + list.size,
     });
   }
@@ -213,7 +218,7 @@ export async function saveCategorySettings(items) {
     await client.query('BEGIN');
     for (const [i, it] of list.entries()) {
       const name = String(it.name || '').slice(0, 200);
-      const key = menuKey(name).slice(0, 200);
+      const key = categoryKey(name, it.bar === true).slice(0, 200);
       if (!key) continue;
       const title = String(it.title || '').trim().slice(0, 100) || null;
       const tab = ['kitchen', 'bar'].includes(it.tab) ? it.tab : null;
@@ -234,9 +239,9 @@ export async function saveCategorySettings(items) {
   return { saved: list.length };
 }
 
-/** Картинка раздела (пусто — стандартная по названию). Ключ — название раздела без регистра и пометок iiko. */
-export async function setCategoryImage(name, imageUrl) {
-  const key = menuKey(String(name).slice(0, 200)).slice(0, 200);
+/** Картинка раздела (пусто — стандартная по названию). Ключ — название раздела без регистра и пометок iiko, у раздела бара ещё «|bar». */
+export async function setCategoryImage(name, imageUrl, bar = false) {
+  const key = categoryKey(String(name).slice(0, 200), bar === true).slice(0, 200);
   if (!key) return null;
   await pool.query(
     `INSERT INTO category_content (key, name, image_url, updated_at) VALUES ($1, $2, $3, NOW())

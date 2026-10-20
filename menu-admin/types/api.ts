@@ -328,6 +328,8 @@ export interface MenuCategory {
   /** Раздел скрыт у гостей и официанта */
   hidden: boolean;
   sortOrder: number | null;
+  /** Раздел целиком со второй кассы (бар): настраивается отдельно от одноимённого раздела кухни */
+  bar?: boolean;
   isBar: boolean;
   points: number;
   items: number;
