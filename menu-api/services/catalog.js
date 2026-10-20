@@ -91,6 +91,8 @@ async function getCatalogFromDb(restaurantId) {
       // Цена без выбора, если отличается от «от» (вок с платной основой: базовая 0, «от 459»)
       basePrice: Number.isFinite(Number(p.options?.base)) && p.options?.base != null ? Number(p.options.base) : null,
       sizeId: p.options?.sizeId || null,
+      // Набор за 0 ₽ («Собери свой ланч»): цена в выбранных блюдах, без платного выбора не продаётся
+      needsChoice: Boolean(p.options?.needsChoice),
       groupModifiers: [],
       modifiers: [],
       filters: [],
@@ -447,11 +449,13 @@ async function buildRestaurantCatalog(restaurant, { force = false } = {}) {
       const hadSizes = (p.sizes || []).length;
       p.sizes = (p.sizes || []).filter((z) => !(z.id && stopped(src, p.iikoId, z.id))).map((z) => ({ ...z, groups: prune(z.groups) }));
       p.modifierGroups = prune(p.modifierGroups);
-      const blocked = (groups) => groups.some((g) => g.min > 0 && !g.items.length);
+      // Набор без платных блюд в наличии продать не за что
+      const blocked = (groups, needsChoice = false) => groups.some((g) => g.min > 0 && !g.items.length)
+        || (needsChoice && !groups.some((g) => g.items.some((m) => Number(m.price) > 0)));
       if (hadSizes && !p.sizes.length) p.isInStopList = true;
       // Из нескольких размеров остался один — его ID нужен iiko в заказе (выбора у гостя уже нет)
       if (hadSizes > 1 && p.sizes.length === 1 && p.sizes[0].id) p.sizeId = String(p.sizes[0].id);
-      else if (p.sizes.length ? p.sizes.every((z) => blocked(z.groups)) : blocked(p.modifierGroups)) p.isInStopList = true;
+      else if (p.sizes.length ? p.sizes.every((z) => blocked(z.groups, z.needsChoice)) : blocked(p.modifierGroups, p.needsChoice)) p.isInStopList = true;
     }
     // Ограниченный остаток в iiko («осталось N») — официант видит, сколько ещё можно предложить
     const left = p.isInStopList ? null : iikoStop.balance(src, p.id) ?? iikoStop.balance(src, p.iikoId);

@@ -25,6 +25,7 @@ export async function menuIndex(restaurant) {
       sizeId: p.sizeId ?? null, // единственный продаваемый размер из нескольких в iiko
       sizes: p.sizes || [],
       groups: p.modifierGroups || [],
+      needsChoice: Boolean(p.needsChoice), // набор за 0 ₽ — только с платным выбором
     };
     if (p.id) index.set(String(p.id), entry);
     if (p.iikoId) index.set(String(p.iikoId), entry);
@@ -154,6 +155,8 @@ export function priceVariant(entry, key, { sizeId = null, modifiers = [], defaul
   if (wanted.size) throw httpError(400, `«${name}»: часть дополнений больше недоступна — выберите заново`);
   const base = size ? size.price : (entry.base ?? entry.price);
   const price = Math.round((base + extra) * 100) / 100;
+  // Набор «Собери свой ланч»: база 0, цена в блюдах — без платного выбора продавать нечего
+  if ((size ? size.needsChoice : entry.needsChoice) && !(extra > 0)) throw httpError(400, `«${name}»: выберите состав набора`);
   const text = [size?.name || null, ...mods.map((m) => (m.amount > 1 ? `${m.name} ×${m.amount}` : m.name))].filter(Boolean).join(', ');
   const sid = size && entry.sizes.length > 1 ? (size.id ? String(size.id) : null) : null;
   return { price, sizeId: sid, sizeName: sid ? size.name : null, mods, text: text.slice(0, 300), key: variantKey(key, sid, mods) };
