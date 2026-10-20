@@ -349,10 +349,11 @@
   }
 
   /** Имя официанта для гостя — первое слово («Анна Иванова» → «Анна») */
-  const waiterFirstName = (s) => String(s?.waiterName || '').trim().split(/\s+/)[0] || '';
+  // Наш официант (взял стол на of.) или официант, открывший заказ на кассе iiko
+  const waiterFirstName = (s) => String(s?.waiterName || s?.iikoWaiterName || '').trim().split(/\s+/)[0] || '';
   /** Официант взял стол: тост «Ваш официант — Анна» один раз на визит и официанта (помним в localStorage) */
   function announceWaiter(session) {
-    const name = waiterFirstName(session);
+    const name = String(session?.waiterName || '').trim().split(/\s+/)[0];
     if (!name || !session.waiterId) return;
     const key = `waiter:${session.sessionId}`;
     if (store.get(key) === session.waiterId) return;
@@ -530,7 +531,8 @@
         <button class="topbar__table" data-action="${s ? 'place' : 'seat'}" aria-label="Выбрать стол">${table}</button>
       </div>
       <button class="status-pill" data-tone="${tone}" ${pillAction} title="${esc(s?.workflowLabel || label)}">
-        <img src="${UI(icon)}" alt=""><span>${esc(kind === 'table' && S.table && !s ? 'Войти за стол' : label)}</span></button>
+        <img src="${UI(icon)}" alt=""><span>${esc(kind === 'table' && S.table && !s ? 'Войти за стол'
+          : ['waiter', 'welcome'].includes(kind) && waiterFirstName(s) ? `Официант ${waiterFirstName(s)}` : label)}</span></button>
     </header>`;
   }
 
@@ -1011,7 +1013,9 @@
     const step = orderStep(s);
     const wf = s?.workflowStatus;
     const [title, sub0] = STEP_TEXT[step];
-    const sub = (wf && STATUS_SUB[wf]) || (s?.kitchenLabel && step === 2 ? `Кухня: ${s.kitchenLabel}` : sub0);
+    const wname = waiterFirstName(s);
+    const sub = (wf && STATUS_SUB[wf]) || (s?.kitchenLabel && step === 2 ? `Кухня: ${s.kitchenLabel}`
+      : step === 1 && wname ? `${wname} скоро подойдёт и примет ваш заказ` : sub0);
     const bars = [0, 1, 2, 3].map((n) => `<div class="stepper__bar ${n < step ? 'is-done' : n === step ? 'is-current' : ''}">${n === step
       ? `<img src="${UI(`order-step${n + 1}.svg`)}" alt="">` : ''}</div>`).join('');
     return `<section class="stepper-card">
