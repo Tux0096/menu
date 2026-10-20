@@ -169,7 +169,7 @@ function randomPin() {
       icon="i-heroicons-users"
       :description="iikoLogin
         ? 'Доступ к самой админке — по логину и паролю, в рамках прав должности. Официанты и управляющие зала входят в терминал кодом сотрудника из iiko — заводить их не нужно.'
-        : 'Кто и куда входит. Официанты — в приложение «Фуджи Официант» по PIN; управляющие, маркетинг и администраторы — в эту админку по логину и паролю.'"
+        : 'Кто и куда входит. Официанты — в терминал of.menu.franchise-fuji.ru по PIN; управляющие, маркетинг и администраторы — в эту админку по логину и паролю.'"
     >
       <UButton icon="i-heroicons-user-plus" color="cta" @click="edit()">Добавить сотрудника</UButton>
       <UButton icon="i-heroicons-arrow-path" color="white" :loading="loading" aria-label="Обновить" @click="load" />

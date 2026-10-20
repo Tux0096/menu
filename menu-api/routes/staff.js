@@ -4,7 +4,7 @@ import pool from '../db/pool.js';
 import express from 'express';
 import { h, requireBody, sendError } from '../lib/http.js';
 import { acceptWaiterPayment } from '../services/payments.js';
-import { audit, iikoPinLogin, pinLogin, staffAuth, staffLogin } from '../services/staff-auth.js';
+import { audit, iikoPinLogin, pinLogin, pinLoginAnyRestaurant, staffAuth, staffLogin } from '../services/staff-auth.js';
 import { iikoStaffLoginEnabled } from '../services/iiko-staff.js';
 import { isPushEnabled, registerDevice, unregisterDevice } from '../services/push.js';
 import { enterTable, getSessionView, markServed, resolveRestaurant } from '../services/table-session.js';
@@ -38,7 +38,16 @@ router.get('/api/v1/staff/login-mode', (req, res) => res.json({ mode: iikoStaffL
 router.post('/api/v1/staff/pin-login', h(async (req) => {
   if (iikoStaffLoginEnabled()) {
     requireBody(req.body, 'pin');
-    return iikoPinLogin(req.body.pin, req.ip, req.body.restaurant || null);
+    try {
+      return await iikoPinLogin(req.body.pin, req.ip, req.body.restaurant || null);
+    } catch (e) {
+      // Код не узнан в iiko — возможно, это PIN из админки (официант заведён до перехода на iiko)
+      if (e.code !== 'INVALID_CODE') throw e;
+      const device = String(req.get('X-Device-Id') || '').replace(/[^\w-]/g, '').slice(0, 64);
+      const local = await pinLoginAnyRestaurant(req.body.pin, `${req.ip}|${device}`);
+      if (local) return local;
+      throw e;
+    }
   }
   requireBody(req.body, 'restaurant', 'pin');
   const r = await resolveRestaurant(req.body.restaurant);
