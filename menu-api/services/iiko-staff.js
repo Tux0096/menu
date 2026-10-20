@@ -23,7 +23,7 @@ const byClient = createLimiter({ windowMs: 60_000, max: 5, message: 'Слишк�
 const allClients = createLimiter({ windowMs: 10 * 60_000, max: 60, message: 'Слишком много неверных кодов — вход приостановлен на 10 минут' });
 
 // ── Справочники iiko (кэш: сотрудников и должности меняют редко) ─────────────
-const CACHE_MS = 5 * 60_000;
+const CACHE_MS = 15 * 60_000;
 let employeesCache = null;
 let positionsCache = null;
 
@@ -43,10 +43,17 @@ export async function iikoEmployees({ force = false } = {}) {
   // Табельный номер (code) — им входят на of.; если iiko не знает поле — прежний список, вход по карте работает
   let list;
   try {
-    list = await listAll('/api/employees/v1/employee/list', { fields: [...base, 'code'] });
+    try {
+      list = await listAll('/api/employees/v1/employee/list', { fields: [...base, 'code'] });
+    } catch (e) {
+      if (e.response?.status === 429 || !e.response) throw e; // лимит/сеть — второй запрос не поможет
+      console.warn('iiko сотрудники: без табельного номера —', e.response?.status || e.message);
+      list = await listAll('/api/employees/v1/employee/list', { fields: base });
+    }
   } catch (e) {
-    console.warn('iiko сотрудники: без табельного номера —', e.response?.status || e.message);
-    list = await listAll('/api/employees/v1/employee/list', { fields: base });
+    // iiko не ответил — входим по прежнему списку, если он есть (сотрудники меняются редко)
+    if (employeesCache) return employeesCache.list;
+    throw e;
   }
   employeesCache = { list, at: Date.now() };
   return list;
@@ -54,7 +61,13 @@ export async function iikoEmployees({ force = false } = {}) {
 
 export async function iikoPositions({ force = false } = {}) {
   if (!force && positionsCache && Date.now() - positionsCache.at < CACHE_MS) return positionsCache.map;
-  const items = await listAll('/api/employees/v1/positions/list', {}, 1000);
+  let items;
+  try {
+    items = await listAll('/api/employees/v1/positions/list', {}, 1000);
+  } catch (e) {
+    if (positionsCache) return positionsCache.map;
+    throw e;
+  }
   const map = new Map(items.map((p) => [String(p.id), p]));
   positionsCache = { map, at: Date.now() };
   return map;
@@ -90,19 +103,25 @@ async function loadRestaurantsByTerminal() {
   return { map, restaurants: rows.filter((r) => !allowed || allowed.has(r.organization_id)) };
 }
 
-/** Точки, где у сотрудника сейчас открыта личная смена на кассе (или открытая явка в iiko). */
-export async function openShiftRestaurants(employeeId) {
+/**
+ * Точки, где у сотрудника сейчас открыта личная смена на кассе (или открытая явка в iiko).
+ * only — проверить одну точку (повторная проверка смены вошедшего официанта): явки спрашиваем только по ней,
+ * а не по всем 7 точкам — экономим лимит запросов ключа iiko.
+ * iiko не ответил (429, сеть) и смену подтвердить нечем — бросаем ошибку: «iiko недоступен» ≠ «смена закрыта».
+ */
+export async function openShiftRestaurants(employeeId, { only = null } = {}) {
   const { map, restaurants } = await restaurantsByTerminal();
   const found = new Map();
+  let failure = null;
   try {
     const d = await iikoRequest('/api/1/employees/shifts/by_courier', { employeeId });
     for (const tg of d?.terminalGroupIds || []) {
       const r = map.get(String(tg));
       if (r) found.set(r.id, r);
     }
-  } catch { /* запасной путь — явки */ }
+  } catch (e) { failure = e; } // запасной путь — явки
   if (!found.size) {
-    for (const r of restaurants) {
+    for (const r of restaurants.filter((x) => !only || x.id === only)) {
       try {
         const d = await iikoRequest('/api/employees/v1/attendance/list', {
           organizationId: r.organization_id, employeeIds: [employeeId], isClosed: false, limit: 10, offset: 0,
@@ -110,9 +129,13 @@ export async function openShiftRestaurants(employeeId) {
           startAt: new Date(Date.now() - 36 * 3600_000).toISOString(), endAt: new Date(Date.now() + 3600_000).toISOString(),
         });
         if ((d?.items || []).some((a) => !a.isClosed && !a.endAt)) found.set(r.id, r);
-      } catch { /* нет доступа к явкам — только личные смены */ }
+        failure = null; // явки ответили — ответ «смены нет» достоверен
+      } catch (e) {
+        if (e.response?.status === 429 || !e.response) { failure ||= e; break; } // лимит/сеть — дальше не долбим
+      }
     }
   }
+  if (!found.size && failure && (failure.response?.status === 429 || !failure.response)) throw failure;
   return [...found.values()];
 }
 
@@ -170,6 +193,7 @@ export async function iikoStaffLogin(code, clientKey = '', restaurant = null) {
 const SHIFT_CHECK_MS = 3 * 60_000;
 const SHIFT_GRACE_MS = 30 * 60_000; // iiko недоступен — не выкидываем официанта посреди смены
 const shiftCache = new Map(); // staffId → { open, at, ok }
+const shiftInflight = new Map(); // staffId → Promise (идущая проверка)
 
 /** Открыта ли ещё смена у сотрудника, вошедшего через iiko, на его точке. */
 export async function iikoShiftStillOpen(row) {
@@ -177,7 +201,12 @@ export async function iikoShiftStillOpen(row) {
   const hit = shiftCache.get(row.id);
   if (hit && Date.now() - hit.at < SHIFT_CHECK_MS) return hit.open;
   try {
-    const open = (await openShiftRestaurants(row.iiko_employee_id)).some((r) => r.id === row.restaurant_id);
+    // Параллельные запросы одного официанта — одна проверка на всех
+    if (!shiftInflight.has(row.id)) {
+      shiftInflight.set(row.id, openShiftRestaurants(row.iiko_employee_id, { only: row.restaurant_id })
+        .finally(() => shiftInflight.delete(row.id)));
+    }
+    const open = (await shiftInflight.get(row.id)).some((r) => r.id === row.restaurant_id);
     shiftCache.set(row.id, { open, at: Date.now(), ok: open ? Date.now() : hit?.ok || 0 });
     return open;
   } catch {

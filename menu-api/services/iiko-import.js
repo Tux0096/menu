@@ -12,7 +12,7 @@
  * В iiko ничего не пишем: только чтение. Закрытие и оплата на кассе — closeIfPaidAtTill (table-session.js).
  */
 import pool from '../db/pool.js';
-import { getOrdersByTable, getRestaurantSections, isIikoDemo, withIikoCreds } from '../iiko-client.js';
+import { getOrdersByTable, getRestaurantSections, iikoCoolingDown, isIikoDemo, withIikoCreds } from '../iiko-client.js';
 import {
   matchOrderToSession, normalizeIikoOrder, orderKey, sessionOrders, tableNumbersBySections,
 } from '../lib/iiko-order-sync.js';
@@ -161,6 +161,7 @@ let again = false;
  * Параллельные вызовы склеиваются: пока идёт опрос, следующий запускается один раз сразу после него.
  */
 export function importOpenOrders(filter = {}) {
+  if (iikoCoolingDown()) return Promise.resolve({ ...{ created: 0, attached: 0, seen: 0 }, skipped: 'iiko 429' }); // лимит iiko — пропускаем ход
   if (running) { again = true; return running; }
   running = (async () => {
     const total = { created: 0, attached: 0, seen: 0 };

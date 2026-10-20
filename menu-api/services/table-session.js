@@ -20,6 +20,7 @@ import {
   changeOrderPayments,
   closeTableOrder,
   getOrdersByIds,
+  iikoCoolingDown,
   getRestaurantSections,
   isIikoDemo,
   matchTableIdFromSections,
@@ -1264,12 +1265,12 @@ async function closeIfPaidAtTill(ctx, orders, closedAtTill) {
  * Статусы заказа из iiko — в очереди визита, чтобы не перезаписать то, что сейчас меняет отправка или оплата.
  * Визит занят — пропускаем: следующий опрос (20 с) досмотрит.
  */
-export function refreshFromIiko(sessionId) {
+export function refreshFromIiko(sessionId, prefetched = null) {
   if (isSessionBusy(sessionId)) return Promise.resolve();
-  return withSessionMutex(sessionId, () => refreshFromIikoNow(sessionId));
+  return withSessionMutex(sessionId, () => refreshFromIikoNow(sessionId, prefetched));
 }
 
-async function refreshFromIikoNow(sessionId) {
+async function refreshFromIikoNow(sessionId, prefetched = null) {
   const demo = isIikoDemo();
   const ctx = await getSessionContext(sessionId);
   const orders = ctx ? sessionOrders(ctx.session) : {};
@@ -1287,8 +1288,9 @@ async function refreshFromIikoNow(sessionId) {
       if (!o?.orderId) continue;
       if (demo && !demoHasOrder(o.orderId)) { simulated.add(code); orderStatus ||= 'New'; continue; }
       const src = await getSource(ctx.restaurant, baseCode(code));
-      const data = await withIikoCreds(src.creds, () => getOrdersByIds(src.organization_id, [o.orderId]));
-      const info = (data?.orders || [])[0];
+      // Фоновый опрос уже забрал заказы пачкой (prefetched: orderId → ответ iiko) — отдельный запрос не нужен
+      const info = prefetched ? prefetched.get(String(o.orderId))
+        : ((await withIikoCreds(src.creds, () => getOrdersByIds(src.organization_id, [o.orderId])))?.orders || [])[0];
       // iiko не создал заказ (касса не взяла его вовремя и т. п.) — блюда источника снова «не отправлены»
       if (info?.creationStatus === 'Error') {
         await failIikoOrder(ctx, code, src, info.errorInfo?.message || info.errorInfo?.description || 'iiko не создал заказ', o.orderId);
@@ -1421,13 +1423,51 @@ export async function markServed(sessionId, itemIds = null) {
   return getSessionView(sessionId);
 }
 
-/** Фоновое обновление статусов кухни по всем открытым заказам из меню. */
+/**
+ * Фоновое обновление статусов кухни по всем открытым заказам (из меню и с кассы).
+ * Заказы забираем пачкой — один запрос /order/by_id на организацию, а не на каждый стол:
+ * иначе при десятках открытых столов iiko упирается в лимит запросов (429) и отказывает всем, включая вход официантов.
+ */
 export async function refreshKitchenStatuses() {
+  if (iikoCoolingDown()) return;
   const { rows } = await pool.query(
     `SELECT id FROM table_sessions
      WHERE status = 'open' AND (iiko_order_id IS NOT NULL OR iiko_orders <> '{}'::jsonb) AND sent_to_production_at IS NOT NULL`,
   );
-  for (const r of rows) await refreshFromIiko(r.id);
+  if (!rows.length) return;
+  const prefetched = isIikoDemo() ? null : await prefetchOrders(rows.map((r) => r.id)).catch((e) => {
+    console.warn('кухня: заказы iiko пачкой —', e.response?.status || e.message);
+    return null;
+  });
+  if (!isIikoDemo() && !prefetched) return; // iiko не ответил — по одному не долбим, ждём следующий опрос
+  for (const r of rows) await refreshFromIiko(r.id, prefetched);
+}
+
+/** Заказы iiko открытых визитов одним запросом на (ключ, организацию): orderId → ответ iiko. */
+async function prefetchOrders(sessionIds) {
+  const groups = new Map(); // creds|org → { creds, org, ids:Set }
+  for (const ctx of await getSessionContexts(sessionIds)) {
+    for (const [code, o] of Object.entries(sessionOrders(ctx.session))) {
+      if (!o?.orderId) continue;
+      const src = await getSource(ctx.restaurant, baseCode(code));
+      if (!src?.organization_id) continue;
+      const key = `${src.creds || ''}|${src.organization_id}`;
+      if (!groups.has(key)) groups.set(key, { creds: src.creds, org: src.organization_id, ids: new Set() });
+      groups.get(key).ids.add(String(o.orderId));
+    }
+  }
+  const out = new Map();
+  for (const g of groups.values()) {
+    const ids = [...g.ids];
+    for (let i = 0; i < ids.length; i += 100) {
+      const data = await withIikoCreds(g.creds, () => getOrdersByIds(g.org, ids.slice(i, i + 100)));
+      for (const info of data?.orders || []) {
+        const id = String(info.id || info.order?.id || '');
+        if (id) out.set(id, info);
+      }
+    }
+  }
+  return out;
 }
 
 export { withTransaction, lockSession, recalcTotal, AFTER_KITCHEN };

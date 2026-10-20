@@ -34,8 +34,24 @@ export async function getIikoToken(creds = currentCreds()) {
   return token;
 }
 
+// iiko ответил 429 (лимит запросов на ключ) — фоновые опросы (кухня, импорт столов, брони) пропускают ход,
+// чтобы лимит восстановился для того, что нужно людям: вход официантов, отправка заказов
+let coolingUntil = 0;
+export const iikoCoolingDown = () => Date.now() < coolingUntil;
+
+// Счётчик запросов к iiko по путям — раз в 5 минут в лог: видно, кто тратит лимит ключа
+const callStats = new Map();
+setInterval(() => {
+  if (!callStats.size) return;
+  const total = [...callStats.values()].reduce((a, b) => a + b, 0);
+  const top = [...callStats.entries()].sort((a, b) => b[1] - a[1]).slice(0, 6).map(([p, n]) => `${p} ${n}`).join(', ');
+  console.log(`iiko: ${total} запросов за 5 мин — ${top}`);
+  callStats.clear();
+}, 5 * 60_000).unref?.();
+
 async function iikoPost(path, body, { retried = false } = {}) {
   if (isIikoDemo()) return demoResponse(path, body);
+  callStats.set(path, (callStats.get(path) || 0) + 1);
   const token = await getIikoToken();
   try {
     const res = await axios.post(`${IIKO_URL}${path}`, body, {
@@ -48,6 +64,13 @@ async function iikoPost(path, body, { retried = false } = {}) {
     if (e.response?.status === 401 && !retried) {
       tokens.delete(currentCreds());
       return iikoPost(path, body, { retried: true });
+    }
+    if (e.response?.status === 429) {
+      const retryAfter = Number(e.response.headers?.['retry-after']);
+      coolingUntil = Date.now() + (retryAfter > 0 ? Math.min(retryAfter, 300) * 1000 : 60_000);
+      console.warn(`iiko: лимит запросов (429) на ${path} — фоновые опросы на паузе`);
+      e.status = 503;
+      e.message = 'iiko временно ограничила запросы — попробуйте через минуту';
     }
     throw e;
   }
