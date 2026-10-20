@@ -1,6 +1,10 @@
 /** Вебхуки iiko: стоп-листы и статусы заказов на стол (токен — в заголовке Authorization). */
 import express from 'express';
-import { safeEqual } from '../lib/http.js';
+import { h, safeEqual } from '../lib/http.js';
+import { demoApply } from '../lib/iiko-demo-orders.js';
+import { isIikoDemo } from '../iiko-client.js';
+import { importOpenOrders, scheduleImport } from '../services/iiko-import.js';
+import { staffAuth } from '../services/staff-auth.js';
 import pool from '../db/pool.js';
 import { refreshStopLists, webhookToken } from '../services/stoplist.js';
 import { invalidateCatalogCache } from '../services/catalog.js';
@@ -28,6 +32,8 @@ router.post('/api/v1/iiko/webhook', (req, res) => {
           [String(ev.eventInfo.id)],
         );
         for (const r of rows) await refreshFromIiko(r.id);
+        // Заказа у нас нет: открыли на кассе (или новый заказ на столе с нашим визитом) — подтягиваем открытые заказы точки
+        if (!rows.length && ev.eventType === 'TableOrderUpdate') scheduleImport(ev.organizationId);
       }
     }
     if (stopOrgs.size) {
@@ -38,3 +44,16 @@ router.post('/api/v1/iiko/webhook', (req, res) => {
   })().catch((e) => console.warn('iiko webhook:', e.message));
 });
 
+
+// ── Демо-касса (без ключей iiko): открыть/изменить/удалить блюдо в «заказе на кассе» и сразу получить результат ──
+// Только в демо-режиме и только управляющему. Дальше всё как с настоящим iiko: импорт, сверка позиций, закрытие.
+router.post('/api/v1/iiko/demo/table-orders', staffAuth('manager'), h(async (req) => {
+  if (!isIikoDemo()) throw Object.assign(new Error('Только в демо-режиме'), { status: 404 });
+  const result = demoApply(req.body || {});
+  const imported = await importOpenOrders();
+  const { rows } = await pool.query(
+    `SELECT id FROM table_sessions WHERE status = 'open' AND (iiko_order_id IS NOT NULL OR iiko_orders <> '{}'::jsonb) AND sent_to_production_at IS NOT NULL`,
+  );
+  for (const r of rows) await refreshFromIiko(r.id);
+  return { ...result, imported };
+}));

@@ -6,6 +6,7 @@ import { warmImages } from './images.js';
 import { checkPendingPayments } from './payments.js';
 import { refreshStopLists, registerWebhooks } from './stoplist.js';
 import { invalidateCatalogCache, warmCatalogs } from './catalog.js';
+import { importOpenOrders } from './iiko-import.js';
 import { refreshKitchenStatuses, runServiceChecks } from './table-session.js';
 
 // ── Меню и стоп-листы iiko ──────────────────────────────────────────────────
@@ -77,6 +78,13 @@ export function startBackgroundJobs() {
   setInterval(() => runServiceChecks().catch((e) => console.warn('service checks:', e.message)), 30000);
   // Статусы блюд на кухне: вебхуки iiko + страховочный опрос
   setInterval(() => refreshKitchenStatuses().catch((e) => console.warn('kitchen statuses:', e.message)), parseInt(process.env.KITCHEN_POLL_MS || '20000', 10));
+
+  // Заказы, открытые на кассе iiko, — в систему (меню гостя, терминал официанта, админка). IIKO_IMPORT=false — выключить
+  if (process.env.IIKO_IMPORT !== 'false') {
+    const importTick = () => importOpenOrders().catch((e) => console.warn('импорт заказов iiko:', e.message));
+    setInterval(importTick, parseInt(process.env.IIKO_IMPORT_MS || '30000', 10));
+    setTimeout(importTick, 20_000).unref?.();
+  }
 
   warmCatalogs()
     .then(() => syncIikoMenu())

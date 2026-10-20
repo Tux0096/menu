@@ -478,6 +478,13 @@ const SCHEMA = `
   ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS iiko_order_id VARCHAR(64);
   ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS paid_payment_id UUID;
   ALTER TABLE table_payments ADD COLUMN IF NOT EXISTS item_ids JSONB;
+  -- Заказ, открытый прямо на кассе iiko (импорт открытых заказов по столам): визит помечен «открыт на кассе»,
+  -- официант — по ID сотрудника iiko; строки пришли из iiko (from_iiko) и отправлены сразу
+  ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS opened_in_iiko BOOLEAN NOT NULL DEFAULT FALSE;
+  ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS iiko_waiter_name VARCHAR(200);
+  ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS from_iiko BOOLEAN NOT NULL DEFAULT FALSE;
+  -- Что удалили или отменили на кассе после отправки: [{ name, quantity, at, guestId, guestName }] — гость видит это в истории заказа
+  ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS removed_items JSONB NOT NULL DEFAULT '[]';
   CREATE INDEX IF NOT EXISTS idx_table_payments_session ON table_payments(session_id);
   CREATE INDEX IF NOT EXISTS idx_waiter_notifications_session ON waiter_notifications(session_id, type, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_guest_tokens_expires ON guest_tokens(expires_at);

@@ -23,6 +23,10 @@ import {
   isIikoDemo,
   matchTableIdFromSections,
 } from '../iiko-client.js';
+import {
+  aliveByProduct, baseCode, normalizeIikoOrder, planAdditions, planRemovals, rowOrderCode, rowsOfOrder, sessionOrders,
+} from '../lib/iiko-order-sync.js';
+import { demoHasOrder } from '../lib/iiko-demo-orders.js';
 import { createWaiterNotification } from './waiter-notifications.js';
 import { getSource, productSourceMap } from './sources.js';
 import { menuIndex, priceLine, priceVariant, rowVariantKey, variantKey } from './menu-pricing.js';
@@ -205,6 +209,7 @@ function mapItem(row) {
     isReady: row.kitchen_status === 'CookingCompleted' && !row.served_at,
     paidOnline: Boolean(row.paid_payment_id),
     servedAt: row.served_at || null,
+    fromIiko: Boolean(row.from_iiko),
   };
 }
 
@@ -232,6 +237,11 @@ export function mapSession({ session, restaurant, items, guests = [] }, extra = 
     tableNumber: session.table_number,
     iikoOrderId: session.iiko_order_id,
     iikoLastError: session.iiko_last_error || null,
+    // Заказ открыт на кассе iiko (импорт) — у официанта пометка «открыт на кассе»
+    openedInIiko: Boolean(session.opened_in_iiko),
+    iikoWaiterName: session.iiko_waiter_name || null,
+    // Удалено или отменено на кассе после отправки — гость видит это в истории заказа
+    removedItems: (session.removed_items || []).map((r) => ({ name: r.name, quantity: r.quantity, at: r.at, guestId: r.guestId || null, guestName: r.guestName || null })),
     status: session.status,
     paymentStatus: session.payment_status,
     workflowStatus: wf,
@@ -975,14 +985,12 @@ async function failIikoOrder(ctx, code, src, reason, orderId) {
 }
 
 /**
- * Позиции удалили на кассе iiko (или удалили весь заказ) — убираем их и из стола в меню.
- * Сверка по блюду: живое количество в заказе iiko (строки без deleted) против наших отправленных строк.
- * Строки, отправленные только что, не трогаем: add_items мог ещё не дойти до кассы.
+ * Позиции удалили или отменили на кассе iiko (или удалили весь заказ) — убираем их и из стола в меню.
+ * Из нашего приложения отправленное не удаляется — только через iiko, менеджером на кассе (в том числе готовое блюдо).
+ * Сверка по блюду: живое количество в заказе iiko против наших отправленных строк этого заказа (lib/iiko-order-sync.js).
  * Возвращает удалённое [{ name, quantity }].
  */
-const SYNC_GRACE_MS = 2 * 60_000;
-const isServedOrReady = (row) => Boolean(row.served_at) || ['CookingCompleted', 'Served'].includes(row.kitchen_status);
-async function syncRemovedItems(ctx, code, order, orderId) {
+async function syncRemovedItems(ctx, code, order, orderId, orders = sessionOrders(ctx.session)) {
   const { session } = ctx;
   const orderDeleted = order.status === 'Deleted';
   if (orderDeleted) {
@@ -995,67 +1003,107 @@ async function syncRemovedItems(ctx, code, order, orderId) {
     );
   }
   if (session.payment_status === 'paid') return [];
-  const mine = ctx.items.filter((i) => i.is_locked && (i.source || 'main') === code);
-  if (!mine.length) return [];
-  const alive = new Map();
-  if (!orderDeleted) {
-    for (const it of order.items || []) {
-      if ((it.type || 'Product') !== 'Product' || it.deleted) continue;
-      const pid = String(it.product?.id || it.productId || '');
-      if (pid) alive.set(pid, (alive.get(pid) || 0) + Number(it.amount || 0));
-    }
+  const mine = rowsOfOrder(ctx.items, code, orderId, orders);
+  if (!mine.length) {
+    if (orderDeleted) await closeIfEmptyImported(ctx);
+    return [];
   }
-  // Живые позиции есть, но ни одна не совпала с нашими по id — это не удаление, а расхождение id: не трогаем
+  const alive = orderDeleted ? new Map() : aliveByProduct(normalizeIikoOrder(order).items);
   if (alive.size && !mine.some((r) => alive.has(String(r.iiko_product_id)))) {
     console.warn(`iiko: стол ${session.table_number} (${code}) — позиции заказа не совпали с меню по id, сверку удалений пропускаем`);
     return [];
   }
-  const old = (row) => Date.now() - new Date(row.sent_at || row.updated_at || 0).getTime() > SYNC_GRACE_MS;
-  const byProduct = new Map();
-  for (const row of mine) {
-    if (!orderDeleted && !old(row)) continue;
-    const pid = String(row.iiko_product_id);
-    if (!byProduct.has(pid)) byProduct.set(pid, []);
-    byProduct.get(pid).push(row);
-  }
-  const removed = [];
-  for (const [pid, rows] of byProduct) {
-    let excess = rows.reduce((n, r) => n + Number(r.quantity || 0), 0) - (alive.get(pid) || 0);
-    if (excess <= 0) continue;
-    // Вынесенное и готовое не удаляется (на кассе его тоже не удалить) — убираем только из остального, свежее первым
-    const removable = rows.filter((r) => !isServedOrReady(r))
-      .sort((a, b) => new Date(b.sent_at || 0) - new Date(a.sent_at || 0));
-    for (const row of removable) {
-      if (excess <= 0) break;
-      const q = Number(row.quantity || 0);
-      const cut = Math.min(q, Math.ceil(excess));
-      if (cut >= q) {
-        await pool.query('DELETE FROM table_order_items WHERE id = $1', [row.id]);
-      } else {
-        await pool.query(
-          `UPDATE table_order_items SET quantity = $2::int, line_total = ROUND(line_total * $2::int / quantity, 2), updated_at = NOW() WHERE id = $1`,
-          [row.id, q - cut],
-        );
-      }
-      removed.push({ name: row.name, quantity: cut, paidOnline: Boolean(row.paid_payment_id) });
-      excess -= cut;
+  const removed = planRemovals(mine, alive, { orderDeleted });
+  for (const r of removed) {
+    if (r.remaining <= 0) {
+      await pool.query('DELETE FROM table_order_items WHERE id = $1', [r.id]);
+    } else {
+      await pool.query(
+        `UPDATE table_order_items SET quantity = $2::int, line_total = ROUND(line_total * $2::int / quantity, 2), updated_at = NOW() WHERE id = $1`,
+        [r.id, r.remaining],
+      );
     }
   }
   if (removed.length) {
+    const at = new Date().toISOString();
+    const history = [...(session.removed_items || []), ...removed.map((r) => ({
+      name: r.name, quantity: r.quantity, at, guestId: r.guestId, guestName: r.guestName,
+    }))].slice(-30);
+    await pool.query('UPDATE table_sessions SET removed_items = $2::jsonb WHERE id = $1', [session.id, JSON.stringify(history)]);
     await withTransaction((client) => recalcTotal(client, session.id));
-    const where = code === 'main' ? '' : ' (бар)';
+    const where = baseCode(code) === 'main' ? '' : ' (бар)';
     console.log(`iiko: стол ${session.table_number}${where} — на кассе удалено ${removed.length} поз.${orderDeleted ? ', заказ удалён' : ''}`);
     await createWaiterNotification({
       restaurantId: ctx.restaurant.id, sessionId: session.id, tableNumber: session.table_number,
-      type: NOTIFY_TYPES.IIKO_ERROR || 'iiko_error',
-      title: `Стол №${session.table_number} — ${orderDeleted ? 'заказ удалён' : 'позиции удалены'} на кассе${where}`,
+      type: NOTIFY_TYPES.ITEMS_REMOVED,
+      title: `Стол №${session.table_number}: на кассе ${orderDeleted ? 'заказ удалён' : 'удалено'}${where}`,
       // Удалили уже оплаченное онлайн — деньги у нас, гостю нужен возврат
       body: removed.map((r) => `${r.name} ×${r.quantity}`).join('; ')
         + (removed.some((r) => r.paidOnline) ? ' · было оплачено онлайн — оформите возврат гостю' : ''),
       payload: { sessionId: session.id, source: code, removed },
     }).catch(() => {});
   }
+  if (orderDeleted) await closeIfEmptyImported(ctx);
   return removed;
+}
+
+/** Заказ, открытый на кассе, удалён целиком и в визите ничего не осталось — закрываем пустой визит. */
+async function closeIfEmptyImported(ctx) {
+  const { rows } = await pool.query(
+    `UPDATE table_sessions SET status = 'closed', workflow_status = 'closed', closed_at = NOW(), locked_by = NULL, locked_until = NULL, updated_at = NOW()
+     WHERE id = $1 AND status = 'open' AND opened_in_iiko AND iiko_orders = '{}'::jsonb AND iiko_order_id IS NULL
+       AND NOT EXISTS (SELECT 1 FROM table_order_items WHERE session_id = $1) RETURNING id`,
+    [ctx.session.id],
+  );
+  if (rows.length) console.log(`iiko: стол ${ctx.session.table_number} — заказ удалён на кассе, визит закрыт`);
+}
+
+/** Размер и модификаторы строки заказа iiko — текстом для показа: «Соус терияки, Сыр ×2». */
+function importedLineText(line) {
+  return [line.sizeName || null, ...line.modifiers.map((m) => (m.amount > 1 ? `${m.name} ×${m.amount}` : m.name))]
+    .filter(Boolean).join(', ').slice(0, 300);
+}
+
+/**
+ * Дописать в визит позиции заказа iiko, которых у нас нет: официант добавил блюдо на кассе позже (или заказ открыт на кассе —
+ * тогда это все его позиции). Строки приходят как уже отправленные: is_locked, iiko_order_id, цены и статус кухни из iiko.
+ * Идемпотентно: сверка по количеству блюда в заказе, повторный опрос ничего не добавит.
+ * norm — заказ после normalizeIikoOrder.
+ */
+export async function syncAddedItems(ctx, code, norm, orderId, orders = sessionOrders(ctx.session)) {
+  const { session } = ctx;
+  if (session.payment_status === 'paid' || session.status !== 'open') return 0;
+  const rows = rowsOfOrder(ctx.items, code, orderId, orders);
+  const adds = planAdditions(norm.items, rows);
+  if (!adds.length) return 0;
+  const { rows: known } = await pool.query(
+    'SELECT id::text AS id, iiko_id::text AS iiko_id FROM products WHERE restaurant_id = $1 AND iiko_id::text = ANY($2::text[])',
+    [session.restaurant_id, [...new Set(adds.map((a) => a.productId))]],
+  );
+  const catalogId = new Map(known.map((k) => [k.iiko_id, k.id]));
+  const batch = Math.max(0, ...ctx.items.filter((i) => i.is_locked).map((i) => i.batch_no)) + 1;
+  for (const a of adds) {
+    const text = importedLineText(a);
+    const unit = a.quantity ? Math.round((a.lineTotal / a.quantity) * 100) / 100 : a.price;
+    await pool.query(
+      `INSERT INTO table_order_items
+         (session_id, product_id, iiko_product_id, name, price, quantity, line_total, batch_no, is_locked, synced_to_iiko,
+          sent_at, kitchen_status, source, size_id, size_name, modifiers, options_text, iiko_order_id, from_iiko, ready_notified_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,TRUE,NOW(),$9::text,$10,$11,$12,$13,$14,$15,TRUE,
+         CASE WHEN $9::text = 'CookingCompleted' THEN NOW() END)`,
+      [session.id, catalogId.get(a.productId) || null, a.productId, (text ? `${a.name} (${text})` : a.name).slice(0, 300),
+        unit, a.quantity, a.lineTotal, batch, a.status || null, baseCode(code), a.sizeId, a.sizeName,
+        a.modifiers.length ? JSON.stringify(a.modifiers.map((m) => ({ id: m.id, groupId: m.groupId, name: m.name, amount: m.amount, price: m.price }))) : null,
+        text || null, String(orderId)],
+    );
+  }
+  await withTransaction((client) => recalcTotal(client, session.id));
+  await pool.query(
+    `UPDATE table_sessions SET last_guest_activity_at = NOW(), sent_to_production_at = COALESCE(sent_to_production_at, NOW()) WHERE id = $1`,
+    [session.id],
+  );
+  console.log(`iiko: стол ${session.table_number} (${code}) — с кассы добавлено ${adds.length} поз.`);
+  return adds.length;
 }
 
 /**
@@ -1102,65 +1150,68 @@ export function refreshFromIiko(sessionId) {
 async function refreshFromIikoNow(sessionId) {
   const demo = isIikoDemo();
   const ctx = await getSessionContext(sessionId);
-  const orders = { ...(ctx?.session.iiko_orders || {}) };
-  if (ctx?.session.iiko_order_id && !orders.main) orders.main = { orderId: ctx.session.iiko_order_id };
+  const orders = ctx ? sessionOrders(ctx.session) : {};
   if (!ctx || !Object.keys(orders).length || !ctx.session.sent_to_production_at) return;
   try {
     const locked = ctx.items.filter((i) => i.is_locked && !i.served_at);
     let orderStatus = null;
-    let statusOf;
-    if (demo) {
-      statusOf = demoKitchenStatus;
-      orderStatus = 'New';
-    } else {
-      // Заказ каждого источника (кухня, бар) — в своём iiko
-      const maps = new Map();
-      const closedAtTill = [];
-      for (const [code, o] of Object.entries(orders)) {
-        if (!o?.orderId) continue;
-        const src = await getSource(ctx.restaurant, code);
-        const data = await withIikoCreds(src.creds, () => getOrdersByIds(src.organization_id, [o.orderId]));
-        const info = (data?.orders || [])[0];
-        // iiko не создал заказ (касса не взяла его вовремя и т. п.) — блюда источника снова «не отправлены»
-        if (info?.creationStatus === 'Error') {
-          await failIikoOrder(ctx, code, src, info.errorInfo?.message || info.errorInfo?.description || 'iiko не создал заказ', o.orderId);
-          continue;
-        }
-        const order = info?.order || info;
-        if (!order) continue;
-        // Счёт закрыт на кассе (гость заплатил там) — помечаем; когда закрыты все заказы стола, закрываем и визит
-        if (order.status === 'Closed') {
-          closedAtTill.push(code);
-          if (!o.closed) {
-            await pool.query(
-              `UPDATE table_sessions SET iiko_orders = jsonb_set(iiko_orders, $2::text[], (iiko_orders->$3) || '{"closed":true}'::jsonb)
-               WHERE id = $1 AND iiko_orders -> $3 ->> 'orderId' = $4`,
-              [sessionId, [code], code, String(o.orderId)],
-            );
-          }
-          continue;
-        }
-        // Удалили позиции или весь заказ на кассе — убираем и у нас
-        await syncRemovedItems(ctx, code, order, o.orderId);
-        if (order.status === 'Deleted') continue;
-        if (code === 'main' || !orderStatus) orderStatus = order.status || info?.creationStatus || null;
-        const items = (order.items || []).filter((i) => (i.type || 'Product') === 'Product' && !i.deleted);
-        // Для каждого блюда — наименее продвинутый статус среди строк iiko с этим блюдом
-        const byProduct = new Map();
-        for (const it of items) {
-          const pid = String(it.product?.id || it.productId || '');
-          if (!pid || !it.status) continue;
-          const prev = byProduct.get(pid);
-          if (!prev || KITCHEN_ORDER.indexOf(it.status) < KITCHEN_ORDER.indexOf(prev)) byProduct.set(pid, it.status);
-        }
-        maps.set(code, byProduct);
+    // Заказы стола: наш (кухня, бар) и заказы с кассы (код «main#ab12cd34») — каждый в своём iiko, статусы блюд по заказу
+    const maps = new Map();
+    const closedAtTill = [];
+    // Демо без заказа в демо-кассе (прошёл рестарт процесса) — кухню имитируем по времени с отправки
+    const simulated = new Set();
+    for (const [code, o] of Object.entries(orders)) {
+      if (!o?.orderId) continue;
+      if (demo && !demoHasOrder(o.orderId)) { simulated.add(code); orderStatus ||= 'New'; continue; }
+      const src = await getSource(ctx.restaurant, baseCode(code));
+      const data = await withIikoCreds(src.creds, () => getOrdersByIds(src.organization_id, [o.orderId]));
+      const info = (data?.orders || [])[0];
+      // iiko не создал заказ (касса не взяла его вовремя и т. п.) — блюда источника снова «не отправлены»
+      if (info?.creationStatus === 'Error') {
+        await failIikoOrder(ctx, code, src, info.errorInfo?.message || info.errorInfo?.description || 'iiko не создал заказ', o.orderId);
+        continue;
       }
-      await closeIfPaidAtTill(ctx, orders, closedAtTill);
-      if (!maps.size) return;
-      const gone = new Set((await pool.query('SELECT id FROM table_order_items WHERE session_id = $1', [sessionId])).rows.map((r) => r.id));
-      for (let i = locked.length - 1; i >= 0; i--) if (!gone.has(locked[i].id)) locked.splice(i, 1);
-      statusOf = (row) => maps.get(row.source || 'main')?.get(String(row.iiko_product_id)) || null;
+      const order = info?.order || info;
+      if (!order) continue;
+      // Счёт закрыт на кассе (гость заплатил там) — помечаем; когда закрыты все заказы стола, закрываем и визит
+      if (order.status === 'Closed') {
+        closedAtTill.push(code);
+        if (!o.closed) {
+          await pool.query(
+            `UPDATE table_sessions SET iiko_orders = jsonb_set(iiko_orders, $2::text[], (iiko_orders->$3) || '{"closed":true}'::jsonb)
+             WHERE id = $1 AND iiko_orders -> $3 ->> 'orderId' = $4`,
+            [sessionId, [code], code, String(o.orderId)],
+          );
+        }
+        continue;
+      }
+      // Удалили позиции или весь заказ на кассе — убираем и у нас; дописали на кассе — добавляем
+      await syncRemovedItems(ctx, code, order, o.orderId, orders);
+      if (order.status === 'Deleted') continue;
+      const norm = normalizeIikoOrder(order);
+      await syncAddedItems(ctx, code, norm, o.orderId, orders);
+      if (code === 'main' || !orderStatus) orderStatus = order.status || info?.creationStatus || null;
+      // Для каждого блюда — наименее продвинутый статус среди строк iiko с этим блюдом
+      const byProduct = new Map();
+      for (const it of norm.items) {
+        if (!it.status) continue;
+        const prev = byProduct.get(it.productId);
+        if (!prev || KITCHEN_ORDER.indexOf(it.status) < KITCHEN_ORDER.indexOf(prev)) byProduct.set(it.productId, it.status);
+      }
+      maps.set(code, byProduct);
     }
+    await closeIfPaidAtTill(ctx, orders, closedAtTill);
+    if (!maps.size && !simulated.size) return;
+    // Строки, убранные синхронизацией выше, и строки, добавленные с кассы, — по свежему списку
+    const fresh0 = (await pool.query('SELECT * FROM table_order_items WHERE session_id = $1 AND is_locked AND served_at IS NULL', [sessionId])).rows;
+    locked.splice(0, locked.length, ...fresh0);
+    const statusOf = (row) => {
+      const code = rowOrderCode(row, orders);
+      const st = maps.get(code)?.get(String(row.iiko_product_id)) || null;
+      if (st) return st;
+      // Демо: блюдо нашего заказа без статуса в демо-кассе или заказ вне демо-кассы — кухня по времени
+      return demo && !row.from_iiko && (simulated.has(code) || maps.has(code)) ? demoKitchenStatus(row) : null;
+    };
 
     const ready = [];
     for (const row of locked) {

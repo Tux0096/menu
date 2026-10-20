@@ -628,6 +628,11 @@ html.sheet-open, html.sheet-open body { overflow: hidden; }
 .cart-line__opts { font-size: 11px; color: rgba(41, 41, 41, .6); margin-top: 3px; line-height: 1.25; }
 
 .order-card__note { margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; background: var(--purple-soft); color: var(--purple); font-size: 13px; line-height: 1.35; }
+.order-card__removed { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--line, #e6e3ee); font-size: 13px; color: #8a8696; }
+.order-card__removed-title { font-weight: 600; margin-bottom: 4px; }
+.removed-line { display: flex; justify-content: space-between; gap: 10px; padding: 2px 0; }
+.removed-line span { text-decoration: line-through; }
+.removed-line i { font-style: normal; white-space: nowrap; }
 
 /* ── Бизнес-ланч: баннер в меню и конструктор ─────────────── */
 .lunch-banner {
