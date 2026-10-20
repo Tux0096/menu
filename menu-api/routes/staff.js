@@ -137,7 +137,7 @@ waiter.get('/hall', h(async (req) => {
 // Официант сам открывает стол (гость без QR) — дальше заказ как обычно
 waiter.post('/tables/:number/open', h(async (req) => {
   const r = await staffRestaurant(req);
-  const view = await enterTable({ restaurantSlug: r.slug, tableNumber: req.params.number, guest: null });
+  const view = await enterTable({ restaurantSlug: r.slug, tableNumber: req.params.number, guest: null, byStaff: true });
   return takeSession(view.sessionId, req.staff);
 }));
 // Телефон официанта для push-уведомлений

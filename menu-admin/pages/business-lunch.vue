@@ -16,6 +16,19 @@ const { upload } = useUpload();
 const imageAccept = IMAGE_TYPES.join(',');
 
 const data = ref<LunchAdmin | null>(null);
+
+// Как бизнес-ланч пришёл из iiko при последней выгрузке — чтобы видеть, почему набор не попал к гостям
+interface IikoLunchItem { name: string; hidden: boolean; sellable: boolean; sizes: { name: string; hidden: boolean; menuPrice: number; tillPrice: number; groups: { name: string; hidden: boolean; min: number; max: number; free: number; items: { name: string; price: number; hidden: boolean }[] }[] }[] }
+interface IikoLunch { restaurant: string; source: string; menuName: string | null; at: string; lunch: { category: string; hidden: boolean; items: IikoLunchItem[] }[] | null }
+const iiko = ref<IikoLunch[] | null>(null);
+onMounted(async () => {
+  try {
+    iiko.value = await useAuthFetch<IikoLunch[]>('/admin/business-lunch/iiko', {}, { restaurant: false });
+  } catch {
+    iiko.value = [];
+  }
+});
+const srcLabel = (s: string) => (s === 'main' ? 'кухня' : s === 'bar' ? 'бар' : s);
 const initial = ref('');
 const loadError = ref('');
 const loading = ref(false);
@@ -272,6 +285,34 @@ const shortName = (n: string) => n.replace(/^Фуджи\s+/i, '');
           </li>
         </ul>
       </section>
+
+      <details v-if="iiko?.length" class="panel-box overflow-hidden">
+        <summary class="cursor-pointer px-4 py-3 text-sm font-medium">Как бизнес-ланч пришёл из iiko (последняя выгрузка)</summary>
+        <div class="space-y-4 border-t border-brand-50 px-4 py-3 text-sm">
+          <p class="text-xs text-slate-500">Разделы и позиции внешнего меню iiko со словом «ланч»: цена во внешнем меню, цена кассы, группы выбора. «Не продаётся» — позиция без цены и без платного выбора, к гостям не попадает.</p>
+          <div v-for="r in iiko" :key="r.restaurant + r.source">
+            <div class="font-semibold">{{ r.restaurant }} · {{ srcLabel(r.source) }} <span class="font-normal text-slate-500">— меню «{{ r.menuName || '?' }}», {{ formatDayTime(r.at) }}</span></div>
+            <p v-if="r.lunch === null" class="text-xs text-slate-500">Разбора ещё нет — появится после следующей выгрузки («Меню сети» → «Обновить из iiko»).</p>
+            <p v-else-if="!r.lunch.length" class="text-xs text-amber-700">Во внешнем меню нет разделов и позиций со словом «ланч».</p>
+            <div v-for="c in r.lunch || []" :key="c.category" class="mt-2 rounded-lg bg-cream p-2">
+              <div class="font-medium">Раздел «{{ c.category }}»<span v-if="c.hidden" class="text-amber-700"> — скрыт во внешнем меню</span></div>
+              <ul class="mt-1 space-y-1">
+                <li v-for="it in c.items" :key="it.name" class="text-xs">
+                  <b>{{ it.name }}</b>
+                  <span :class="it.sellable ? 'text-green-700' : 'text-red-700'"> · {{ it.sellable ? 'продаётся' : 'не продаётся' }}</span><span v-if="it.hidden" class="text-amber-700"> · скрыта</span>
+                  <div v-for="z in it.sizes" :key="z.name" class="pl-3 text-slate-600">
+                    {{ z.name || 'размер' }}: в меню {{ z.menuPrice }} ₽, на кассе {{ z.tillPrice }} ₽<span v-if="z.hidden"> · скрыт</span>
+                    <div v-for="g in z.groups" :key="g.name" class="pl-3">
+                      «{{ g.name }}» (мин {{ g.min }}, макс {{ g.max }}, бесплатно {{ g.free }}){{ g.hidden ? ' · скрыта' : '' }}:
+                      {{ g.items.map((m) => `${m.name} ${m.price} ₽${m.hidden ? ' (скрыт)' : ''}`).join(', ') || 'вариантов нет' }}
+                    </div>
+                  </div>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </details>
     </div>
   </div>
 </template>

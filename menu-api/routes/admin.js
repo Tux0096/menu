@@ -132,6 +132,18 @@ admin.post('/network-menu/availability', h(async (req) => {
   audit(req.staff, 'menu.availability', 'product', req.body.productId, { restaurant: r.slug, available, name: req.body.productName });
   return { ok: true };
 }));
+// Бизнес-ланч во внешних меню iiko — как он пришёл при последней выгрузке (разделы, позиции, цены, группы выбора)
+admin.get('/business-lunch/iiko', h(async (req) => {
+  const restaurants = await staffRestaurants(req);
+  const { rows } = await pool.query(
+    `SELECT restaurant_id, source, menu_name, lunch, created_at FROM menu_sync_reports WHERE restaurant_id = ANY($1::uuid[])`,
+    [restaurants.map((r) => r.id)],
+  );
+  return rows.map((x) => ({
+    restaurant: restaurants.find((y) => y.id === x.restaurant_id)?.name || '', source: x.source, menuName: x.menu_name, at: x.created_at,
+    lunch: x.lunch, // null — выгрузки с разбором ещё не было
+  })).sort((a, b) => a.restaurant.localeCompare(b.restaurant, 'ru') || a.source.localeCompare(b.source));
+}));
 // Массово: показать или скрыть отмеченные блюда (каждое — на точках, где оно есть). Одним запросом, до 300 позиций
 admin.post('/network-menu/availability/batch', h(async (req) => {
   const list = Array.isArray(req.body?.items) ? req.body.items.slice(0, 300) : [];

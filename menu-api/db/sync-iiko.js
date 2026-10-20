@@ -432,11 +432,45 @@ async function syncFromExternalMenu(restaurant, token, menu, organizationId, pre
       });
     }
   }
+  // Разбор бизнес-ланча: как он лежит во внешнем меню (разделы, позиции, цены, группы выбора) — для админки,
+  // чтобы видеть, почему набор не попал к гостям. Только названия и цены, без ключей
+  const lunchRe = /ланч|lunch/i;
+  let lunch = [];
+  try { lunch = categories.filter((c) => lunchRe.test(c.name || '') || (c.items || []).some((i) => lunchRe.test(i.name || '')))
+    .slice(0, 6).map((c) => ({
+      category: String(c.name || ''),
+      hidden: Boolean(c.isHidden),
+      items: (c.items || []).filter((i) => lunchRe.test(c.name || '') || lunchRe.test(i.name || '')).slice(0, 30).map((i) => {
+        const itemId = i.itemId || i.id;
+        return {
+          name: String(i.name || '').slice(0, 80),
+          hidden: Boolean(i.isHidden),
+          sellable: sellableSizes(i, priceOf).length > 0,
+          sizes: (i.itemSizes || []).slice(0, 4).map((z) => ({
+            name: String(z.sizeName || z.sizeCode || '').slice(0, 40),
+            hidden: Boolean(z.isHidden),
+            menuPrice: priceForOrg(z.prices, organizationId) || 0,
+            tillPrice: nom.get(`${itemId}|${z.sizeId || ''}`) || 0,
+            groups: (z.itemModifierGroups || []).slice(0, 6).map((g) => ({
+              name: String(g.name || '').slice(0, 60),
+              hidden: Boolean(g.isHidden),
+              min: Number(g.restrictions?.minQuantity) || 0,
+              max: Number(g.restrictions?.maxQuantity) || 0,
+              free: Number(g.restrictions?.freeQuantity) || 0,
+              items: (g.items || []).slice(0, 12).map((m) => ({ name: String(m.name || '').slice(0, 60), price: priceOf(m.prices, m.itemId || m.id, null) || 0, hidden: Boolean(m.isHidden) })),
+            })),
+          })),
+        };
+      }),
+    }));
+  } catch (e) { console.warn('  разбор бизнес-ланча:', e.message); }
   await pool.query(
-    `INSERT INTO menu_sync_reports (restaurant_id, source, menu_name, report, created_at) VALUES ($1, $2, $3, $4, NOW())
-     ON CONFLICT (restaurant_id, source) DO UPDATE SET menu_name = EXCLUDED.menu_name, report = EXCLUDED.report, created_at = NOW()`,
-    [restaurant.id, source, menu.name || null, JSON.stringify(report)],
+    `INSERT INTO menu_sync_reports (restaurant_id, source, menu_name, report, lunch, created_at) VALUES ($1, $2, $3, $4, $5, NOW())
+     ON CONFLICT (restaurant_id, source) DO UPDATE SET menu_name = EXCLUDED.menu_name, report = EXCLUDED.report, lunch = EXCLUDED.lunch, created_at = NOW()`,
+    [restaurant.id, source, menu.name || null, JSON.stringify(report), JSON.stringify(lunch)],
   ).catch((e) => console.warn('  отчёт выгрузки не сохранён:', e.message));
+  if (lunch.length) console.log(`  бизнес-ланч во внешнем меню: ${lunch.map((c) => `«${c.category}»${c.hidden ? ' (скрыт)' : ''}: ${c.items.length} поз., продаётся ${c.items.filter((i) => i.sellable).length}`).join('; ')}`);
+  else console.log('  бизнес-ланч во внешнем меню: разделов и позиций со словом «ланч» нет');
   console.log(`  внешнее меню «${menu.name}»: ${rows.length} блюд с ценой для ресторана`
     + ` (с размерами ${rows.filter((r) => r.options?.sizes).length}, с модификаторами ${rows.filter((r) => r.options?.groups || r.options?.sizes?.some((z) => z.groups.length)).length})`);
   if (!rows.length) {

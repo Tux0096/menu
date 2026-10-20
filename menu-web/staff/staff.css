@@ -257,6 +257,8 @@ html, body { overflow-x: clip; }
 .mt-cell b { font-size: 18px; }
 .mt-cell small { font-size: 10px; color: var(--muted); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mt-cell.is-on { background: var(--ink); color: #fff; }
+.mt-cell.is-busy { background: #FFF6E5; }
+.open-table-btn { width: 100%; margin-bottom: 10px; padding: 12px; }
 .mt-cell.is-on small { color: rgba(255, 255, 255, .7); }
 .mt-bar { position: sticky; bottom: 0; display: flex; gap: 8px; align-items: center; margin-top: 12px; padding: 10px 0; background: var(--bg); }
 .tcard__pills { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
