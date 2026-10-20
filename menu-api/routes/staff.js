@@ -14,6 +14,8 @@ import {
 } from '../services/waiter.js';
 import { listWaiterNotifications, markAllNotificationsRead, markNotificationRead } from '../services/waiter-notifications.js';
 import { httpError } from '../lib/http.js';
+import { reserveSyncStatus, syncReserves } from '../services/iiko-reserves.js';
+import { iikoCoolingDown } from '../iiko-client.js';
 import { SEES_ALL_ROLES } from '../lib/notification-rules.js';
 import { listFeedback, listRestaurants } from '../services/admin.js';
 import { listReserves, markArrived, reservePhone, seatReservation } from '../services/reservations.js';
@@ -232,5 +234,12 @@ router.get('/api/v1/manager/dashboard', staffAuth('manager'), h(async (req) => g
 // Брони на сегодня для админки: только просмотр, телефон маскирован
 router.get('/api/v1/manager/reservations', staffAuth('manager'), h(async (req) => {
   const r = await staffRestaurant(req);
-  return { restaurant: { slug: r.slug, name: r.name }, ...(await listReserves(r.id)) };
+  return { restaurant: { slug: r.slug, name: r.name }, ...(await listReserves(r.id)), sync: reserveSyncStatus(r.id) };
+}));
+// «Обновить из iiko»: внеочередная загрузка броней точки (в iiko только чтение)
+router.post('/api/v1/manager/reservations/sync', staffAuth('manager'), h(async (req) => {
+  const r = await staffRestaurant(req);
+  if (iikoCoolingDown()) throw httpError(503, 'iiko временно ограничила запросы — попробуйте через минуту');
+  await syncReserves({ restaurantId: r.id });
+  return { restaurant: { slug: r.slug, name: r.name }, ...(await listReserves(r.id)), sync: reserveSyncStatus(r.id) };
 }));

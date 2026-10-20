@@ -37,21 +37,33 @@ async function hall(src) {
   return value;
 }
 
+// Последняя загрузка броней по точке — для админки: когда обновлялись, сколько пришло, что пошло не так
+const lastLoad = new Map(); // restaurantId → { at, ok, seen, sections, error }
+export const reserveSyncStatus = (restaurantId) => lastLoad.get(restaurantId) || null;
+const note = (restaurant, v) => lastLoad.set(restaurant.id, { at: new Date().toISOString(), ...v });
+
 /** Загрузить брони одной точки из iiko в нашу таблицу. Возвращает сколько броней получено. */
 async function loadRestaurant(restaurant) {
   const src = await getSource(restaurant, 'main');
   const demo = isIikoDemo();
-  if (!src?.organization_id || (!demo && !src.terminal_group_id)) return 0;
+  if (!src?.organization_id || (!demo && !src.terminal_group_id)) {
+    note(restaurant, { ok: false, seen: 0, error: 'у точки не выбрана касса iiko (терминальная группа)' });
+    return 0;
+  }
   let seen = 0;
   await withIikoCreds(src.creds, async () => {
     const { map, sectionIds } = await hall(src);
-    if (!sectionIds.length) return;
+    if (!sectionIds.length) {
+      note(restaurant, { ok: false, seen: 0, sections: 0, error: 'iiko не отдал залы точки (reserve/available_restaurant_sections)' });
+      return;
+    }
     const w = reserveWindow();
     const response = await getReservesWorkload(sectionIds, formatIikoTime(w.from), formatIikoTime(w.to));
     const list = collectReserves(response);
     seen = list.length;
     await upsertReserves(restaurant, list, map);
     await cancelMissing(restaurant.id, w);
+    note(restaurant, { ok: true, seen, sections: sectionIds.length });
 
     // iiko не прислал статус — уточняем у ближайших броней (за 3 часа до и за час после начала)
     const now = Date.now();
@@ -102,6 +114,7 @@ export function syncReserves(filter = {}) {
           } catch (e) {
             // Организация не подключена к ключу (403), нет прав на брони и т. п. — остальные точки продолжаем
             console.warn(`iiko reserves ${restaurant.slug}:`, e.response?.data?.errorDescription || e.message);
+            note(restaurant, { ok: false, seen: 0, error: String(e.response?.data?.errorDescription || e.message).slice(0, 300) });
           }
           const stats = await processReserves(restaurant.id);
           for (const [k, v] of Object.entries(stats)) total.actions[k] = (total.actions[k] || 0) + v;
