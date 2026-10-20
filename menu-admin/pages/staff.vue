@@ -6,6 +6,8 @@ useHead({ title: 'Сотрудники — Фуджи' });
 const notify = useNotify();
 
 const rows = ref<Staff[] | null>(null);
+// Вход на of. через iiko включён: официантов здесь не заводят, в списке — только учётки админки
+const iikoLogin = ref(false);
 const rests = ref<Restaurant[]>([]);
 const loadError = ref('');
 const loading = ref(false);
@@ -13,9 +15,14 @@ async function load() {
   loading.value = true;
   loadError.value = '';
   try {
-    const [s, r] = await Promise.all([useAuthFetch<Staff[]>('/admin/staff'), useAuthFetch<Restaurant[]>('/admin/restaurants')]);
+    const [s, r, m] = await Promise.all([
+      useAuthFetch<Staff[]>('/admin/staff'),
+      useAuthFetch<Restaurant[]>('/admin/restaurants'),
+      useAuthFetch<{ iikoLogin: boolean }>('/admin/staff/mode').catch(() => ({ iikoLogin: false })),
+    ]);
     rows.value = s;
     rests.value = r;
+    iikoLogin.value = m.iikoLogin;
   } catch (e) {
     loadError.value = getErrorMessage(e);
   } finally {
@@ -26,16 +33,41 @@ onMounted(load);
 
 const q = ref('');
 const role = ref<'' | StaffRole>('');
-const ROLE_ORDER: StaffRole[] = ['waiter', 'manager', 'marketing', 'admin'];
+const ROLE_ORDER = computed<StaffRole[]>(() => (iikoLogin.value ? ['admin', 'marketing', 'manager'] : ['waiter', 'manager', 'marketing', 'admin']));
+// Учётки админки (заведены здесь) и сотрудники из iiko (созданы входом по коду, только чтение)
+const adminRows = computed(() => (rows.value ?? []).filter((u) => !u.fromIiko));
+const iikoRows = computed(() => (rows.value ?? []).filter((u) => u.fromIiko));
 const roleChips = computed(() => [
-  { value: '' as const, label: 'Все', n: rows.value?.length ?? 0 },
-  ...ROLE_ORDER.map((r) => ({ value: r, label: ROLE_LABELS[r], n: (rows.value ?? []).filter((u) => u.role === r).length })),
+  { value: '' as const, label: 'Все', n: adminRows.value.length },
+  ...ROLE_ORDER.value.map((r) => ({ value: r, label: ROLE_LABELS[r], n: adminRows.value.filter((u) => u.role === r).length })),
 ]);
 const filtered = computed(() => {
   const query = q.value.trim().toLowerCase();
-  return (rows.value ?? []).filter((u) => (!role.value || u.role === role.value) && (!query || `${u.name} ${u.login}`.toLowerCase().includes(query)));
+  return adminRows.value.filter((u) => (!role.value || u.role === role.value) && (!query || `${u.name} ${u.login}`.toLowerCase().includes(query)));
 });
 const restName = (id: string | null) => (id ? rests.value.find((r) => r.id === id)?.name ?? '—' : 'Все рестораны');
+
+const iikoColumns = [
+  { key: 'name', label: 'Сотрудник' },
+  { key: 'position', label: 'Должность в iiko' },
+  { key: 'restaurant', label: 'Ресторан' },
+  { key: 'lastLoginAt', label: 'Последний вход' },
+  { key: 'isActive', label: 'Вход' },
+];
+const iikoFiltered = computed(() => {
+  const query = q.value.trim().toLowerCase();
+  return iikoRows.value.filter((u) => !query || `${u.name} ${u.position ?? ''}`.toLowerCase().includes(query));
+});
+const fmtDate = (v?: string | null) => (v ? new Date(v).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—');
+async function toggleIiko(u: Staff) {
+  try {
+    await useAuthFetch('/admin/staff', { method: 'POST', body: { id: u.id, isActive: !u.isActive } });
+    notify.success(u.isActive ? 'Вход запрещён' : 'Вход разрешён', u.name);
+    await load();
+  } catch (e) {
+    notify.error(e, 'Не удалось изменить');
+  }
+}
 
 const columns = [
   { key: 'name', label: 'Сотрудник' },
@@ -61,7 +93,8 @@ const form = reactive({
   hasPin: false,
 });
 const { takeSnapshot, requestClose } = useModalCloseGuard(open, () => form);
-const roleOptions = ROLE_ORDER.map((r) => ({ value: r, label: ROLE_LABELS[r] }));
+// Прежняя запись официанта остаётся редактируемой, даже когда вход идёт через iiko
+const roleOptions = computed(() => [...new Set<StaffRole>([...ROLE_ORDER.value, form.role])].map((r) => ({ value: r, label: ROLE_LABELS[r] })));
 const restaurantOptions = computed(() => [{ value: '', label: 'Все рестораны' }, ...rests.value.map((r) => ({ value: r.id, label: r.name }))]);
 
 function edit(u?: Staff) {
@@ -69,7 +102,7 @@ function edit(u?: Staff) {
     id: u?.id,
     name: u?.name ?? '',
     login: u?.login ?? '',
-    role: u?.role ?? 'waiter',
+    role: u?.role ?? (iikoLogin.value ? 'admin' : 'waiter'),
     restaurantId: u?.restaurantId ?? '',
     password: '',
     pin: '',
@@ -134,14 +167,16 @@ function randomPin() {
     <PageHeader
       title="Сотрудники"
       icon="i-heroicons-users"
-      description="Кто и куда входит. Официанты — в приложение «Фуджи Официант» по PIN; управляющие, маркетинг и администраторы — в эту админку по логину и паролю."
+      :description="iikoLogin
+        ? 'Доступ к самой админке — по логину и паролю, в рамках прав должности. Официанты и управляющие зала входят в терминал кодом сотрудника из iiko — заводить их не нужно.'
+        : 'Кто и куда входит. Официанты — в приложение «Фуджи Официант» по PIN; управляющие, маркетинг и администраторы — в эту админку по логину и паролю.'"
     >
       <UButton icon="i-heroicons-user-plus" color="cta" @click="edit()">Добавить сотрудника</UButton>
       <UButton icon="i-heroicons-arrow-path" color="white" :loading="loading" aria-label="Обновить" @click="load" />
     </PageHeader>
 
     <div class="panel-box mb-4 flex flex-col gap-2 p-3 sm:p-4 md:flex-row md:items-center">
-      <UInput v-model="q" icon="i-heroicons-magnifying-glass" placeholder="Имя или логин" class="md:w-72" />
+      <UInput v-model="q" icon="i-heroicons-magnifying-glass" placeholder="Имя, логин или должность" class="md:w-72" />
       <div class="flex flex-wrap gap-1.5">
         <button
           v-for="c in roleChips"
@@ -176,6 +211,29 @@ function randomPin() {
       </UTable>
     </div>
 
+    <section v-if="iikoLogin" class="mt-8">
+      <h2 class="mb-1 text-base font-semibold">Из iiko</h2>
+      <p class="mb-3 text-sm text-slate-600">
+        Появляются сами, когда сотрудник входит в терминал кодом из iiko (карта или PIN). Роль берётся из должности в iiko: официант — официант;
+        администратор, менеджер, управляющий — управляющий зала. Здесь можно только запретить или вернуть вход.
+      </p>
+      <div class="panel-box overflow-hidden">
+        <EmptyState v-if="rows && !iikoFiltered.length" compact icon="i-heroicons-identification" title="Пока никто не входил" description="Список заполнится после первых входов в терминал." />
+        <UTable v-else-if="rows" :rows="iikoFiltered" :columns="iikoColumns">
+          <template #name-data="{ row }">
+            <div class="font-medium">{{ row.name }}</div>
+            <div class="text-xs text-slate-500">{{ ROLE_LABELS[row.role as StaffRole] ?? row.role }}</div>
+          </template>
+          <template #position-data="{ row }"><span class="text-sm">{{ row.position || '—' }}</span></template>
+          <template #restaurant-data="{ row }"><span class="text-sm">{{ restName(row.restaurantId) }}</span></template>
+          <template #lastLoginAt-data="{ row }"><span class="text-sm">{{ fmtDate(row.lastLoginAt) }}</span></template>
+          <template #isActive-data="{ row }">
+            <UButton size="xs" :color="row.isActive ? 'white' : 'red'" @click="toggleIiko(row)">{{ row.isActive ? 'Запретить вход' : 'Вернуть вход' }}</UButton>
+          </template>
+        </UTable>
+      </div>
+    </section>
+
     <UModal v-model="open" prevent-close :ui="{ width: 'sm:max-w-xl' }" @close-prevented="requestClose">
       <div class="p-6">
         <h2 class="mb-4 text-lg font-semibold">{{ form.id ? form.name || 'Сотрудник' : 'Новый сотрудник' }}</h2>
@@ -191,7 +249,7 @@ function randomPin() {
             <UFormGroup v-if="!waiterPinOnly" :label="form.id ? 'Новый пароль' : 'Пароль'" :required="!form.id" :help="form.id ? 'Пусто — не менять' : undefined">
               <UInput v-model="form.password" type="password" autocomplete="new-password" />
             </UFormGroup>
-            <UFormGroup label="PIN для терминала официанта" :help="form.hasPin ? 'Задан. Пусто — не менять' : '4–6 цифр, у каждого свой'">
+            <UFormGroup v-if="!iikoLogin" label="PIN для терминала официанта" :help="form.hasPin ? 'Задан. Пусто — не менять' : '4–6 цифр, у каждого свой'">
               <UInput v-model="form.pin" inputmode="numeric" :maxlength="6" autocomplete="off" :placeholder="form.hasPin ? 'PIN задан' : ''" :disabled="form.clearPin">
                 <template #trailing>
                   <UButton size="2xs" color="gray" variant="link" :padded="false" :disabled="form.clearPin" @click="randomPin">случайный</UButton>
@@ -200,7 +258,7 @@ function randomPin() {
             </UFormGroup>
           </div>
           <div class="flex flex-wrap gap-6">
-            <label v-if="form.hasPin" class="flex items-center gap-3 text-sm"><UCheckbox v-model="form.clearPin" /> Сбросить PIN</label>
+            <label v-if="form.hasPin && !iikoLogin" class="flex items-center gap-3 text-sm"><UCheckbox v-model="form.clearPin" /> Сбросить PIN</label>
             <label class="flex items-center gap-3 text-sm"><UToggle v-model="form.isActive" /> Активен — может входить</label>
           </div>
           <div class="flex flex-wrap items-center justify-end gap-2 pt-2">

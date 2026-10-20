@@ -10,6 +10,11 @@ export interface Staff {
   restaurantId: string | null;
   isActive?: boolean;
   hasPin?: boolean;
+  /** Создан входом по коду из iiko (только чтение) */
+  fromIiko?: boolean;
+  /** Должность в iiko */
+  position?: string | null;
+  lastLoginAt?: string | null;
 }
 
 export interface LoginResponse {

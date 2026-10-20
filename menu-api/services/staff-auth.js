@@ -2,7 +2,7 @@ import { randomBytes } from 'crypto';
 import pool from '../db/pool.js';
 import { createLimiter, httpError, sendError } from '../lib/http.js';
 import { hashPassword, signToken, verifyPassword, verifyToken } from '../lib/passwords.js';
-import { iikoShiftStillOpen, iikoStaffLogin } from './iiko-staff.js';
+import { iikoShiftStillOpen, iikoStaffLogin, iikoStaffLoginEnabled } from './iiko-staff.js';
 
 // Маркетинг — не ступень иерархии: доступ только к контенту меню (баннеры, подсказки, карточки блюд)
 const ROLE_LEVEL = { marketing: 0, waiter: 1, manager: 2, admin: 3 };
@@ -17,6 +17,9 @@ function mapStaff(row) {
     restaurantId: row.restaurant_id,
     isActive: row.is_active,
     hasPin: Boolean(row.pin_hash),
+    fromIiko: Boolean(row.iiko_employee_id),
+    position: row.iiko_position || null,
+    lastLoginAt: row.last_login_at || null,
   };
 }
 
@@ -157,12 +160,27 @@ export async function audit(staff, action, entity = null, entityId = null, paylo
 export async function listStaff(actor = null) {
   const own = actor?.restaurantId || null;
   const { rows } = await pool.query(
-    'SELECT * FROM staff_users WHERE $1::uuid IS NULL OR restaurant_id = $1 ORDER BY role, login', [own],
+    'SELECT * FROM staff_users WHERE $1::uuid IS NULL OR restaurant_id = $1 ORDER BY role, last_login_at DESC NULLS LAST, login', [own],
   );
   return rows.map(mapStaff);
 }
 
 export async function saveStaff(data, actor = null) {
+  // Сотрудник из iiko (создан входом по коду) — только чтение; можно лишь запретить или вернуть вход
+  if (data.id) {
+    const { rows: ex } = await pool.query('SELECT * FROM staff_users WHERE id = $1', [data.id]);
+    if (ex[0]?.iiko_employee_id) {
+      const own = actor?.restaurantId || null;
+      if (own && ex[0].restaurant_id !== own) throw httpError(404, 'Сотрудник не найден');
+      const { rows } = await pool.query('UPDATE staff_users SET is_active = $2 WHERE id = $1 RETURNING *', [data.id, data.isActive !== false]);
+      staffCache.delete(data.id);
+      return mapStaff(rows[0]);
+    }
+  }
+  // Вход через iiko включён: официанты берутся из iiko, в админке заводят только учётки админки
+  if (iikoStaffLoginEnabled() && data.role === 'waiter' && !data.id) {
+    throw httpError(400, 'Официанты входят по коду из iiko — заводить их здесь не нужно');
+  }
   // Официант входит по PIN: логин и пароль ему не обязательны — логин создаётся сам, пароль случайный (входа по нему нет)
   const pinOnly = data.role === 'waiter' && !data.id && !String(data.login || '').trim();
   const login = pinOnly ? `waiter-${randomBytes(4).toString('hex')}` : String(data.login || '').trim().toLowerCase();

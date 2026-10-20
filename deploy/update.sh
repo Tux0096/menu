@@ -100,6 +100,8 @@ ensure_env PUBLIC_MENU_URL "https://menu.franchise-fuji.ru"
 ensure_env LEGACY_API_URL "https://apiv2.infra-fuji.ru"
 ensure_env OPENROUTER_MODEL "openai/gpt-4o-mini"
 ensure_env GUEST_AUTH_REQUIRED "true"
+# Вход на of. по коду сотрудника из iiko (карта) — только если значение не задано; в демо-режиме iiko сервер сам остаётся на PIN из админки
+ensure_env IIKO_STAFF_LOGIN "on"
 # Пароли персонала — используются только при первом создании пользователей.
 # Если секреты не заданы — генерируются случайные и хранятся только в .env на сервере.
 ensure_env ADMIN_PASSWORD "${ADMIN_PASSWORD:-$(rand 6)}"
