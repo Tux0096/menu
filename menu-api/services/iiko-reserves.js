@@ -12,7 +12,7 @@
  * включили в iikoWeb, склеиваются в один внеочередной опрос (scheduleReserveSync); подписку сами не меняем.
  */
 import pool from '../db/pool.js';
-import { getReservesByIds, getReservesWorkload, getRestaurantSections, isIikoDemo, withIikoCreds } from '../iiko-client.js';
+import { getReservesByIds, getReservesWorkload, getRestaurantSections, iikoCoolingDown, isIikoDemo, withIikoCreds } from '../iiko-client.js';
 import { tableNumbersBySections } from '../lib/iiko-order-sync.js';
 import {
   collectReserves, collectStatuses, formatIikoTime, reserveWindow, sectionIdsOf,
@@ -88,6 +88,7 @@ async function restaurantsFor(filter) {
  * Параллельные вызовы склеиваются: пока идёт опрос, следующий запускается один раз сразу после него.
  */
 export function syncReserves(filter = {}) {
+  if (iikoCoolingDown()) return Promise.resolve({ ...{ seen: 0, actions: {} }, skipped: 'iiko 429' }); // лимит iiko — пропускаем ход
   if (running) { again = true; return running; }
   running = (async () => {
     const total = { seen: 0, actions: {} };

@@ -230,6 +230,7 @@
   }
 
   async function render() {
+    if (!S.staff) return; // экран входа: фоновые таймеры не рисуют рабочий экран
     const tabs = roleTabs(S.staff.role).map(([k]) => k);
     if (!tabs.includes(S.tab)) S.tab = tabs[0];
     const view = VIEWS[S.tab];
