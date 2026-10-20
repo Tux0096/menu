@@ -174,12 +174,12 @@ export function buildBusinessLunch({ groups, products, settings, now = new Date(
     defs.set(id, parts.map((x, i) => {
       const s = set.combos[x.key];
       const enabled = s ? s.enabled !== false : looksLikeCombo(p) || sizes.length > 1;
-      return { ...x, p, i, enabled, title: s?.title || x.title, order: s?.order ?? null, from: lunchFromPrice(x.base, x.groups, x.needsChoice) };
+      return { ...x, p, i, enabled, auto: x.title, custom: s?.title || '', title: s?.title || x.title, order: s?.order ?? null, from: lunchFromPrice(x.base, x.groups, x.needsChoice) };
     }));
   }
   for (const parts of defs.values()) for (const c of parts) {
     metaCombos.push({
-      key: c.key, title: c.title, iikoName: c.p.iikoName || c.p.name, enabled: c.enabled, order: c.order, price: c.from,
+      key: c.key, title: c.title, auto: c.auto, custom: c.custom, iikoName: c.p.iikoName || c.p.name, enabled: c.enabled, order: c.order, price: c.from,
       steps: c.groups.map(stepKey),
     });
   }
