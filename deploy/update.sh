@@ -73,6 +73,12 @@ if [ -n "${IIKO_KEYS:-}" ]; then
   set_env IIKO_KEYS_B64 "$(printf '%s' "$IIKO_KEYS" | base64 -w0)"
   printf '%s\n' "$IIKO_KEYS" | sed -n 's/^[[:space:]]*\([^=#][^=]*\)=.*/  ключ iiko «\1»: задан/p' | sed 's/[[:space:]]*»/»/'
 fi
+# База сотрудников «Фуджи Тим» (вход на of. по табельному): строка подключения — в .env base64 (пароль со спецсимволами не ломает файл)
+if [ -n "${FUJI_TEAM_DATABASE_URL:-}" ]; then
+  set_env FUJI_TEAM_DATABASE_URL_B64 "$(printf '%s' "$FUJI_TEAM_DATABASE_URL" | base64 -w0)"
+  echo "  база «Фуджи Тим»: задана"
+fi
+[ -n "${FUJI_TEAM_SSL:-}" ] && set_env FUJI_TEAM_SSL "$FUJI_TEAM_SSL"
 # Онлайн-оплата CloudPayments: ключи есть — оплата в меню включается
 [ -n "${CLOUDPAYMENTS_PUBLIC_ID:-}" ] && set_env CLOUDPAYMENTS_PUBLIC_ID "$CLOUDPAYMENTS_PUBLIC_ID"
 [ -n "${CLOUDPAYMENTS_API_SECRET:-}" ] && set_env CLOUDPAYMENTS_API_SECRET "$CLOUDPAYMENTS_API_SECRET"

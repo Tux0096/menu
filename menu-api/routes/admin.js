@@ -15,7 +15,7 @@ import { getRestaurantCatalog, invalidateCatalogCache } from '../services/catalo
 import { bumpCatalogVersion } from '../lib/catalog-version.js';
 import { audit, listStaff, saveStaff, staffAuth } from '../services/staff-auth.js';
 import { iikoStaffLoginEnabled } from '../services/iiko-staff.js';
-import { fujiTeamEnabled } from '../services/fuji-team.js';
+import { fujiTeamEnabled, saveStaffQuery, teamSchema, teamStatus, testStaffQuery } from '../services/fuji-team.js';
 import {
   deleteOverride, deleteRow, getAdminMenu, listAudit, listFeedback, listRestaurants, listRows, saveOverride, saveRow,
   tableQrSvg, tableUrl, updateRestaurant,
@@ -267,6 +267,17 @@ admin.post('/point-info', h(async (req) => {
   audit(req.staff, 'restaurant.info', 'restaurant', r.slug, { address, workHours });
   return { name: rows[0].name, address: rows[0].address || '', workHours: rows[0].hours_text || '' };
 }));
+// База сотрудников «Фуджи Тим» (вход на of. по табельному): подключение, структура базы (без данных),
+// запрос сотрудников — проверка и сохранение. Строка подключения — только на сервере (GitHub Secret FUJI_TEAM_DATABASE_URL)
+admin.get('/fuji-team', h(async () => teamStatus()));
+admin.get('/fuji-team/schema', h(async () => teamSchema()));
+admin.post('/fuji-team/test', h(async (req) => testStaffQuery(req.body?.query)));
+admin.put('/fuji-team', h(async (req) => {
+  const out = await saveStaffQuery(req.body?.query);
+  audit(req.staff, 'fuji_team.query', 'settings', 'fuji_team', { length: out.query.length });
+  return teamStatus();
+}));
+
 // Правила продажи алкоголя точки: продаётся ли, часы (по времени точки), текст для гостей, 18+ и проверка документа.
 // Гость и официант видят их в карточках позиций и над заказом; сервер отклоняет заказ алкоголя вне правил
 admin.get('/alcohol', h(async (req) => {

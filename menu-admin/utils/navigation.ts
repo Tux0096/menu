@@ -53,6 +53,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/payments', label: 'Оплата', icon: 'i-heroicons-credit-card', roles: ADMIN, group: 'restaurant', hint: 'Онлайн-оплата CloudPayments и типы оплат iiko' },
 
   { to: '/staff', label: 'Сотрудники', icon: 'i-heroicons-users', roles: ADMIN, group: 'system', hint: 'Доступы в админку и PIN для терминала официанта' },
+  { to: '/fuji-team', label: 'Фуджи Тим', icon: 'i-heroicons-identification', roles: ADMIN, group: 'system', hint: 'Вход официантов по табельному из базы «Фуджи Тим»' },
   { to: '/audit', label: 'Журнал изменений', icon: 'i-heroicons-clipboard-document-list', roles: ADMIN, group: 'system' },
 ];
 
