@@ -338,7 +338,7 @@ async function findOpenSession(restaurantId, tableNumber) {
  * Если прошлый визит оплачен — он закрывается, начинается новый (кейс 15).
  */
 export async function enterTable({
-  restaurantSlug, tableNumber, guest, previousSessionId = null, join = false, name = '', qrKey = null,
+  restaurantSlug, tableNumber, guest, previousSessionId = null, join = false, name = '', qrKey = null, byStaff = false,
 }) {
   const restaurant = await resolveRestaurant(restaurantSlug);
   const table = normalizeTable(tableNumber, restaurant);
@@ -347,7 +347,8 @@ export async function enterTable({
   // ТЗ: гость не видит чужой стол без QR. С QR_SIGNED_REQUIRED за стол садятся только по подписанному QR;
   // гость, который уже сидит за этим столом (перезагрузил страницу), входит без подписи.
   const seated = Boolean(guest && session && (session.guest_ids || []).includes(guest.id) && session.payment_status !== 'paid');
-  if (!seated && !isValidQrKey(restaurant.slug, table, qrKey) && await qrSignedRequired()) {
+  // Официант открывает стол сам (гость без QR позвал его) — подпись QR не нужна
+  if (!byStaff && !seated && !isValidQrKey(restaurant.slug, table, qrKey) && await qrSignedRequired()) {
     throw httpError(403, 'Отсканируйте QR-код на столе, чтобы открыть заказ', { code: 'QR_REQUIRED' });
   }
   if (session && session.payment_status === 'paid') {

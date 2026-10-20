@@ -378,10 +378,11 @@
           </div>
           <div class="tcard__sum">${rub(x.total)}</div>
         </button>`;
-        const tablesHtml = open.length
+        const openBtn = '<button class="btn btn--sm btn--dark open-table-btn" data-open-table-pick>+ Открыть стол</button>';
+        const tablesHtml = openBtn + (open.length
           ? `${hot.length ? `<div class="tsection">Ждут вас · ${hot.length}</div><div class="tlist">${hot.map(card).join('')}</div>` : ''}
              ${rest.length ? `<div class="tsection">${hot.length ? 'Остальные' : 'Активные столы'} · ${rest.length}</div><div class="tlist">${rest.map(card).join('')}</div>` : ''}`
-          : '<div class="empty-note">Нет активных столов. Когда гость отсканирует QR, стол появится здесь.</div>';
+          : '<div class="empty-note">Нет активных столов. Когда гость отсканирует QR, стол появится здесь. Гость без QR — «+ Открыть стол».</div>');
         const notesHtml = `<div class="toolbar" style="margin-bottom:8px"><div class="grow muted">${unread.length ? `Непрочитанных: ${unread.length}` : 'Все прочитаны'}</div>
             ${unread.length ? '<button class="btn btn--sm" data-read-all>Прочитать все</button>' : ''}</div>
           <div class="feed">${S.notes.length ? S.notes.map((n) => `<button class="note ${n.is_read ? '' : 'is-unread'}" data-type="${esc(n.type)}" data-note="${esc(n.id)}" data-session="${esc(n.session_id || '')}">
@@ -1213,6 +1214,31 @@
       }
       if (q('[data-open]')) { await openTable(q('[data-open]').dataset.open); return; }
       if (q('[data-wview]')) { S.wview = q('[data-wview]').dataset.wview; render(); return; }
+      // Гость пришёл без QR и позвал официанта: официант сам открывает стол и принимает заказ
+      if (q('[data-open-table-pick]')) {
+        let hall;
+        try { hall = await api('GET', '/api/v1/waiter/hall'); } catch (err) { toast(err.message, true); return; }
+        modal(`<div class="h3" style="margin-top:0">Открыть стол</div>
+          <p class="muted" style="margin:0 0 10px;font-size:13px">Выберите стол гостя. Занятый — откроется его заказ.</p>
+          <div class="mt-grid">${hall.tables.map((t) => `<button class="mt-cell ${t.sessionId ? 'is-busy' : ''}" data-hall-table="${esc(t.number)}" data-session="${esc(t.sessionId || '')}">
+            <b>${esc(t.number)}</b><small>${t.sessionId ? esc(t.statusLabel) : 'свободен'}</small></button>`).join('')}</div>
+          <div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="btn btn--sm" data-modal-close>Отмена</button></div>`, (root) => {
+          root.firstElementChild.addEventListener('click', async (ev) => {
+            const cell = ev.target.closest('[data-hall-table]');
+            if (!cell || cell.disabled) return;
+            cell.disabled = true;
+            try {
+              if (cell.dataset.session) { closeModal(); await openTable(cell.dataset.session); return; }
+              const s = await api('POST', `/api/v1/waiter/tables/${encodeURIComponent(cell.dataset.hallTable)}/open`);
+              closeModal();
+              toast(`Стол №${cell.dataset.hallTable} открыт`);
+              await loadWaiter();
+              await openTable(s.sessionId || s.id);
+            } catch (err) { cell.disabled = false; toast(err.message, true); }
+          });
+        });
+        return;
+      }
       if (q('[data-my-table]') && S.myTables) {
         const n = q('[data-my-table]').dataset.myTable;
         const d = new Set(S.myTables.draft);
