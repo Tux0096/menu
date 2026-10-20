@@ -345,7 +345,22 @@
       }[session.workflowStatus];
       if (msg) toast(msg);
     }
+    announceWaiter(session);
   }
+
+  /** Имя официанта для гостя — первое слово («Анна Иванова» → «Анна») */
+  const waiterFirstName = (s) => String(s?.waiterName || '').trim().split(/\s+/)[0] || '';
+  /** Официант взял стол: тост «Ваш официант — Анна» один раз на визит и официанта (помним в localStorage) */
+  function announceWaiter(session) {
+    const name = waiterFirstName(session);
+    if (!name || !session.waiterId) return;
+    const key = `waiter:${session.sessionId}`;
+    if (store.get(key) === session.waiterId) return;
+    // Первое открытие уже назначенного стола тоже объявляем — гость мог зайти позже; повтор после перезагрузки страницы не показываем
+    store.set(key, session.waiterId);
+    toast(`Ваш официант — ${name}, он(а) скоро подойдёт`, false, 'status-help.svg');
+  }
+  const waiterLine = (s) => (waiterFirstName(s) && !visitOver(s) ? `<div class="waiter-line">Ваш официант: <b>${esc(waiterFirstName(s))}</b></div>` : '');
 
   /** Вход за стол. false — за столом уже сидят: показан вопрос «присоединиться?». */
   async function enterTable({ join = false, name = '', then = null } = {}) {
@@ -1064,6 +1079,7 @@
     const row = (attr, label, icon = '') => `<button class="menu-row" ${attr}>${icon}<span>${label}</span><img src="${UI('chevron.svg')}" alt=""></button>`;
     return `${topbar()}<main class="screen screen--order">
       ${orderStepper(s)}
+      ${waiterLine(s)}
       ${bannersHtml('order')}
       ${sentHtml || removedHtml ? `<section class="order-card">${s?.openedInIiko && sentHtml ? '<div class="order-card__note">Заказ открыт официантом на кассе — блюда из меню попадут в тот же счёт</div>' : ''}${sentHtml}${removedHtml}
         ${sentSum > 0 ? `<div class="total-row"><span>${multi ? 'Весь стол' : 'Итого'}</span><b>${rub(sentSum)}</b></div>` : ''}</section>` : ''}

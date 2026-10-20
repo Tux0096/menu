@@ -377,3 +377,56 @@ html, body { overflow-x: clip; }
 .trow__comp { margin-top: 2px; font-size: 12px; line-height: 16px; color: var(--muted); }
 .vchip:disabled { opacity: .45; }
 .pick-sheet > :not(.pick-list) { flex-shrink: 0; }
+
+/* ── Общие / мои столы, «Взять стол» ─────────────────────── */
+.seg--4 { gap: 2px; padding: 4px 3px; }
+.seg--4 button { position: relative; padding: 10px 2px; font-size: 13px; min-width: 0; }
+.seg--4 .dot-inline { position: absolute; top: 0; right: -2px; margin: 0; min-width: 16px; height: 16px; font-size: 10px; }
+.dot-inline--ok { background: var(--ok); }
+.tcard-wrap { background: var(--card); border-radius: 18px; box-shadow: var(--shadow); border: 2px solid transparent; overflow: hidden; }
+.tcard-wrap.is-hot { border-left: 4px solid var(--warn); }
+.tcard-wrap.is-open { border-color: var(--ink); }
+.tcard-wrap .tcard { box-shadow: none; background: none; border: 0; border-radius: 0; }
+.tcard__take { width: calc(100% - 28px); margin: 0 14px 12px; padding: 14px; font-size: 16px; }
+.btn--lg { padding: 14px 24px; font-size: 16px; }
+.take-box { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 14px; margin-bottom: 12px;
+  border-radius: 16px; background: #FFF4E0; }
+.take-box > div { min-width: 0; flex: 1 1 160px; font-size: 14px; }
+.take-box .btn--lg { flex: 1 1 100%; }
+.take-box.is-other { background: var(--bg); }
+.mgr-assign { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; font-size: 13px; }
+.mgr-assign .sel { flex: 1 1 140px; min-width: 0; }
+.tmenu-wrap { position: relative; }
+.tmenu { position: absolute; right: 0; top: 40px; z-index: 20; background: var(--card); border-radius: 12px; box-shadow: 0 6px 24px rgba(9, 16, 39, .18); padding: 4px; min-width: 150px; }
+.tmenu__item { width: 100%; text-align: left; padding: 8px 12px; font-size: 13px; color: var(--muted); border-radius: 8px; }
+.tmenu__item:active { background: var(--bg); }
+.note[data-type="table_assigned"], .note[data-type="table_unassigned"] { border-left-color: var(--muted); }
+.note[data-type="dish_ready"] { border-left-color: var(--ok); }
+
+/* ── «Выдача» ────────────────────────────────────────────── */
+.serve__search { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+.serve__search .inp { flex: 1; }
+.serve__chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; padding: 7px 12px; border-radius: var(--pill); background: var(--card); box-shadow: var(--shadow); font-size: 13px; position: relative; }
+.chip.is-on { background: var(--ink); color: #fff; }
+.chip b { font-weight: 600; opacity: .6; }
+.chip__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); display: inline-block; }
+.srow { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 10px 12px 10px 14px; border-radius: 16px;
+  background: var(--card); box-shadow: var(--shadow); border-left: 4px solid transparent; }
+.srow.is-ready { border-left-color: var(--ok); }
+.srow.is-warn { border-left-color: var(--warn); background: #FFF9EC; }
+.srow.is-bad { border-left-color: var(--danger); background: #FEF3F4; }
+.srow__main { text-align: left; min-width: 0; }
+.srow__title { font-size: 15px; }
+.srow__title b { font-size: 18px; }
+.srow__name { font-size: 13px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+.srow__meta { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.srow__wait { font-weight: 600; color: var(--ink); }
+.srow.is-warn .srow__wait { color: #A35F00; }
+.srow.is-bad .srow__wait { color: var(--danger); }
+
+/* ── Время готовки позиции ───────────────────────────────── */
+.cook { font-size: 12px; font-weight: 600; color: var(--muted); }
+.cook.is-warn { color: #A35F00; }
+.cook.is-bad { color: var(--danger); }
+.cook.is-ok { color: var(--ok); }
