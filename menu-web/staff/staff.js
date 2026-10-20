@@ -97,61 +97,113 @@
   }
 
   // ── Вход ───────────────────────────────────────────────────
-  // Официант входит по PIN (ресторан телефон запоминает), остальные — логином и паролем.
-  // На of.menu… сначала PIN, на админском адресе — логин; переключатель снизу.
-  let loginMode = ls.get('loginMode') || (HOST === 'admin' ? 'password' : 'pin');
+  // Сервер говорит, как входить (/staff/login-mode): 'iiko' — код сотрудника из iiko, ресторан определяется по открытой смене;
+  // 'pin' — PIN из админки в выбранном ресторане (демо iiko). Логин и пароль — для админки, переключатель мелко снизу.
+  let serverMode = null;
+  let loginMode = 'pin'; // iiko | pin | password
   let loginRests = null;
   const deviceId = () => {
     let id = ls.get('device');
     if (!id) { id = `d-${Math.random().toString(36).slice(2, 12)}`; ls.set('device', id); }
     return id;
   };
-  async function renderLogin(err = '') {
+  async function resolveLoginMode() {
+    if (!serverMode) {
+      serverMode = await fetch('/api/v1/staff/login-mode').then((r) => r.json()).then((d) => (d.mode === 'iiko' ? 'iiko' : 'pin')).catch(() => 'pin');
+    }
+    // Пароль выбран вручную (или админский адрес) — иначе режим от сервера
+    loginMode = ls.get('loginMode') === 'password' || (HOST === 'admin' && ls.get('loginMode') !== 'staff') ? 'password' : serverMode;
+  }
+  async function renderLogin(err = '', choose = null) {
+    await resolveLoginMode();
     if (loginMode === 'pin' && !loginRests) {
       loginRests = await fetch('/api/v1/restaurants').then((r) => r.json()).catch(() => []);
     }
     const rest = ls.get('pinRestaurant') || loginRests?.[0]?.slug || '';
     const pinForm = `<select class="inp" name="restaurant" aria-label="Ресторан">${(loginRests || []).map((r) => `<option value="${esc(r.slug)}" ${r.slug === rest ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select>
       <input class="inp" name="pin" type="password" inputmode="numeric" pattern="\\d{4,6}" maxlength="6" placeholder="PIN" autocomplete="one-time-code" required autofocus>`;
+    const iikoForm = choose
+      ? `<div class="hint">Смена открыта на нескольких точках — где вы работаете?</div>
+         ${choose.restaurants.map((r) => `<button type="button" class="btn" data-pick="${esc(r.slug)}">${esc(r.name)}</button>`).join('')}`
+      : `<input class="inp" name="pin" type="password" inputmode="text" maxlength="32" placeholder="PIN из iiko" aria-label="Код сотрудника из iiko (карта или PIN)" autocomplete="one-time-code" autocapitalize="off" required autofocus>`;
     const pwdForm = `<input class="inp" name="login" placeholder="Логин" autocomplete="username" required>
       <input class="inp" name="password" type="password" placeholder="Пароль" autocomplete="current-password" required>`;
+    const form = loginMode === 'iiko' ? iikoForm : loginMode === 'pin' ? pinForm : pwdForm;
+    const hint = loginMode === 'iiko'
+      ? 'Код сотрудника из iiko (карта или PIN). Ресторан определится по открытой смене на кассе.'
+      : loginMode === 'pin' ? 'PIN из 4–6 цифр выдаёт администратор. Ресторан телефон запомнит.'
+        : 'Для админки. Права зависят от должности: администратор — всё, маркетинг — контент меню.';
+    const switchLabel = loginMode === 'password' ? (serverMode === 'iiko' ? 'Войти по PIN из iiko' : 'Войти по PIN (официант)') : 'Войти по логину и паролю';
     $('#app').innerHTML = `<div class="login"><form id="login">
       <div class="brand">ФУДЖИ<small>персонал</small></div>
-      ${loginMode === 'pin' ? pinForm : pwdForm}
-      <button class="btn btn--dark" type="submit">Войти</button>
-      <div class="hint" style="color:var(--danger)">${esc(err)}</div>
-      <button type="button" class="btn btn--sm" data-login-mode>${loginMode === 'pin' ? 'Войти по логину и паролю' : 'Войти по PIN (официант)'}</button>
-      <div class="hint">${loginMode === 'pin' ? 'PIN из 4–6 цифр выдаёт администратор. Ресторан телефон запомнит.' : 'Роли: официант — столы и заказы; управляющий — контроль зала; администратор — меню, AI, QR, сотрудники.'}</div>
+      ${form}
+      ${choose ? '' : '<button class="btn btn--dark" type="submit">Войти</button>'}
+      <div class="hint" style="color:var(--danger)" role="alert">${esc(err)}</div>
+      <div class="hint">${hint}</div>
+      <button type="button" class="btn btn--sm" data-login-mode style="align-self:center;opacity:.7">${switchLabel}</button>
     </form></div>`;
     $('[data-login-mode]').addEventListener('click', () => {
-      loginMode = loginMode === 'pin' ? 'password' : 'pin'; ls.set('loginMode', loginMode); renderLogin();
+      ls.set('loginMode', loginMode === 'password' ? 'staff' : 'password'); renderLogin();
     });
+    const done = (res) => {
+      S.token = res.token; S.staff = res.staff;
+      ls.set('token', res.token); ls.set('staff', res.staff);
+      start();
+    };
+    const iikoLogin = async (pin, restaurant) => {
+      const r = await fetch('/api/v1/staff/pin-login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Device-Id': deviceId() },
+        body: JSON.stringify({ pin, restaurant: restaurant || undefined }),
+      });
+      const res = await r.json().catch(() => ({}));
+      if (r.status === 409 && res.code === 'CHOOSE_RESTAURANT') return { choose: res.details };
+      if (!r.ok) throw new Error(loginErrorText(r.status, res));
+      if (res.restaurant?.slug) { S.restaurant = res.restaurant.slug; ls.set('restaurant', S.restaurant); }
+      return { res };
+    };
+    if (choose) {
+      document.querySelectorAll('[data-pick]').forEach((b) => b.addEventListener('click', async () => {
+        try { done((await iikoLogin(choose.pin, b.dataset.pick)).res); } catch (e2) { renderLogin(e2.message); }
+      }));
+    }
     $('#login').addEventListener('submit', async (e) => {
       e.preventDefault();
       const f = new FormData(e.target);
       const btn = e.target.querySelector('button[type=submit]');
-      if (btn.disabled) return;
+      if (!btn || btn.disabled) return;
       btn.disabled = true;
       try {
-        let res;
-        if (loginMode === 'pin') {
+        if (loginMode === 'iiko') {
+          const pin = String(f.get('pin') || '').trim();
+          const r = await iikoLogin(pin);
+          if (r.choose) return renderLogin('', { ...r.choose, pin });
+          done(r.res);
+        } else if (loginMode === 'pin') {
           ls.set('pinRestaurant', f.get('restaurant'));
           const r = await fetch('/api/v1/staff/pin-login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-Device-Id': deviceId() },
             body: JSON.stringify({ restaurant: f.get('restaurant'), pin: f.get('pin') }),
           });
-          res = await r.json().catch(() => ({}));
+          const res = await r.json().catch(() => ({}));
           if (!r.ok) throw new Error(res.error || `Ошибка ${r.status}`);
           S.restaurant = f.get('restaurant'); ls.set('restaurant', S.restaurant);
+          done(res);
         } else {
-          res = await api('POST', '/api/v1/staff/login', { login: f.get('login'), password: f.get('password') });
+          done(await api('POST', '/api/v1/staff/login', { login: f.get('login'), password: f.get('password') }));
         }
-        S.token = res.token; S.staff = res.staff;
-        ls.set('token', res.token); ls.set('staff', res.staff);
-        start();
       } catch (e2) { renderLogin(e2.message); }
     });
+  }
+  // Понятные ошибки входа по коду из iiko
+  function loginErrorText(status, res) {
+    if (status === 429) return res.error || 'Слишком много попыток — подождите минуту';
+    const byCode = {
+      INVALID_CODE: 'Неверный код', SHIFT_CLOSED: 'Нет открытой смены — откройте личную смену на кассе iiko',
+      DISABLED: 'Вход отключён администратором',
+    };
+    return byCode[res.code] || res.error || `Ошибка ${status}`;
   }
   function logout() { S.token = null; S.staff = null; ls.del('token'); ls.del('staff'); renderLogin(); }
 

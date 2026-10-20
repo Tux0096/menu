@@ -14,16 +14,10 @@ import pool from '../db/pool.js';
 import { accessibleOrgIds, iikoRequest, isIikoDemo, listTerminalGroups } from '../iiko-client.js';
 import { createLimiter, httpError, safeEqual } from '../lib/http.js';
 import { hashPassword } from '../lib/passwords.js';
+import { resolveLoginMode, roleForPositions } from '../lib/iiko-roles.js';
 
-/** Включён ли вход по коду из iiko (IIKO_STAFF_LOGIN=on). Иначе — PIN из админки, как раньше. */
-export const iikoStaffLoginEnabled = () => process.env.IIKO_STAFF_LOGIN === 'on' && !isIikoDemo();
-
-// Зальные должности (по названию должности в iiko) и кто из них — управляющий зала
-const hallRe = () => new RegExp(process.env.IIKO_HALL_ROLES
-  || 'официант|менеджер|администратор|хостес|бармен|раннер|сомелье|кассир|управляющ', 'i');
-// «Системный администратор» — не зал
-const NOT_HALL_RE = /системн/i;
-const MANAGER_RE = /менеджер|администратор|управляющ|директор/i;
+/** Включён ли вход по коду из iiko (IIKO_STAFF_LOGIN=on, на проде ставит deploy/update.sh). В демо-режиме iiko — PIN из админки. */
+export const iikoStaffLoginEnabled = () => resolveLoginMode(process.env, isIikoDemo()) === 'iiko';
 
 const byClient = createLimiter({ windowMs: 60_000, max: 5, message: 'Слишком много попыток — подождите минуту' });
 const allClients = createLimiter({ windowMs: 10 * 60_000, max: 60, message: 'Слишком много неверных кодов — вход приостановлен на 10 минут' });
@@ -66,9 +60,7 @@ const employeeName = (e) => String(e.name || [e.lastName, e.firstName].filter(Bo
 export function hallRole(e, positions) {
   const names = [e.mainRoleId, ...(e.roleIds || [])].filter(Boolean)
     .map((id) => positions.get(String(id))?.name).filter(Boolean);
-  const hall = names.filter((n) => hallRe().test(n) && !NOT_HALL_RE.test(n));
-  if (!hall.length) return { role: null, names };
-  return { role: hall.some((n) => MANAGER_RE.test(n)) ? 'manager' : 'waiter', names };
+  return { role: roleForPositions(names), names };
 }
 
 // ── Где у сотрудника открыта смена ───────────────────────────────────────────
@@ -133,13 +125,13 @@ export async function iikoStaffLogin(code, clientKey = '', restaurant = null) {
   if (!e) {
     byClient.hit(clientKey);
     allClients.hit('all');
-    throw httpError(401, 'Неверный код или сотрудник не найден в iiko');
+    throw httpError(401, 'Неверный код', { code: 'INVALID_CODE' });
   }
   const { role, names } = hallRole(e, positions);
-  if (!role) throw httpError(403, `Приложение — для сотрудников зала. Ваша должность в iiko: ${names.join(', ') || 'не указана'}`);
+  if (!role) throw httpError(403, `Должность не зальная (в iiko: ${names.join(', ') || 'не указана'}). Администраторы админки входят по логину и паролю`, { code: 'NOT_HALL' });
   const open = await openShiftRestaurants(e.id);
   if (!open.length) {
-    throw httpError(403, 'Смена не открыта. Откройте личную смену на кассе iiko и войдите снова', { code: 'SHIFT_CLOSED' });
+    throw httpError(403, 'Нет открытой смены. Откройте личную смену на кассе iiko и войдите снова', { code: 'SHIFT_CLOSED' });
   }
   let r = open[0];
   if (open.length > 1) {
@@ -151,15 +143,17 @@ export async function iikoStaffLogin(code, clientKey = '', restaurant = null) {
     }
   }
   // Сотрудник в нашей базе — по ID из iiko; пароля нет (вход только через iiko)
+  // Запрет входа, выставленный в админке («Из iiko» → отключить), новый вход не снимает
   const name = employeeName(e);
   const { rows } = await pool.query(
-    `INSERT INTO staff_users (login, name, role, restaurant_id, password_hash, is_active, iiko_employee_id)
-     VALUES ($1, $2, $3, $4, $5, TRUE, $6)
+    `INSERT INTO staff_users (login, name, role, restaurant_id, password_hash, is_active, iiko_employee_id, iiko_position, last_login_at)
+     VALUES ($1, $2, $3, $4, $5, TRUE, $6, $7, NOW())
      ON CONFLICT (iiko_employee_id) DO UPDATE SET name = EXCLUDED.name, role = EXCLUDED.role,
-       restaurant_id = EXCLUDED.restaurant_id, is_active = TRUE
+       restaurant_id = EXCLUDED.restaurant_id, iiko_position = EXCLUDED.iiko_position, last_login_at = NOW()
      RETURNING *`,
-    [`iiko:${e.id}`, name, role, r.id, hashPassword(randomUUID()), e.id],
+    [`iiko:${e.id}`, name, role, r.id, hashPassword(randomUUID()), e.id, names.join(', ').slice(0, 200)],
   );
+  if (!rows[0].is_active) throw httpError(403, 'Вход отключён администратором', { code: 'DISABLED' });
   shiftCache.set(rows[0].id, { open: true, at: Date.now(), ok: Date.now() });
   return { row: rows[0], restaurant: r };
 }
