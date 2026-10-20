@@ -1414,7 +1414,9 @@
           <span class="lunch-item__meta">${esc(it.weight || '')}${!LC.combo.fixed && it.price > 0 ? `${it.weight ? ' · ' : ''}+${rub(it.price)}` : ''}</span></button>`;
       }).join('')}</div>`;
     }
-    const total = LC.combo ? `<div class="lunch__total"><span>Набор · <b>${rub(price)}</b></span>${drink ? `<small>+ ${esc(drink.name)} ${rub(drink.price)}</small>` : ''}</div>` : '';
+    // Пока набор не собран — цена набора («390 ₽» или «от 390 ₽»), а не сумма уже выбранных блюд
+    const complete = LC.combo && groupsFor(LC.product, LC.sel).every((g) => groupTotal(g, LC.sel) >= g.min) && price >= LC.combo.price;
+    const total = LC.combo ? `<div class="lunch__total"><span>Набор · <b>${complete ? rub(price) : lunchPrice(LC.combo)}</b></span>${drink ? `<small>+ ${esc(drink.name)} ${rub(drink.price)}</small>` : ''}</div>` : '';
     const last = LC.i === screens.length - 1;
     if (LC.combo) {
       const missing = typeof cur === 'number' ? lunchMissing(cur) : null;

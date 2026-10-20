@@ -109,7 +109,8 @@ export function daysText(days) {
 /** «с 12:00 до 16:00, пн–пт» */
 export function scheduleText(schedule) {
   const s = normalizeSchedule(schedule);
-  return `с ${s.from} до ${s.to}, ${daysText(s.days)}`;
+  // Начало и конец совпадают — весь день («весь день, ежедневно»)
+  return `${s.from === s.to ? 'весь день' : `с ${s.from} до ${s.to}`}, ${daysText(s.days)}`;
 }
 
 export const lunchClosedMessage = (schedule) => `Бизнес-ланч доступен ${scheduleText(schedule)}`;
