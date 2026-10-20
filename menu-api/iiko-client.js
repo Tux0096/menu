@@ -1,6 +1,8 @@
 import axios from 'axios';
 import { randomUUID } from 'crypto';
 import { AsyncLocalStorage } from 'async_hooks';
+import { demoAddItems, demoCreate, demoOrdersByIds, demoOrdersByTable, demoSections } from './lib/iiko-demo-orders.js';
+import { isRemovedItem } from './lib/iiko-order-sync.js';
 import { IIKO_URL, requestIikoTokenFor, iikoApiLogin } from './lib/iiko-token.js';
 
 /**
@@ -79,16 +81,23 @@ export async function waitForCommand(organizationId, correlationId, { timeoutMs 
 function demoResponse(path, body) {
   console.log(`[iiko demo] ${path}`);
   if (path === '/api/1/order/create') {
-    return { orderInfo: { id: randomUUID(), creationStatus: 'Success' } };
+    const id = body?.order?.id || randomUUID();
+    demoCreate({ ...body, order: { ...body?.order, id } });
+    return { orderInfo: { id, creationStatus: 'Success' } };
   }
+  if (path === '/api/1/order/add_items') {
+    demoAddItems(body);
+    return { correlationId: randomUUID(), demo: true };
+  }
+  // Демо-касса в памяти (lib/iiko-demo-orders.js): открытые заказы по столам, IIKO_DEMO_TABLE_ORDERS
   if (path === '/api/1/reserve/available_restaurant_sections') {
-    return { restaurantSections: [] };
+    return demoSections();
   }
   if (path === '/api/1/order/by_id') {
-    return { orders: [] };
+    return demoOrdersByIds(body);
   }
   if (path === '/api/1/order/by_table') {
-    return { orders: [] };
+    return demoOrdersByTable(body);
   }
   if (path === '/api/1/stop_lists') {
     return { terminalGroupStopLists: [] };
@@ -239,7 +248,7 @@ export async function getOrderSnapshot(organizationId, orderId) {
   const info = (data?.orders || [])[0];
   if (!info) return { exists: false };
   const order = info.order || null;
-  const items = (order?.items || []).filter((i) => (i.type || 'Product') === 'Product' && !i.deleted)
+  const items = (order?.items || []).filter((i) => (i.type || 'Product') === 'Product' && !isRemovedItem(i))
     .map((i) => ({ productId: String(i.product?.id || i.productId || ''), amount: Number(i.amount || 0) }));
   return {
     exists: info.creationStatus !== 'Error',

@@ -1033,7 +1033,7 @@
     for (const i of s?.items || []) {
       const mine = (i.guestId || null) === me;
       if (mine && !i.isLocked) continue; // мои неотправленные — в корзине ниже
-      const who = mine ? 'Вы' : i.guestName || (i.seatNumber ? `Место ${i.seatNumber}` : 'Добавил официант');
+      const who = mine ? 'Вы' : i.guestName || (i.seatNumber ? `Место ${i.seatNumber}` : i.fromIiko ? 'Заказ на кассе' : 'Добавил официант');
       if (!groups.has(who)) groups.set(who, []);
       groups.get(who).push(i);
     }
@@ -1048,6 +1048,11 @@
   }).join('')}
       </div>`).join('');
 
+    // Удалили или отменили на кассе уже после отправки: спокойная пометка в истории заказа (без ошибок)
+    const gone = (s?.removedItems || []).slice(-8).reverse();
+    const removedHtml = gone.length ? `<div class="order-card__removed"><div class="order-card__removed-title">Отменено на кассе</div>
+      ${gone.map((r) => `<div class="removed-line"><span>${esc(r.name)}${r.quantity > 1 ? ` × ${r.quantity}` : ''}</span><i>отменено на кассе</i></div>`).join('')}</div>` : '';
+
     // Передано официанту и с тех пор не менялось — это уже заказ, а не черновик корзины
     const handedOver = fresh.length > 0 && WAITING_WAITER.includes(s?.workflowStatus) && !S.changedSinceSubmit;
     const canClear = fresh.length > 0 && !handedOver;
@@ -1057,11 +1062,11 @@
     return `${topbar()}<main class="screen screen--order">
       ${orderStepper(s)}
       ${bannersHtml('order')}
-      ${sentHtml ? `<section class="order-card">${sentHtml}
+      ${sentHtml || removedHtml ? `<section class="order-card">${s?.openedInIiko && sentHtml ? '<div class="order-card__note">Заказ открыт официантом на кассе — блюда из меню попадут в тот же счёт</div>' : ''}${sentHtml}${removedHtml}
         ${sentSum > 0 ? `<div class="total-row"><span>${multi ? 'Весь стол' : 'Итого'}</span><b>${rub(sentSum)}</b></div>` : ''}</section>` : ''}
       ${cartHtml ? `<section class="order-card">${handedOver ? '<div class="order-card__note">Передано официанту — он подойдёт и подтвердит заказ. Изменения придётся передать ещё раз</div>' : ''}${cartHtml}
         <div class="total-row"><span>${handedOver ? 'Передано официанту' : 'В корзине'}</span><b>${rub(fresh.reduce((n, x) => n + x.q * unitPrice(x.l), 0))}</b></div></section>`
-    : sentHtml ? '' : '<section class="order-empty">Корзина пуста</section>'}
+    : sentHtml || removedHtml ? '' : '<section class="order-empty">Корзина пуста</section>'}
       <div class="actions">
         ${paid ? `<button class="btn btn--dark" data-action="new-visit"><span>Начать новый заказ</span><span class="round-btn">${ICONS.arrowRight}</span></button>
           ${s.feedbackLeft || !s.isPaid ? '' : row('data-action="feedback"', 'Оценить визит')}`

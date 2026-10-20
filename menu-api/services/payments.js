@@ -16,6 +16,7 @@ import axios from 'axios';
 import { randomUUID } from 'crypto';
 import pool from '../db/pool.js';
 import { changeOrderPayments, closeTableOrder, getOrderSnapshot, iikoRequest, isIikoDemo, withIikoCreds } from '../iiko-client.js';
+import { baseCode, rowsOfOrder } from '../lib/iiko-order-sync.js';
 import { getSource, MAIN } from './sources.js';
 import { createWaiterNotification } from './waiter-notifications.js';
 import { NOTIFY_TYPES } from '../lib/table-workflow-config.js';
@@ -440,14 +441,15 @@ async function acceptWaiterPaymentNow(sessionId, { method, tipAmount = 0 } = {})
   for (const [code, o] of Object.entries(orders)) {
     if (!o?.orderId || o.closed) continue;
     // Строки этого заказа iiko: оплаченное онлайн вносим «Онлайн», остальное — наличными/картой
-    const lines = st.inOrder(st.items.filter((i) => (i.source || MAIN) === code), o.orderId);
+    // (заказ с кассы iiko, прицепленный к визиту, имеет код «main#ab12cd34» — его строки по ID заказа)
+    const lines = rowsOfOrder(st.items, code, o.orderId, orders);
     const online = st.sum(lines.filter((i) => i.paid_payment_id));
     const rest = st.sum(lines.filter((i) => !i.paid_payment_id));
     if (online + rest <= 0) continue;
     total = Math.round((total + rest) * 100) / 100;
-    const src = await getSource(restaurant, code);
+    const src = await getSource(restaurant, baseCode(code));
     if (isIikoDemo()) { closed.push(code); continue; }
-    const where = code === MAIN ? 'кухни' : `«${src.name || code}»`;
+    const where = baseCode(code) === MAIN ? 'кухни' : `«${src.name || code}»`;
     // Сумма на кассе другая (скидка, правка) — не закрываем нашей суммой, официант закрывает счёт на кассе
     const diff = o.paid ? false : await iikoSumMismatch(src, o.orderId, online + rest);
     if (diff?.closed) { await markOrderClosed(session.id, code); closed.push(code); continue; }

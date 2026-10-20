@@ -358,6 +358,93 @@ step('адрес и время работы точки: сохраняются �
   }
 }
 
+// Заказы, открытые на кассе iiko (демо-касса): импорт, дозаказ гостя в тот же заказ, правки и закрытие на кассе
+{
+  const T2 = `k${Math.floor(Math.random() * 9000) + 1000}`;
+  const T3 = `m${Math.floor(Math.random() * 9000) + 1000}`;
+  const till = (body) => api('POST', '/api/v1/iiko/demo/table-orders', body, { Authorization: `Bearer ${mgr.token}` });
+  const hall = async () => ok(await api('GET', '/api/v1/waiter/sessions?restaurant=novo-sadovaya', null, W), 'sessions');
+  const at = async (t) => (await hall()).filter((x) => x.tableNumber === t && x.status === 'open');
+  r = await till({ op: 'upsert', order: { table: T2, waiter: { id: 'e2e-w', name: 'Анна с кассы' }, items: [
+    { name: 'Касса: борщ', amount: 2, price: 350, status: 'CookingStarted' },
+    { name: 'Касса: стейк', amount: 1, price: 900, status: 'CookingCompleted', modifiers: [{ name: 'medium', amount: 1, price: 0 }] },
+  ] } });
+  if (r.status === 404) {
+    step('заказы с кассы iiko: не демо-режим — проверка пропущена');
+  } else {
+    assert.equal(r.status, 200, JSON.stringify(r.data));
+    const tillOrderId = r.data.orderId;
+    // 1. Заказ iiko на столе без нашего визита → визит «открыт на кассе» с позициями как отправленными
+    let list = await at(T2);
+    assert.equal(list.length, 1, 'ровно один визит на стол');
+    let v = list[0];
+    assert.equal(v.openedInIiko, true); assert.equal(v.iikoWaiterName, 'Анна с кассы');
+    assert.equal(v.iikoOrderId, tillOrderId);
+    assert.equal(v.items.length, 2); assert.ok(v.items.every((i) => i.isLocked && i.fromIiko));
+    assert.equal(v.total, 1600); assert.equal(v.workflowStatus, 'in_production');
+    step(`заказ с кассы: стол №${T2} в списке официанта, «открыт на кассе», ${v.items.length} позиции, ${v.total} ₽`);
+    // 2. Повторный опрос не дублирует ни визиты, ни позиции
+    await till({ op: 'noop' }); await till({ op: 'noop' });
+    list = await at(T2);
+    assert.equal(list.length, 1); assert.equal(list[0].items.length, 2); assert.equal(list[0].total, 1600);
+    step('повторный опрос iiko: визит и позиции не задваиваются');
+    // 3. Гость сканирует QR и видит заказ с кассы; дозаказ уходит в тот же заказ iiko
+    const seen = ok(await api('POST', '/api/v1/table/enter', { restaurantSlug: 'novo-sadovaya', tableNumber: T2, join: true }, G), 'enter T2');
+    assert.equal(seen.sessionId, v.sessionId); assert.equal(seen.items.length, 2); assert.equal(seen.sentTotal, 1600);
+    ok(await api('POST', '/api/v1/table/submit-to-waiter', { sessionId: seen.sessionId, items: [line(p1, 1)] }, G), 'reorder T2');
+    ok(await api('POST', `/api/v1/waiter/session/${seen.sessionId}/take`, {}, W), 'take T2');
+    const sent2 = ok(await api('POST', `/api/v1/waiter/session/${seen.sessionId}/send-to-production`, {}, W), 'send T2');
+    assert.equal(sent2.iikoOrderId, tillOrderId, 'дозаказ добавлен в тот же заказ iiko (add_items)');
+    assert.equal(sent2.items.filter((i) => i.isLocked).length, 3);
+    await till({ op: 'noop' });
+    list = await at(T2);
+    assert.equal(list[0].items.length, 3); assert.equal(list[0].total, 1600 + p1.price);
+    step('гость видит заказ с кассы и дозаказывает в тот же заказ iiko, без дублей');
+    // 4. Добавили на кассе позже — дописывается
+    await till({ op: 'addItem', orderId: tillOrderId, item: { name: 'Касса: чай', amount: 2, price: 150, status: 'Added' } });
+    list = await at(T2);
+    assert.equal(list[0].items.length, 4); assert.equal(list[0].total, 1600 + p1.price + 300);
+    step('позиции, добавленные на кассе позже, дописываются');
+    // 5. Удалили на кассе: готовое блюдо, уменьшили количество — суммы и ленты официанта
+    await till({ op: 'removeItem', orderId: tillOrderId, name: 'Касса: стейк' });
+    await till({ op: 'removeItem', orderId: tillOrderId, name: 'Касса: борщ', mode: 'reduce', amount: 1 });
+    list = await at(T2);
+    v = list[0];
+    assert.ok(!v.items.some((i) => /стейк/.test(i.name)), 'готовое блюдо удалено на кассе — убрано');
+    assert.equal(v.items.find((i) => /борщ/.test(i.name)).quantity, 1);
+    assert.equal(v.total, 350 + p1.price + 300);
+    assert.deepEqual(v.removedItems.map((x) => x.name.replace(/ \(.*/, '')), ['Касса: стейк', 'Касса: борщ']);
+    const feed = ok(await api('GET', '/api/v1/waiter/notifications?restaurant=novo-sadovaya', null, W), 'feed');
+    assert.ok(feed.some((n) => n.session_id === v.sessionId && n.type === 'items_removed' && /на кассе удалено/.test(n.title) && /стейк/.test(n.body)));
+    const seen2 = ok(await api('POST', '/api/v1/table/enter', { restaurantSlug: 'novo-sadovaya', tableNumber: T2 }, G), 'enter T2 again');
+    assert.equal(seen2.removedItems.length, 2); assert.equal(seen2.total, v.total);
+    const dash2 = ok(await api('GET', '/api/v1/manager/dashboard?restaurant=novo-sadovaya', null, { Authorization: `Bearer ${mgr.token}` }), 'dash2');
+    assert.equal(dash2.sessions.find((x) => x.sessionId === v.sessionId).total, v.total);
+    step('удаление на кассе: готовое блюдо и уменьшенное количество убраны у официанта, гостя и в сводке, в ленте — «на кассе удалено»');
+    // 6. Закрыли/оплатили на кассе → визит закрыт
+    await till({ op: 'close', orderId: tillOrderId });
+    assert.equal((await at(T2)).length, 0);
+    step('счёт закрыт на кассе — визит закрыт');
+
+    // 7. Стол с нашим открытым визитом, заказ iiko чужой → прицепляется как ещё один заказ
+    const g3 = ok(await api('POST', '/api/v1/table/enter', { restaurantSlug: 'novo-sadovaya', tableNumber: T3 }, G), 'enter T3');
+    ok(await api('POST', '/api/v1/table/submit-to-waiter', { sessionId: g3.sessionId, items: [line(p2, 1)] }, G), 'submit T3');
+    ok(await api('POST', `/api/v1/waiter/session/${g3.sessionId}/take`, {}, W), 'take T3');
+    const own = ok(await api('POST', `/api/v1/waiter/session/${g3.sessionId}/send-to-production`, {}, W), 'send T3');
+    r = await till({ op: 'upsert', order: { table: T3, waiter: { id: 'e2e-w', name: 'Анна с кассы' }, items: [{ name: 'Касса: суп', amount: 1, price: 300, status: 'Added' }] } });
+    await till({ op: 'noop' });
+    list = await at(T3);
+    assert.equal(list.length, 1); assert.equal(list[0].sessionId, g3.sessionId);
+    assert.equal(list[0].iikoOrderId, own.iikoOrderId, 'свой заказ остаётся главным');
+    assert.equal(list[0].items.length, 2); assert.equal(list[0].total, p2.price + 300);
+    await till({ op: 'noop' });
+    assert.equal((await at(T3))[0].items.length, 2);
+    step('заказ с кассы на столе с нашим визитом прицеплен вторым заказом, без дублей при повторном опросе');
+    await till({ op: 'close', orderId: r.data.orderId });
+    ok(await api('POST', `/api/v1/waiter/session/${g3.sessionId}/close`, { force: true }, W), 'close T3');
+  }
+}
+
 // Безопасность: AI-отзыв — только от гостя, заголовки безопасности, внутренние адреса в /img
 r = await api('POST', '/api/v1/ai/feedback', { query: 'x', productId: p1.id });
 assert.equal(r.status, 401); step('отзыв о подсказке AI без входа гостя не принимается (401)');

@@ -96,6 +96,8 @@ input.inp:focus, textarea.inp:focus, select.sel:focus { box-shadow: 0 0 0 2px va
   .row__opts .sel { flex: 1; }
 }
 .error-box { background: #FDECEE; color: var(--danger); border-radius: 14px; padding: 12px 14px; margin-bottom: 12px; font-size: 14px; }
+.note-box { background: #EEEDFF; color: var(--violet); border-radius: 14px; padding: 10px 14px; margin-bottom: 12px; font-size: 13px; }
+.note-box--warn { background: #FFF4E0; color: #A35F00; }
 .search-results { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; max-height: 280px; overflow-y: auto; }
 .search-results button { display: flex; justify-content: space-between; text-align: left; padding: 10px 12px; border-radius: 12px; background: var(--bg); }
 .search-results button:disabled { opacity: .45; }

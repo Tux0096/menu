@@ -266,9 +266,12 @@ const rating = computed(() => {
             <li v-for="t in tables" :key="t.sessionId" class="flex items-center gap-4 px-5 py-3">
               <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blush text-sm font-semibold">{{ t.tableNumber }}</div>
               <div class="min-w-0 flex-1">
-                <div class="truncate text-sm">{{ (t.guests ?? []).map((g) => g.name).join(', ') || t.guest?.name || 'Гость' }}</div>
+                <div class="truncate text-sm">
+                  {{ (t.guests ?? []).map((g) => g.name).join(', ') || t.guest?.name || (t.openedInIiko ? 'Заказ на кассе' : 'Гость') }}
+                  <span v-if="t.openedInIiko" class="ml-1 rounded-md bg-brand-50 px-1.5 py-0.5 text-[11px] font-medium text-slate-600" title="Заказ открыт официантом на кассе iiko">открыт на кассе</span>
+                </div>
                 <div class="text-xs" :class="t.isOverdue ? 'font-medium text-red-600' : 'text-slate-500'">
-                  {{ t.waitingMinutes !== null ? `ждёт ${t.waitingMinutes} мин` : 'не ждёт' }}<template v-if="t.readyCount"> · готово блюд: {{ t.readyCount }}</template>
+                  {{ t.waitingMinutes !== null ? `ждёт ${t.waitingMinutes} мин` : 'не ждёт' }}<template v-if="t.iikoWaiterName"> · {{ t.iikoWaiterName }}</template><template v-if="t.readyCount"> · готово блюд: {{ t.readyCount }}</template>
                 </div>
               </div>
               <div class="hidden text-right font-medium sm:block">{{ formatRub(t.total) }}</div>

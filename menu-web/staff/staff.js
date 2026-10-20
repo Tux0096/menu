@@ -340,6 +340,8 @@
           <div class="muted" style="font-size:12px">Открыт ${time(s.createdAt)}${s.waitingMinutes != null ? ` · ждёт ${s.waitingMinutes} мин` : ''}${s.guest?.visitsCount ? ` · визитов: ${s.guest.visitsCount}` : ''}</div></div>
         ${statusPill(s)}
       </div>
+      ${s.openedInIiko ? `<div class="note-box">Открыт на кассе${s.iikoWaiterName ? ` · официант ${esc(s.iikoWaiterName)}` : ''}. Блюда удаляйте и отменяйте на кассе iiko — здесь они обновятся сами.</div>` : ''}
+      ${(s.removedItems || []).filter((r) => Date.now() - new Date(r.at).getTime() < 30 * 60_000).length ? `<div class="note-box note-box--warn"><b>На кассе удалено:</b> ${s.removedItems.filter((r) => Date.now() - new Date(r.at).getTime() < 30 * 60_000).slice(-5).reverse().map((r) => `${esc(r.name)} ×${r.quantity}`).join('; ')}</div>` : ''}
       ${lockedByOther ? '<div class="error-box">Стол сейчас редактирует другой официант</div>' : ''}
       ${s.readyCount ? `<div class="ready-box"><span>🔔 Готово на кухне: ${s.items.filter((i) => i.isReady).map((i) => `${esc(i.name)} ×${i.quantity}${i.guestName ? ` — ${esc(i.guestName)}` : ''}`).join(', ')}</span>
         <button class="btn btn--sm btn--dark" data-served>Вынесено всё</button></div>` : ''}
@@ -425,8 +427,8 @@
         const card = (x) => `<button class="tcard ${S.openId === x.sessionId ? 'is-open' : ''} ${needs(x) ? 'is-hot' : ''}" data-open="${esc(x.sessionId)}">
           <div class="tcard__num">${esc(x.tableNumber)}${isMine(x) ? '<span class="tcard__mine" title="Мой стол">★</span>' : ''}</div>
           <div class="tcard__body">
-            <div class="tcard__pills">${statusPill(x)}${x.readyCount ? ` <span class="pill" data-tone="bad">🔔 Готово ${x.readyCount}</span>` : ''}${x.isOverdue ? ` <span class="overdue">⏱ ${x.waitingMinutes} мин</span>` : ''}</div>
-            <div class="tcard__guest">${esc((x.guests || []).length ? x.guests.map((g) => g.name).join(', ') : (x.guest?.name || 'Гость'))}${x.pendingCount ? ` · новых: ${x.pendingCount}` : ''}</div>
+            <div class="tcard__pills">${statusPill(x)}${x.openedInIiko ? ' <span class="pill" data-tone="work" title="Заказ открыт на кассе iiko">открыт на кассе</span>' : ''}${x.readyCount ? ` <span class="pill" data-tone="bad">🔔 Готово ${x.readyCount}</span>` : ''}${x.isOverdue ? ` <span class="overdue">⏱ ${x.waitingMinutes} мин</span>` : ''}</div>
+            <div class="tcard__guest">${esc((x.guests || []).length ? x.guests.map((g) => g.name).join(', ') : (x.guest?.name || (x.openedInIiko ? `Заказ на кассе${x.iikoWaiterName ? ` · ${x.iikoWaiterName}` : ''}` : 'Гость')))}${x.pendingCount ? ` · новых: ${x.pendingCount}` : ''}</div>
           </div>
           <div class="tcard__sum">${rub(x.total)}</div>
         </button>`;
