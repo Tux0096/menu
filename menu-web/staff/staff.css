@@ -160,6 +160,9 @@ input.inp:focus, textarea.inp:focus, select.sel:focus { box-shadow: 0 0 0 2px va
 .picker__cats::-webkit-scrollbar { display: none; }
 .picker__cats button { flex-shrink: 0; padding: 8px 14px; border-radius: var(--pill); background: var(--bg); font-size: 13px; font-weight: 500; white-space: nowrap; }
 .picker__cats button.is-active { background: var(--ink); color: #fff; }
+.picker__hours { margin-left: 4px; font-size: 10px; font-weight: 600; opacity: .7; }
+.picker__hours.is-closed { color: var(--danger); opacity: 1; }
+.picker__cats button.is-active .picker__hours.is-closed { color: #FFB3BB; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: start; }
 
 /* Телефон */
@@ -322,6 +325,9 @@ html, body { overflow-x: clip; }
 .pick-item__add.has { background: var(--ok); font-size: 15px; }
 .pick-item:active .pick-item__add { transform: scale(.9); }
 .pick-sheet .picker__cats button.is-active { background: var(--ink); color: #fff; }
+.picker__hours { margin-left: 4px; font-size: 10px; font-weight: 600; opacity: .7; }
+.picker__hours.is-closed { color: var(--danger); opacity: 1; }
+.picker__cats button.is-active .picker__hours.is-closed { color: #FFB3BB; }
 @media (max-width: 900px) {
   body.table-open .top { display: none; }
   body.table-open .main { padding-top: 8px; }

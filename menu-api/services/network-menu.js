@@ -13,6 +13,7 @@ import { cleanModText, getDishVariants, getRestaurantCatalog, groupTitle } from 
 import { getStopListIds } from './stoplist.js';
 import { categoryKey, cleanMenuName, menuKey } from '../lib/menu-key.js';
 import { dishRowKey } from '../lib/dish-key.js';
+import { validateWindow } from '../lib/category-hours.js';
 
 export { menuKey };
 
@@ -173,7 +174,7 @@ export async function getNetworkMenuPoints(restaurants) {
  * Скрытых разделов в меню гостя нет, поэтому они добавляются из настроек (в конец списка).
  */
 export async function getCategoryList(restaurants) {
-  const { rows } = await pool.query('SELECT key, name, image_url, title, sort_order, tab, is_hidden FROM category_content');
+  const { rows } = await pool.query('SELECT key, name, image_url, title, sort_order, tab, is_hidden, show_from, show_until FROM category_content');
   const content = new Map(rows.map((r) => [r.key, r]));
   const list = new Map();
   const catalogs = await Promise.all(restaurants.map((r) => getRestaurantCatalog(r)));
@@ -189,6 +190,7 @@ export async function getCategoryList(restaurants) {
       const cur = list.get(key) || {
         key, name: iikoName, title: c?.title || '', image: c?.image_url || null, iikoImage: null,
         bar: Boolean(g.barSource), isBar: Boolean(g.isBar), tab: c?.tab || '', hidden: false, sortOrder: c?.sort_order ?? null, points: 0, items: 0, position: list.size,
+        showFrom: c?.show_from || '', showUntil: c?.show_until || '',
       };
       // iikoImage — картинка раздела из iiko: гость видит её, пока своей нет
       if (!cur.iikoImage && g.image && g.image !== cur.image) cur.iikoImage = g.image;
@@ -202,6 +204,7 @@ export async function getCategoryList(restaurants) {
       key: c.key, name: c.name, title: c.title || '', image: c.image_url || null, iikoImage: null,
       bar: c.key.endsWith('|bar'), isBar: c.tab === 'bar',
       tab: c.tab || '', hidden: true, sortOrder: c.sort_order ?? null, points: 0, items: 0, position: 1e6 + list.size,
+      showFrom: c.show_from || '', showUntil: c.show_until || '',
     });
   }
   return [...list.values()].sort((a, b) => a.position - b.position).map(({ position, ...x }) => x);
@@ -222,11 +225,16 @@ export async function saveCategorySettings(items) {
       if (!key) continue;
       const title = String(it.title || '').trim().slice(0, 100) || null;
       const tab = ['kitchen', 'bar'].includes(it.tab) ? it.tab : null;
+      // Время показа раздела «с … до …» (по времени точки); пусто — всегда. Ошибку формата не глотаем
+      const hasWin = 'showFrom' in it || 'showUntil' in it; // старая версия админки поля не шлёт — время не трогаем
+      const win = hasWin ? validateWindow(it, `раздела «${String(it.title || name).slice(0, 60)}»`) : null;
       await client.query(
-        `INSERT INTO category_content (key, name, title, sort_order, tab, is_hidden, updated_at) VALUES ($1, $2, $3, $4, $5, $6, NOW())
+        `INSERT INTO category_content (key, name, title, sort_order, tab, is_hidden, show_from, show_until, updated_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
          ON CONFLICT (key) DO UPDATE SET name = EXCLUDED.name, title = EXCLUDED.title, sort_order = EXCLUDED.sort_order,
-           tab = EXCLUDED.tab, is_hidden = EXCLUDED.is_hidden, updated_at = NOW()`,
-        [key, name, title, i + 1, tab, Boolean(it.hidden)],
+           tab = EXCLUDED.tab, is_hidden = EXCLUDED.is_hidden, updated_at = NOW(),
+           show_from = CASE WHEN $9::boolean THEN EXCLUDED.show_from ELSE category_content.show_from END,
+           show_until = CASE WHEN $9::boolean THEN EXCLUDED.show_until ELSE category_content.show_until END`,
+        [key, name, title, i + 1, tab, Boolean(it.hidden), win?.from || null, win?.until || null, hasWin],
       );
     }
     await client.query('COMMIT');

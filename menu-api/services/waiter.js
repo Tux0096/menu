@@ -16,7 +16,7 @@ import { assignedText, unassignedText } from '../lib/notification-text.js';
 import { buildAwaiting } from '../lib/awaiting.js';
 import { loadCookNorms } from './cooking.js';
 import { getSource, listSources, MAIN, productSourceMap } from './sources.js';
-import { menuIndex, priceLine, priceVariant, stopProblems } from './menu-pricing.js';
+import { assertHoursRows, menuIndex, priceLine, priceVariant, stopProblems } from './menu-pricing.js';
 import { assertLunchRows } from './business-lunch.js';
 import { withSessionMutex } from '../lib/session-mutex.js';
 import { uuidOrNull } from '../lib/uuid.js';
@@ -389,6 +389,7 @@ async function sendToKitchenNow(sessionId, staff) {
   // Стоп-лист проверяем в момент отправки: блюдо могло закончиться, пока гость собирал корзину
   const index = await menuIndex(restaurant);
   assertLunchRows(index, pending.map((i) => ({ key: i.iiko_product_id || i.product_id }))); // вне времени ланча — 400
+  assertHoursRows(index, pending.map((i) => ({ key: i.iiko_product_id || i.product_id }))); // раздел закрылся по времени — 409
   const problems = stopProblems(index, pending.map((i) => ({
     key: i.iiko_product_id || i.product_id, quantity: i.quantity, name: i.name, sizeId: i.size_id || null, modifiers: i.modifiers || [],
   })));

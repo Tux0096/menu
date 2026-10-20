@@ -103,12 +103,19 @@ admin.post('/network-menu/modifiers/image', h(async (req) => {
   return res;
 }));
 // Конструктор бизнес-ланча: время действия, наборы, варианты шагов, напитки — общие для сети (расписание можно переопределить для точки)
-admin.get('/business-lunch', h(async (req) => getLunchAdmin(await staffRestaurants(req), (r) => getRestaurantCatalog(r))));
+admin.get('/business-lunch', h(async (req) => {
+  const restaurants = await staffRestaurants(req);
+  const data = await getLunchAdmin(restaurants, (r) => getRestaurantCatalog(r));
+  // Разделы меню — для выбора места карточки ланча (кухня/бар, раздел)
+  const categories = (await getCategoryList(restaurants)).filter((c) => !c.hidden)
+    .map((c) => ({ key: c.key, name: c.title || c.name, tab: c.tab === 'bar' || (!c.tab && c.isBar) ? 'bar' : 'kitchen' }));
+  return { ...data, categories };
+}));
 admin.put('/business-lunch', h(async (req) => {
   if (req.staff.restaurantId) throw httpError(403, 'Бизнес-ланч общий для сети — его настраивает сотрудник без привязки к точке');
   const restaurants = await staffRestaurants(req);
   const res = await saveLunchSettings(req.body || {}, restaurants);
-  audit(req.staff, 'menu.business-lunch', 'settings', '', { schedule: req.body?.schedule || null, overrides: Object.keys(req.body?.overrides || {}) });
+  audit(req.staff, 'menu.business-lunch', 'settings', '', { schedule: req.body?.schedule || null, overrides: Object.keys(req.body?.overrides || {}), placement: req.body?.placement ?? undefined, content: Array.isArray(req.body?.content) ? req.body.content.length : undefined });
   return res;
 }));
 // Отчёт выгрузки iiko: какие разделы и позиции внешнего меню не попали к гостям и почему (скрыты, нет цены для точки)

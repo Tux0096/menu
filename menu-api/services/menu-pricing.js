@@ -5,6 +5,7 @@
 import { httpError } from '../lib/http.js';
 import { getRestaurantCatalog } from './catalog.js';
 import { assertLunchOpen } from '../lib/lunch-schedule.js';
+import { assertCategoryOpen } from '../lib/category-hours.js';
 
 /** Сколько штук одной позиции можно заказать за раз (защита от опечаток и переполнения сумм) */
 export const MAX_LINE_QTY = 50;
@@ -17,6 +18,17 @@ export async function menuIndex(restaurant) {
   const index = new Map();
   indexes.set(catalog, index);
   index.alcoRules = catalog.alcohol || null; // правила точки: часы, 18+ (lib/alco-rules.js; catalog.alcohol хранит те же поля)
+  // Время показа раздела: у блюда ограничено, только если все его места в меню (раздел и копии в других) со временем
+  const groups = new Map((catalog.groups || []).map((g) => [String(g.id), g]));
+  const places = new Map(); // ID блюда → окна показа мест; null — есть место без ограничения
+  for (const p of catalog.products || []) {
+    const g = groups.get(String(p.parentGroup));
+    const w = g?.window ? { from: g.window.from, until: g.window.until, tz: g.window.tz, title: g.name } : null;
+    for (const id of new Set([p.id, p.iikoId].filter(Boolean).map(String))) {
+      if (!w) places.set(id, null);
+      else if (places.get(id) !== null) places.set(id, [...(places.get(id) || []), w]);
+    }
+  }
   for (const p of catalog.products || []) {
     const entry = {
       name: String(p.name || 'Позиция').slice(0, 300),
@@ -31,6 +43,7 @@ export async function menuIndex(restaurant) {
       cookingMinutes: p.cookingMinutes ?? null, // норматив готовки из iiko, мин
       lunch: p.lunchCombo ? catalog.businessLunch?.schedule || null : null, // набор бизнес-ланча — расписание точки
       alcohol: Boolean(p.isAlcohol), // 18+ и правила продажи точки (index.alcoRules)
+      hours: places.get(String(p.id)) || null, // раздел со временем показа («до 12:00») — окна всех мест блюда
     };
     if (p.id) index.set(String(p.id), entry);
     if (p.iikoId) index.set(String(p.iikoId), entry);
@@ -51,12 +64,22 @@ export function priceLine(index, key, { qty, prevQty = 0, totalQty = qty, client
   if (!(p.price > 0)) throw httpError(400, `«${p.name.slice(0, 60)}» нельзя заказать через меню — позовите официанта`);
   // Бизнес-ланч — только в своё время (корзина гостя, сохранение и отправка официантом)
   if (p.lunch) assertLunchOpen(p.lunch);
+  // Раздел показывается только в свои часы («Завтраки до 12:00»): добавить нельзя, убрать из корзины можно
+  if (p.hours && totalQty > prevQty) assertCategoryOpen(p.hours);
   if (qty > MAX_LINE_QTY) throw httpError(400, `«${p.name.slice(0, 60)}»: не больше ${MAX_LINE_QTY} шт. за раз`);
   if (p.isInStopList && totalQty > prevQty) throw httpError(409, `«${p.name.slice(0, 60)}» закончилось — уберите из корзины`);
   if (p.balance && totalQty > p.balance && totalQty > prevQty) {
     throw httpError(409, `«${p.name.slice(0, 60)}»: осталось только ${p.balance} шт.`);
   }
   return { name: p.name, price: p.price };
+}
+
+/** Строки заказа из раздела, закрытого по времени: при отправке официанту/на кухню — 409. rows — [{ key }]. */
+export function assertHoursRows(index, rows, now = new Date()) {
+  for (const r of rows || []) {
+    const e = index.get(String(r.key));
+    if (e?.hours) assertCategoryOpen(e.hours, now);
+  }
 }
 
 /**

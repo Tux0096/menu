@@ -12,7 +12,8 @@ import { assignDishVariants, dishCardKey } from '../lib/dish-key.js';
 import { orderGroups } from './menu-order.js';
 import { getStopIndex } from './stoplist.js';
 import { bumpCatalogVersion, catalogVersion } from '../lib/catalog-version.js';
-import { attachBusinessLunch } from './business-lunch.js';
+import { attachBusinessLunch, pointTimezone } from './business-lunch.js';
+import { describeWindow, normalizeWindow } from '../lib/category-hours.js';
 
 const TTL_MS = parseInt(process.env.CATALOG_TTL_MS || '300000', 10);
 const rawCache = new Map(); // restaurantId -> { at, source, data }
@@ -178,17 +179,25 @@ function decorateGroups(groups, content = new Map()) {
     const items = (g.items || []).map((m) => {
       const mName = m.iikoName || m.name;
       const c = content.get(`item:${menuKey(mName)}`);
-      return { ...m, iikoName: mName, name: c?.title || cleanModText(mName) || mName, image: c?.image || m.image || null };
+      const out = { ...m, iikoName: mName, name: c?.title || cleanModText(mName) || mName, image: c?.image || m.image || null };
+      // Блюда бизнес-ланча: описание и вес из админки главнее iiko; own — что задано вручную (для страницы «Бизнес-ланч»)
+      if (c?.description) out.description = c.description;
+      if (c?.weight) { out.iikoWeight = m.weight ?? null; out.weight = c.weight; }
+      if (c?.title) out.autoName = cleanModText(mName) || mName;
+      if (c?.title || c?.description || c?.weight) out.own = { title: c.title || '', description: c.description || '', weight: c.weight || '' };
+      return out;
     });
     const c = content.get(`group:${menuKey(gName)}`);
     return { ...g, iikoName: gName, name: c?.title || groupTitle(gName, items), items };
   });
 }
 
-/** Настройки модификаторов из админки: «item:ключ» / «group:ключ» → { title, image }. */
+/** Настройки модификаторов из админки: «item:ключ» / «group:ключ» → { title, image, description, weight }. */
 export async function getModifierContent() {
-  const { rows } = await pool.query('SELECT kind, key, title, image_url FROM modifier_content');
-  return new Map(rows.map((r) => [`${r.kind}:${r.key}`, { title: r.title || null, image: r.image_url || null }]));
+  const { rows } = await pool.query('SELECT kind, key, title, image_url, description, weight FROM modifier_content');
+  return new Map(rows.map((r) => [`${r.kind}:${r.key}`, {
+    title: r.title || null, image: r.image_url || null, description: r.description || null, weight: r.weight || null,
+  }]));
 }
 
 async function saveSnapshot(restaurantId, source, data) {
@@ -355,17 +364,20 @@ export async function getContentByName(restaurantId, variants = new Map()) {
 
 /** Разделы из админки: ключ названия раздела (из iiko) → картинка, своё название, порядок, вкладка, скрытие. */
 export async function getCategorySettings() {
-  const { rows } = await pool.query('SELECT key, image_url, title, sort_order, tab, is_hidden FROM category_content');
+  const { rows } = await pool.query('SELECT key, image_url, title, sort_order, tab, is_hidden, show_from, show_until FROM category_content');
   return new Map(rows.map((r) => [r.key, {
     image: r.image_url || null, title: r.title || null, sortOrder: r.sort_order ?? null, tab: r.tab || null, hidden: Boolean(r.is_hidden),
+    window: normalizeWindow({ from: r.show_from, until: r.show_until }),
   }]));
 }
 
 /**
  * Применить настройки разделов к меню точки: скрытые разделы убираются вместе с блюдами,
  * заданный порядок идёт первым (остальные — после, в порядке сайта), своё название и вкладка — поверх iiko.
+ * Раздел со временем показа («до 12:00») остаётся в каталоге с полем window — у гостя он скрыт вне времени,
+ * у официанта виден с пометкой; заказ позиций закрытого раздела сервер отклоняет (menu-pricing.js).
  */
-export function applyCategorySettings(groups, products, settings) {
+export function applyCategorySettings(groups, products, settings, { tz = null, now = new Date() } = {}) {
   const byId = new Map();
   const out = [];
   for (const g of groups) {
@@ -378,6 +390,7 @@ export function applyCategorySettings(groups, products, settings) {
       image: s.image || g.image || null,
       order: s.sortOrder != null ? -1e6 + s.sortOrder : g.order,
       isBar: s.tab ? s.tab === 'bar' : g.isBar,
+      ...(s.window ? { window: describeWindow(s.window, tz, now) } : {}),
     } : g;
     byId.set(String(g.id), next);
     out.push(next);
@@ -440,12 +453,13 @@ export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
 async function buildRestaurantCatalog(restaurant, { force = false } = {}) {
   const raw = await loadRawCatalog(restaurant, { force });
   const variants = await getDishVariants().catch(() => new Map());
-  const [overrides, byName, iikoStop, catSettings, modContent] = await Promise.all([
+  const [overrides, byName, iikoStop, catSettings, modContent, tz] = await Promise.all([
     getOverrides(restaurant.id),
     getContentByName(restaurant.id, variants).catch(() => new Map()),
     loadIikoStopList(restaurant),
     getCategorySettings().catch(() => new Map()),
     getModifierContent().catch(() => new Map()),
+    pointTimezone(restaurant.id),
   ]);
 
   const stop = normalizeLegacyStopList(raw.data.stopList, restaurant.terminal_id);
@@ -500,7 +514,7 @@ async function buildRestaurantCatalog(restaurant, { force = false } = {}) {
   const ranked = products.map((p, i) => ({ ...p, order: (Number(p.order) || i) - (p.priority || 0) * 1e7 }))
     .sort((a, b) => a.order - b.order);
   // Разделы из админки главнее iiko: картинка, название, порядок, вкладка, скрытие
-  const sections = applyCategorySettings(orderGroups(merged.groups, barGroups(ranked)), ranked, catSettings);
+  const sections = applyCategorySettings(orderGroups(merged.groups, barGroups(ranked)), ranked, catSettings, { tz });
   // Вес без единицы (в iiko «порц»): напитки бара — в мл, остальное — в граммах
   const barIds = new Set(sections.groups.filter((g) => g.isBar).map((g) => String(g.id)));
   for (const p of sections.products) {
@@ -537,12 +551,24 @@ function isMainDish(product) {
   return !NON_MAIN_GROUP_HINTS.some((h) => g.includes(h));
 }
 
-/** Продукты, которые AI может предлагать: опубликованы, не в стоп-листе, не соусы/допы. */
+/** ID блюд, которые сейчас нельзя заказать из-за времени показа раздела: все места блюда в меню — в закрытых разделах. */
+export function closedByHoursIds(catalog) {
+  const group = new Map((catalog.groups || []).map((g) => [String(g.id), g]));
+  const open = new Set();
+  const closed = new Set();
+  for (const p of catalog.products || []) {
+    (group.get(String(p.parentGroup))?.window?.closedNow ? closed : open).add(String(p.id));
+  }
+  return new Set([...closed].filter((id) => !open.has(id)));
+}
+
+/** Продукты, которые AI может предлагать: опубликованы, не в стоп-листе, не соусы/допы, раздел открыт по времени. */
 export async function getCatalogProducts(restaurant) {
   if (!restaurant) return [];
   const catalog = await getRestaurantCatalog(restaurant);
+  const closed = closedByHoursIds(catalog);
   return catalog.products.filter(
-    (p) => !p.isAlias && !p.lunchCombo && Number(p.price) > 0 && p.isPublished !== false && !p.isInStopList && isMainDish(p),
+    (p) => !p.isAlias && !p.lunchCombo && Number(p.price) > 0 && p.isPublished !== false && !p.isInStopList && isMainDish(p) && !closed.has(String(p.id)),
   );
 }
 
@@ -551,7 +577,8 @@ export async function getAvailableProducts(restaurant) {
   if (!restaurant) return [];
   const catalog = await getRestaurantCatalog(restaurant);
   // Наборы бизнес-ланча — в конструкторе, ИИ их отдельными блюдами не предлагает
-  return catalog.products.filter((p) => !p.isAlias && !p.lunchCombo && Number(p.price) > 0 && p.isPublished !== false && !p.isInStopList);
+  const closed = closedByHoursIds(catalog);
+  return catalog.products.filter((p) => !p.isAlias && !p.lunchCombo && Number(p.price) > 0 && p.isPublished !== false && !p.isInStopList && !closed.has(String(p.id)));
 }
 
 export function invalidateCatalogCache(restaurantId = null) {
