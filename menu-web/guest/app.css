@@ -635,6 +635,13 @@ html.sheet-open, html.sheet-open body { overflow: hidden; }
 .removed-line i { font-style: normal; white-space: nowrap; }
 
 /* ── Бизнес-ланч: баннер в меню и конструктор ─────────────── */
+/* Бизнес-ланч — одна позиция меню с большим фото (как «большая карточка» блюда) */
+.lunch-card { cursor: pointer; }
+.lunch-card .dish__name small { display: block; margin-top: 2px; font-size: 13px; font-weight: 400; opacity: .9; }
+.lunch-card__time { position: absolute; left: 12px; top: 12px; padding: 4px 10px; border-radius: 12px; background: rgba(255, 255, 255, .92); color: var(--purple); font-size: 12px; font-weight: 600; }
+.lunch-card.is-off .lunch-card__time { color: #6F5E75; }
+.lunch-card.is-off .dish__img { filter: grayscale(.5); }
+.lunch-card__ph { display: grid; place-items: center; aspect-ratio: 16 / 10; font-size: 64px; background: linear-gradient(135deg, var(--purple-soft), #fff); }
 .lunch-banner {
   margin: 0 0 14px; padding: 18px 16px 14px; border-radius: 20px; color: #fff; cursor: pointer; position: relative; overflow: hidden;
   background: linear-gradient(135deg, #993CA6 0%, #7B2D88 100%); box-shadow: 0 8px 24px rgba(153, 60, 166, .25);

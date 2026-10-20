@@ -7,7 +7,7 @@ interface Combo { key: string; title: string; auto: string; custom: string; iiko
 interface StepItem { key: string; iikoName: string; name: string; price: number; image: string | null; enabled: boolean }
 interface Step { key: string; title: string; items: StepItem[] }
 interface Drink { key: string; iikoName: string; name: string; price: number; image: string | null; enabled: boolean }
-interface LunchAdmin { schedule: Sched; text: string; points: Point[]; combos: Combo[]; steps: Step[]; drinks: Drink[] }
+interface LunchAdmin { schedule: Sched; text: string; image: string | null; points: Point[]; combos: Combo[]; steps: Step[]; drinks: Drink[] }
 
 useHead({ title: 'Бизнес-ланч — Фуджи' });
 const notify = useNotify();
@@ -41,7 +41,7 @@ const ZONES = [
   { value: 'Asia/Vladivostok', label: 'Владивосток (UTC+10)' },
 ];
 
-const state = () => JSON.stringify(data.value && [data.value.schedule, data.value.points.map((p) => [p.slug, p.override]), data.value.combos.map((c) => [c.key, c.custom, c.enabled]), data.value.steps.map((s) => s.items.map((i) => [i.key, i.enabled])), data.value.drinks.map((d) => [d.key, d.enabled])]);
+const state = () => JSON.stringify(data.value && [data.value.image, data.value.schedule, data.value.points.map((p) => [p.slug, p.override]), data.value.combos.map((c) => [c.key, c.custom, c.enabled]), data.value.steps.map((s) => s.items.map((i) => [i.key, i.enabled])), data.value.drinks.map((d) => [d.key, d.enabled])]);
 async function load() {
   loading.value = true;
   loadError.value = '';
@@ -83,6 +83,7 @@ async function save() {
       method: 'PUT',
       body: {
         schedule: d.schedule,
+        image: d.image || null,
         overrides: Object.fromEntries(d.points.map((p) => [p.slug, p.override])),
         combos: Object.fromEntries(d.combos.map((c, i) => [c.key, { enabled: c.enabled, title: c.custom, order: i }])),
         items: Object.fromEntries(d.steps.flatMap((s) => s.items.map((it, i) => [it.key, { enabled: it.enabled, order: i }]))),
@@ -146,6 +147,21 @@ const shortName = (n: string) => n.replace(/^Фуджи\s+/i, '');
     <LoadError v-if="loadError" :message="loadError" @retry="load" />
     <TableSkeleton v-else-if="!data" :rows="6" />
     <div v-else class="space-y-5">
+      <!-- Обложка позиции «Бизнес-ланч» в меню гостя -->
+      <section class="panel-box flex flex-wrap items-center gap-4 p-4">
+        <div class="h-28 w-44 shrink-0 overflow-hidden rounded-xl bg-cream ring-1 ring-brand-100">
+          <img v-if="data.image" :src="thumbUrl(data.image, 480)" alt="" class="h-full w-full object-cover" />
+          <div v-else class="grid h-full place-items-center text-center text-xs text-slate-500">фото первого<br>набора</div>
+        </div>
+        <div class="min-w-[220px] flex-1 space-y-2">
+          <h2 class="text-base font-semibold text-slate-800">Обложка в меню</h2>
+          <p class="text-xs text-slate-500">Бизнес-ланч в меню гостя — одна позиция с большим фото; по нажатию — выбор набора и конструктор. Пусто — фото первого набора из iiko.</p>
+          <div class="flex flex-wrap gap-2">
+            <UploadBox accept="image" compact @uploaded="(url: string) => (data!.image = url)" />
+            <UButton v-if="data.image" size="xs" color="white" icon="i-heroicons-x-mark" @click="data!.image = null">Убрать</UButton>
+          </div>
+        </div>
+      </section>
       <!-- Время действия -->
       <section class="panel-box space-y-4 p-4">
         <h2 class="text-base font-semibold text-slate-800">Время действия</h2>
