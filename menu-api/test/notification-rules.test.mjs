@@ -21,7 +21,7 @@ test('push: у стола есть официант → только ему', ()
 });
 
 test('push: тревоги («долго ждут», ошибка iiko) → всем, даже если у стола есть официант', () => {
-  assert.deepEqual([...BROADCAST_TYPES].sort(), ['iiko_error', 'wait_too_long']);
+  assert.deepEqual([...BROADCAST_TYPES].sort(), ['iiko_error', 'reservation', 'reservation_arrived', 'reservation_conflict', 'reservation_no_show', 'wait_too_long']);
   for (const type of BROADCAST_TYPES) assert.equal(pushAudience({ type, waiterId: 'a-1' }), null, type);
 });
 

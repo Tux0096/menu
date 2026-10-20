@@ -558,6 +558,42 @@ const SCHEMA = `
     created_at TIMESTAMPTZ DEFAULT NOW()
   );
   CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log(created_at DESC);
+
+  -- Брони столов из iiko (только чтение: в iiko ничего не пишем). Загружает services/iiko-reserves.js,
+  -- ко времени брони создаётся визит без официанта (table_sessions.reservation_id)
+  CREATE TABLE IF NOT EXISTS reservations (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,
+    iiko_reserve_id VARCHAR(100) NOT NULL,
+    starts_at TIMESTAMPTZ NOT NULL,
+    duration_min INT NOT NULL DEFAULT 120,
+    table_number VARCHAR(50),
+    table_numbers JSONB NOT NULL DEFAULT '[]',
+    iiko_table_ids JSONB NOT NULL DEFAULT '[]',
+    guest_name VARCHAR(200),
+    phone VARCHAR(30),
+    guests_count INT NOT NULL DEFAULT 1,
+    comment TEXT,
+    iiko_status VARCHAR(20) NOT NULL DEFAULT 'new',
+    session_id UUID REFERENCES table_sessions(id) ON DELETE SET NULL,
+    table_created_at TIMESTAMPTZ,
+    arrived_at TIMESTAMPTZ,
+    arrived_by VARCHAR(20),
+    no_show_at TIMESTAMPTZ,
+    conflict_session_id UUID,
+    conflict_at TIMESTAMPTZ,
+    conflict_notified_at TIMESTAMPTZ,
+    seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (restaurant_id, iiko_reserve_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_reservations_day ON reservations(restaurant_id, starts_at);
+  CREATE INDEX IF NOT EXISTS idx_reservations_session ON reservations(session_id);
+  ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS reservation_id UUID REFERENCES reservations(id) ON DELETE SET NULL;
+  ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS reserve_guest_name VARCHAR(200);
+  ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS reserve_phone VARCHAR(30);
+  CREATE INDEX IF NOT EXISTS idx_table_sessions_reservation ON table_sessions(reservation_id) WHERE reservation_id IS NOT NULL;
 `;
 
 const DEFAULT_CHIPS = [

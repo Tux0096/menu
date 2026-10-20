@@ -44,6 +44,11 @@ export const NOTIFY_TYPES = {
   COOK_SLOW: 'cook_slow',
   TABLE_ASSIGNED: 'table_assigned',
   TABLE_UNASSIGNED: 'table_unassigned',
+  // Брони из iiko: стол создан под бронь, гости пришли, бронь не пришла, стол брони занят прежними гостями
+  RESERVATION: 'reservation',
+  RESERVATION_ARRIVED: 'reservation_arrived',
+  RESERVATION_NO_SHOW: 'reservation_no_show',
+  RESERVATION_CONFLICT: 'reservation_conflict',
 };
 
 /** Блюдо готово, но не вынесено дольше этого времени — тревога «долго ждёт» всем официантам. */

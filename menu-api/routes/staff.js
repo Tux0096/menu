@@ -16,6 +16,7 @@ import { listWaiterNotifications, markAllNotificationsRead, markNotificationRead
 import { httpError } from '../lib/http.js';
 import { SEES_ALL_ROLES } from '../lib/notification-rules.js';
 import { listFeedback, listRestaurants } from '../services/admin.js';
+import { listReserves, markArrived, reservePhone, seatReservation } from '../services/reservations.js';
 import { assertStaffSession, staffRestaurant } from '../lib/staff-scope.js';
 import { getRestaurantCatalog } from '../services/catalog.js';
 import { stopListLoadedAt } from '../services/stoplist.js';
@@ -142,6 +143,23 @@ waiter.get('/waiters', h(async (req) => {
   if (!SEES_ALL_ROLES.has(req.staff.role)) throw httpError(403, 'Недостаточно прав');
   return listRestaurantWaiters((await staffRestaurant(req)).id);
 }));
+// Брони из iiko (только чтение): список на сегодня по времени, поиск по имени гостя (ё = е). Телефон в списке маскирован
+waiter.get('/reservations', h(async (req) => listReserves((await staffRestaurant(req)).id, { q: String(req.query.q || '').slice(0, 60) })));
+// Полный номер брони — по нажатию «показать» (в журнал пишем только факт, без номера)
+waiter.get('/reservations/:rid/phone', h(async (req) => {
+  const r = await staffRestaurant(req);
+  const res = await reservePhone(r.id, req.params.rid);
+  audit(req.staff, 'reservation.phone', 'reservation', req.params.rid);
+  return res;
+}));
+// «Посадить сейчас»: открыть стол брони (создать досрочно, если ещё нет); стол занят другими — 409 TABLE_BUSY
+waiter.post('/reservations/:rid/seat', h(async (req) => seatReservation((await staffRestaurant(req)).id, req.params.rid)));
+// «Гости пришли» вручную (сели без QR)
+waiter.post('/reservations/:rid/arrived', h(async (req) => {
+  const res = await markArrived((await staffRestaurant(req)).id, req.params.rid);
+  audit(req.staff, 'reservation.arrived', 'reservation', req.params.rid, { table: res.tableNumber });
+  return res;
+}));
 // Телефон официанта для push-уведомлений
 waiter.post('/devices', h(async (req) => {
   requireBody(req.body, 'token');
@@ -211,3 +229,8 @@ router.use('/api/v1/waiter', waiter);
 
 router.get('/api/v1/manager/feedback', staffAuth('manager'), h(async (req) => listFeedback((await staffRestaurant(req)).id)));
 router.get('/api/v1/manager/dashboard', staffAuth('manager'), h(async (req) => getHallDashboard((await staffRestaurant(req)).id)));
+// Брони на сегодня для админки: только просмотр, телефон маскирован
+router.get('/api/v1/manager/reservations', staffAuth('manager'), h(async (req) => {
+  const r = await staffRestaurant(req);
+  return { restaurant: { slug: r.slug, name: r.name }, ...(await listReserves(r.id)) };
+}));
