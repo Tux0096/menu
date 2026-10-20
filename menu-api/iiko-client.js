@@ -49,8 +49,29 @@ setInterval(() => {
   callStats.clear();
 }, 5 * 60_000).unref?.();
 
-async function iikoPost(path, body, { retried = false } = {}) {
+// Фоновые опросы (кухня, импорт столов, брони, стоп-листы) — в одну очередь с паузой между запросами,
+// чтобы на 10 точках не упираться в лимит ключа. Запросы людей (вход, заказ, оплата) идут без очереди.
+const bgStore = new AsyncLocalStorage();
+export const asBackground = (fn) => bgStore.run(true, fn);
+const BG_GAP_MS = parseInt(process.env.IIKO_BG_GAP_MS || '250', 10);
+let bgQueue = Promise.resolve();
+function bgSlot() {
+  const slot = bgQueue.then(() => new Promise((r) => setTimeout(r, BG_GAP_MS)));
+  bgQueue = slot.catch(() => {});
+  return slot;
+}
+/** Последний 429 от iiko: путь и когда можно снова — для текста ошибки и диагностики */
+let lastLimit = null;
+export const iikoLimitInfo = () => (lastLimit ? { ...lastLimit, coolingDown: iikoCoolingDown() } : null);
+const shortPath = (path) => String(path).replace(/^\/api\/(1\/)?/, '');
+
+async function iikoPost(path, body, { retried = false, limited = false } = {}) {
   if (isIikoDemo()) return demoResponse(path, body);
+  const background = bgStore.getStore() === true;
+  if (background) {
+    if (iikoCoolingDown()) throw Object.assign(new Error('iiko: лимит запросов — фоновый опрос пропущен'), { status: 503, skipped: true });
+    await bgSlot();
+  }
   callStats.set(path, (callStats.get(path) || 0) + 1);
   const token = await getIikoToken();
   try {
@@ -67,10 +88,17 @@ async function iikoPost(path, body, { retried = false } = {}) {
     }
     if (e.response?.status === 429) {
       const retryAfter = Number(e.response.headers?.['retry-after']);
-      coolingUntil = Date.now() + (retryAfter > 0 ? Math.min(retryAfter, 300) * 1000 : 60_000);
-      console.warn(`iiko: лимит запросов (429) на ${path} — фоновые опросы на паузе`);
+      const waitSec = retryAfter > 0 ? Math.min(retryAfter, 300) : 60;
+      coolingUntil = Date.now() + waitSec * 1000;
+      lastLimit = { path: shortPath(path), at: new Date().toISOString(), retryAfterSec: retryAfter > 0 ? retryAfter : null };
+      console.warn(`iiko: лимит запросов (429) на ${path}, Retry-After ${retryAfter || '—'} — фоновые опросы на паузе ${waitSec} с`);
+      // Запрос человека (вход, заказ): iiko просит подождать пару секунд — ждём и пробуем ещё раз
+      if (!background && !limited && retryAfter > 0 && retryAfter <= 5) {
+        await new Promise((r) => setTimeout(r, retryAfter * 1000));
+        return iikoPost(path, body, { retried, limited: true });
+      }
       e.status = 503;
-      e.message = 'iiko временно ограничила запросы — попробуйте через минуту';
+      e.message = `iiko временно ограничила запросы (${shortPath(path)}) — попробуйте через ${waitSec >= 60 ? `${Math.ceil(waitSec / 60)} мин` : `${waitSec} с`}`;
     }
     throw e;
   }

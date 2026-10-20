@@ -598,6 +598,19 @@ const SCHEMA = `
   ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS alcohol_rules JSONB;
   -- Гость подтвердил тапом «Мне есть 18» при добавлении алкоголя (NULL — не подтверждал, например добавил официант)
   ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS age_confirmed_at TIMESTAMPTZ;
+  ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS guest_push_ready_at TIMESTAMPTZ;
+
+  -- Web Push гостю (VAPID): подписка браузера привязана к визиту; адрес подписки уникален
+  CREATE TABLE IF NOT EXISTS guest_push_subscriptions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID NOT NULL REFERENCES table_sessions(id) ON DELETE CASCADE,
+    guest_id UUID REFERENCES guests(id) ON DELETE SET NULL,
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_guest_push_session ON guest_push_subscriptions(session_id);
 `;
 
 const DEFAULT_CHIPS = [

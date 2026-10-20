@@ -12,7 +12,7 @@
  * В iiko ничего не пишем: только чтение. Закрытие и оплата на кассе — closeIfPaidAtTill (table-session.js).
  */
 import pool from '../db/pool.js';
-import { getOrdersByTable, getRestaurantSections, iikoCoolingDown, isIikoDemo, withIikoCreds } from '../iiko-client.js';
+import { getOrdersByTable, getRestaurantSections, asBackground, iikoCoolingDown, isIikoDemo, withIikoCreds } from '../iiko-client.js';
 import {
   matchOrderToSession, normalizeIikoOrder, orderKey, sessionOrders, tableNumbersBySections,
 } from '../lib/iiko-order-sync.js';
@@ -205,7 +205,7 @@ export function scheduleImport(organizationId, delayMs = 1500) {
   if (scheduled.has(key)) return;
   const t = setTimeout(() => {
     scheduled.delete(key);
-    importOpenOrders(organizationId ? { organizationId } : {}).catch((e) => console.warn('iiko import:', e.message));
+    asBackground(() => importOpenOrders(organizationId ? { organizationId } : {})).catch((e) => console.warn('iiko import:', e.message));
   }, delayMs);
   t.unref?.();
   scheduled.set(key, t);

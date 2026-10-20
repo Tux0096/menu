@@ -12,7 +12,7 @@
  * включили в iikoWeb, склеиваются в один внеочередной опрос (scheduleReserveSync); подписку сами не меняем.
  */
 import pool from '../db/pool.js';
-import { getReservesByIds, getReservesWorkload, getRestaurantSections, iikoCoolingDown, isIikoDemo, withIikoCreds } from '../iiko-client.js';
+import { getReservesByIds, getReservesWorkload, getRestaurantSections, asBackground, iikoCoolingDown, isIikoDemo, withIikoCreds } from '../iiko-client.js';
 import { tableNumbersBySections } from '../lib/iiko-order-sync.js';
 import {
   collectReserves, collectStatuses, formatIikoTime, reserveWindow, sectionIdsOf,
@@ -144,7 +144,7 @@ export function scheduleReserveSync(organizationId, delayMs = 1500) {
   if (scheduled.has(key)) return;
   const t = setTimeout(() => {
     scheduled.delete(key);
-    syncReserves(organizationId ? { organizationId } : {}).catch((e) => console.warn('iiko reserves:', e.message));
+    asBackground(() => syncReserves(organizationId ? { organizationId } : {})).catch((e) => console.warn('iiko reserves:', e.message));
   }, delayMs);
   t.unref?.();
   scheduled.set(key, t);

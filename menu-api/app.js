@@ -74,6 +74,11 @@ app.use('/ui', express.static(join(WEB_DIR, 'guest', 'ui'), { maxAge: '7d', fall
 const guest = guestPage(join(WEB_DIR, 'guest'));
 app.get(['/', '/index.html'], guest.page);
 app.get(['/app.js', '/app.css'], guest.asset);
+// Service worker гостя (только Web Push): без кэша, чтобы браузер сразу видел новую версию; область — всё меню
+app.get('/sw.js', (req, res, next) => {
+  res.set({ 'Cache-Control': 'no-cache', 'Service-Worker-Allowed': '/' });
+  res.type('application/javascript').sendFile(join(WEB_DIR, 'guest', 'sw.js'), (err) => err && next(err));
+});
 app.use(express.static(join(WEB_DIR, 'guest'), { index: false }));
 app.get('*', guest.page);
 

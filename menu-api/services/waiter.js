@@ -9,6 +9,7 @@ import {
   pickAliveTerminalGroup, withIikoCreds,
 } from '../iiko-client.js';
 import { createWaiterNotification } from './waiter-notifications.js';
+import { notifyWaiterAssigned } from './guest-push.js';
 import { attachCookInfo } from './cooking.js';
 import { SEES_ALL_ROLES } from '../lib/notification-rules.js';
 import { assignedText, unassignedText } from '../lib/notification-text.js';
@@ -147,6 +148,7 @@ export async function assignSession(sessionId, staff, { staffId = null } = {}) {
       'INSERT INTO waiter_notification_reads (notification_id, staff_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
       [note.id, staff.id],
     );
+    notifyWaiterAssigned(sessionId, out.target.name); // Web Push гостям визита
   }
   return { view: await getSessionView(sessionId), changed: out.changed, from: out.from || null, target: out.target };
 }

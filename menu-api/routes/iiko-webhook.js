@@ -3,7 +3,7 @@ import express from 'express';
 import { h, safeEqual } from '../lib/http.js';
 import { demoApply } from '../lib/iiko-demo-orders.js';
 import { demoReservesApply } from '../lib/iiko-demo-reserves.js';
-import { isIikoDemo } from '../iiko-client.js';
+import { asBackground, isIikoDemo } from '../iiko-client.js';
 import { importOpenOrders, scheduleImport } from '../services/iiko-import.js';
 import { scheduleReserveSync, syncReserves } from '../services/iiko-reserves.js';
 import { staffAuth } from '../services/staff-auth.js';
@@ -21,7 +21,8 @@ router.post('/api/v1/iiko/webhook', (req, res) => {
   if (!safeEqual(auth, webhookToken())) return res.status(401).json({ error: 'bad token' });
   res.json({ ok: true });
   const events = Array.isArray(req.body) ? req.body : [req.body];
-  (async () => {
+  // Вебхуки на 10 точках в час пик — через общую очередь фоновых запросов к iiko
+  asBackground(async () => {
     const stopOrgs = new Set();
     for (const ev of events) {
       if (ev?.eventType === 'StopListUpdate' && ev.organizationId) stopOrgs.add(ev.organizationId);
@@ -45,7 +46,7 @@ router.post('/api/v1/iiko/webhook', (req, res) => {
       invalidateCatalogCache();
       console.log(`iiko webhook: стоп-лист обновлён (${[...stopOrgs].join(', ')})`);
     }
-  })().catch((e) => console.warn('iiko webhook:', e.message));
+  }).catch((e) => console.warn('iiko webhook:', e.message));
 });
 
 
