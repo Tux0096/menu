@@ -361,6 +361,116 @@ step('адрес и время работы точки: сохраняются �
   }
 }
 
+// Бизнес-ланч: место карточки в меню, свои название/описание/вес блюд и фото набора — у гостя и официанта (общий каталог)
+{
+  const bl = catalog.businessLunch;
+  if (!bl?.combos?.length) console.log('- бизнес-ланч: правки блюд и место карточки — в меню точки нет наборов (проверка пропущена)');
+  else {
+    const adm0 = ok(await api('GET', '/api/v1/admin/business-lunch', null, A), 'lunch admin 2');
+    assert.ok(adm0.categories.length && adm0.categories.every((c) => c.key && ['kitchen', 'bar'].includes(c.tab)), 'список разделов для выбора места');
+    const first = adm0.combos.find((c) => c.enabled);
+    const comboBody = (patch = {}) => Object.fromEntries(adm0.combos.map((c, i) => [c.key, {
+      enabled: c.enabled, title: c.custom, order: i, image: c.image, description: c.description, weight: c.weight, ...(c.key === first.key ? patch : {}),
+    }]));
+    const item0 = adm0.steps.flatMap((s) => s.items).find((i) => i.enabled);
+    const origContent = [{ iikoName: item0.iikoName, title: item0.custom, description: item0.description, weight: item0.weight }];
+    try {
+      // Место: во втором (по списку) разделе кухни последним — карточка приходит в каталоге с ID раздела
+      const target = adm0.categories.find((c) => c.tab === 'kitchen' && !/бизнес ланч/.test(c.key)) || adm0.categories[0];
+      ok(await api('PUT', '/api/v1/admin/business-lunch', { placement: { category: target.key, position: 'index', index: 3 } }, A), 'lunch placement');
+      const c1 = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog placement');
+      const gid = c1.groups.find((g) => (g.iikoName || g.name) === target.name || g.name === target.name)?.id;
+      assert.ok(gid && c1.businessLunch.placement?.groupId === gid, `место карточки: раздел «${target.name}»`);
+      assert.deepEqual([c1.businessLunch.placement.position, c1.businessLunch.placement.index], ['index', 3]);
+      step(`бизнес-ланч: карточка в разделе «${target.name}» на 3-м месте (сервер отдал placement)`);
+      ok(await api('PUT', '/api/v1/admin/business-lunch', { placement: { category: 'нет такого раздела', position: 'last' } }, A), 'lunch placement bad');
+      const c2 = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog placement 2');
+      assert.equal(c2.businessLunch.placement, null, 'раздела нет — карточка остаётся на месте по умолчанию');
+      r = await api('PUT', '/api/v1/admin/business-lunch', { placement: { category: target.key, position: 'first' } }, W);
+      assert.equal(r.status, 403); step('официанту место карточки менять нельзя (403); нет такого раздела — место по умолчанию');
+
+      // Блюдо шага: название, описание, вес; набор: фото, описание, вес
+      ok(await api('PUT', '/api/v1/admin/business-lunch', {
+        combos: comboBody({ image: 'https://example.com/e2e-combo.png', description: 'E2E состав набора', weight: '777 г' }),
+        content: [{ iikoName: item0.iikoName, title: 'E2E блюдо ланча', description: 'E2E описание блюда', weight: '123 г' }],
+      }, A), 'lunch content');
+      const c3 = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog content');
+      const combo0 = c3.businessLunch.combos.find((c) => c.title === (first.custom || first.auto));
+      assert.ok(combo0, 'набор в каталоге');
+      const steps = c3.businessLunch.combos.flatMap((c) => c.steps.flatMap((st) => st.items));
+      const mine = steps.find((x) => x.name === 'E2E блюдо ланча');
+      assert.ok(mine && mine.description === 'E2E описание блюда' && mine.weight === '123 г', 'своё название, описание и вес блюда — у гостя и официанта');
+      assert.deepEqual([combo0.image, combo0.description, combo0.weight], ['https://example.com/e2e-combo.png', 'E2E состав набора', '777 г']);
+      r = await api('PUT', '/api/v1/admin/business-lunch', { combos: comboBody({ image: 'javascript:alert(1)' }) }, A);
+      assert.equal(r.status, 400); step('блюдо ланча: свои название, описание, вес и фото набора — в каталоге; плохая ссылка на фото — 400');
+    } finally {
+      await api('PUT', '/api/v1/admin/business-lunch', { placement: null, combos: comboBody({}), content: origContent }, A);
+    }
+  }
+}
+
+// Время показа разделов: «с … до …» по времени точки — скрыт у гостя вне времени, заказ позиции — 409
+{
+  const tzNow = (await api('GET', '/api/v1/admin/business-lunch', null, A)).data?.schedule?.tz || 'Europe/Samara';
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: tzNow, hourCycle: 'h23', hour: 'numeric', minute: 'numeric' }).formatToParts(new Date());
+  const nowMin = Number(parts.find((x) => x.type === 'hour').value) * 60 + Number(parts.find((x) => x.type === 'minute').value);
+  const hhmm = (m) => `${String(Math.floor(((m % 1440) + 1440) % 1440 / 60)).padStart(2, '0')}:${String(((m % 1440) + 1440) % 1440 % 60).padStart(2, '0')}`;
+  const cats0 = ok(await api('GET', '/api/v1/admin/network-menu/categories', null, A), 'cats hours');
+  const cat = cats0.find((c) => !c.hidden && !c.bar && c.items > 0 && c.tab !== 'bar' && !/ланч/i.test(c.name)
+    && catalog.products.some((p) => (p.parentGroupName === (c.title || c.name) || p.parentGroupName === c.name) && !p.isAlias && !p.lunchCombo));
+  if (!cat) console.log('- время показа разделов: нет подходящего раздела (проверка пропущена)');
+  else {
+    const save = (list) => api('PUT', '/api/v1/admin/network-menu/categories', {
+      items: list.map((c) => ({ name: c.name, bar: c.bar, title: c.title, tab: c.tab || null, hidden: c.hidden, showFrom: c.showFrom || '', showUntil: c.showUntil || '' })),
+    }, A);
+    const withHours = (from, until) => cats0.map((c) => (c.key === cat.key ? { ...c, showFrom: from, showUntil: until } : c));
+    try {
+      // Ошибки ввода
+      r = await save(withHours('25:00', ''));
+      assert.equal(r.status, 400); assert.match(r.data.error, /ЧЧ:ММ/);
+      r = await save(withHours('10:00', '10:00'));
+      assert.equal(r.status, 400);
+      r = await api('PUT', '/api/v1/admin/network-menu/categories', { items: withHours('', '').slice(0, 1) }, W);
+      assert.equal(r.status, 403);
+      step('время показа раздела: неверный формат и совпадающие границы — 400; официанту нельзя (403)');
+
+      // Закрыт: окно через два часа, длится час
+      ok(await save(withHours(hhmm(nowMin + 120), hhmm(nowMin + 180))), 'hours closed');
+      const c1 = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog hours closed');
+      const g1 = c1.groups.find((g) => (g.iikoName || g.name) === cat.name);
+      assert.ok(g1?.window && g1.window.closedNow === true, 'раздел вне времени помечен window.closedNow');
+      assert.match(g1.window.text, /^с \d\d:\d\d до \d\d:\d\d$/);
+      const dish = c1.products.find((p) => p.parentGroup === g1.id && !p.isAlias && !p.lunchCombo && !p.sizes?.length && !p.modifierGroups?.length && !p.isInStopList
+        && !c1.products.some((x) => x.id === p.id && x.parentGroup !== p.parentGroup));
+      assert.ok(dish, 'в закрытом разделе есть простое блюдо');
+      const hg = ok(await api('POST', '/api/v1/guest/login', { phone: '8 (900) 156-10-10', name: 'Часы', consent: true }), 'login hours');
+      const HG = { 'X-Guest-Token': hg.token };
+      const hs = ok(await api('POST', '/api/v1/table/enter', { restaurantSlug: 'novo-sadovaya', tableNumber: `${TABLE}-h` }, HG), 'enter hours');
+      r = await api('POST', '/api/v1/table-order/cart', { sessionId: hs.sessionId, items: [line(dish, 1)] }, HG);
+      assert.equal(r.status, 409); assert.match(r.data.error, new RegExp(`Раздел «${(g1.name).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}» доступен с \\d\\d:\\d\\d до \\d\\d:\\d\\d`));
+      step(`раздел «${g1.name}» вне времени (${g1.window.text}): блюдо в корзину не берётся — 409 «${r.data.error}»`);
+
+      // Открыт: окно вокруг «сейчас»
+      ok(await save(withHours(hhmm(nowMin - 60), hhmm(nowMin + 60))), 'hours open');
+      const c2 = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog hours open');
+      assert.equal(c2.groups.find((g) => (g.iikoName || g.name) === cat.name).window.closedNow, false);
+      const added = ok(await api('POST', '/api/v1/table-order/cart', { sessionId: hs.sessionId, items: [line(dish, 1)] }, HG), 'cart hours open');
+      assert.equal(added.items.length, 1);
+      step('в своё время тот же раздел открыт, блюдо добавляется');
+
+      // Закрылся, пока блюдо лежало в корзине — официанту не передать (409)
+      ok(await save(withHours(hhmm(nowMin + 120), hhmm(nowMin + 180))), 'hours closed again');
+      await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog');
+      r = await api('POST', '/api/v1/table/submit-to-waiter', { sessionId: hs.sessionId }, HG);
+      assert.equal(r.status, 409); assert.match(r.data.error, /доступен с/);
+      step('раздел закрылся, пока блюдо было в корзине: передать официанту нельзя (409)');
+      await api('POST', `/api/v1/waiter/session/${hs.sessionId}/close`, { force: true }, W);
+    } finally {
+      await save(cats0);
+    }
+  }
+}
+
 // Заказы, открытые на кассе iiko (демо-касса): импорт, дозаказ гостя в тот же заказ, правки и закрытие на кассе
 {
   const T2 = `k${Math.floor(Math.random() * 9000) + 1000}`;

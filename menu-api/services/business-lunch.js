@@ -12,7 +12,9 @@
  * цену считает касса. Расписание — lib/lunch-schedule.js.
  */
 import pool from '../db/pool.js';
-import { menuKey } from '../lib/menu-key.js';
+import { categoryKey, menuKey } from '../lib/menu-key.js';
+import { bumpCatalogVersion } from '../lib/catalog-version.js';
+import { httpError } from '../lib/http.js';
 import {
   assertLunchOpen, isLunchActive, nextLunchStart, normalizeSchedule, scheduleText, validateSchedule, DEFAULT_SCHEDULE,
 } from '../lib/lunch-schedule.js';
@@ -23,7 +25,7 @@ const COMBO_NAME = /ланч|набор|сет/i;
 
 // ── Настройки ───────────────────────────────────────────────────────────────
 
-const emptySettings = () => ({ schedule: null, combos: {}, items: {}, drinks: {} });
+const emptySettings = () => ({ schedule: null, combos: {}, items: {}, drinks: {}, placement: null });
 
 /** Настройки сети и точки: расписание точки перекрывает общее; остальное — общее для сети. */
 export async function loadLunchSettings(restaurantId = null) {
@@ -43,7 +45,31 @@ export async function loadLunchSettings(restaurantId = null) {
   };
 }
 
+/** Часовой пояс точки — тот же, что у расписания бизнес-ланча (своё время точки или общее; по умолчанию Самара). */
+export async function pointTimezone(restaurantId) {
+  try { return (await loadLunchSettings(restaurantId)).schedule.tz; } catch { return DEFAULT_SCHEDULE.tz; }
+}
+
 const clean = (v, n = 120) => String(v ?? '').trim().slice(0, n);
+const imageUrl = (v) => {
+  const u = String(v ?? '').trim();
+  if (!u) return '';
+  if (!/^(\/media\/|https:\/\/)/.test(u)) throw httpError(400, 'Фото — загруженный файл или ссылка https://');
+  return u.slice(0, 500);
+};
+
+/**
+ * Где в меню показывать карточку бизнес-ланча: раздел (ключ categoryKey) и место в нём —
+ * первой, последней или порядковым номером. null — как по умолчанию (в разделе «Бизнес-ланч», первой).
+ */
+export function normalizePlacement(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const category = clean(raw.category, 200);
+  if (!category) return null;
+  const position = ['first', 'last', 'index'].includes(raw.position) ? raw.position : 'first';
+  const index = Math.min(99, Math.max(1, Math.floor(Number(raw.index)) || 1));
+  return position === 'index' ? { category, position, index } : { category, position };
+}
 const num = (v) => (v === null || v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
 
 function cleanMap(src, fields) {
@@ -66,7 +92,14 @@ export async function saveLunchSettings(body, restaurants) {
   if (body.schedule) data.schedule = validateSchedule(body.schedule);
   // Обложка позиции «Бизнес-ланч» в меню (пусто — фото первого набора)
   if (body.image !== undefined) data.image = body.image ? String(body.image).slice(0, 500) : null;
-  if (body.combos) data.combos = cleanMap(body.combos, (v) => ({ enabled: v.enabled !== false, title: clean(v.title), order: num(v.order) }));
+  if (body.placement !== undefined) data.placement = normalizePlacement(body.placement);
+  // Набор: своё название, фото, описание и вес — главнее iiko (пусто — как в iiko)
+  if (body.combos) {
+    data.combos = cleanMap(body.combos, (v) => ({
+      enabled: v.enabled !== false, title: clean(v.title), order: num(v.order),
+      image: imageUrl(v.image), description: clean(v.description, 300), weight: clean(v.weight, 30),
+    }));
+  }
   if (body.items) data.items = cleanMap(body.items, (v) => ({ enabled: v.enabled !== false, order: num(v.order) }));
   if (body.drinks) data.drinks = cleanMap(body.drinks, (v) => ({ enabled: v.enabled !== false, order: num(v.order) }));
   await pool.query(
@@ -74,6 +107,7 @@ export async function saveLunchSettings(body, restaurants) {
      ON CONFLICT (scope) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
     [NETWORK, JSON.stringify(data)],
   );
+  if (Array.isArray(body.content)) await saveStepContent(body.content);
   if (body.overrides && typeof body.overrides === 'object') {
     for (const r of restaurants) {
       if (!(r.slug in body.overrides)) continue;
@@ -88,14 +122,42 @@ export async function saveLunchSettings(body, restaurants) {
       }
     }
   }
+  bumpCatalogVersion(); // каталоги собираются заново — правки видны сразу
   return { ok: true };
+}
+
+/**
+ * Свои название, описание и вес блюд шагов — в той же таблице, что «Модификаторы» (modifier_content, по названию в iiko):
+ * админка главнее iiko, выгрузка не затирает. Фото сохраняются отдельным запросом, здесь не трогаются.
+ * Пустое поле — «как в iiko». items: [{ iikoName, title, description, weight }]
+ */
+export async function saveStepContent(items) {
+  let saved = 0;
+  for (const x of (Array.isArray(items) ? items : []).slice(0, 2000)) {
+    const name = clean(x?.iikoName, 200);
+    const key = menuKey(name).slice(0, 200);
+    if (!key) continue;
+    await pool.query(
+      `INSERT INTO modifier_content (kind, key, name, title, description, weight, updated_at) VALUES ('item', $1, $2, $3, $4, $5, NOW())
+       ON CONFLICT (kind, key) DO UPDATE SET name = EXCLUDED.name, title = EXCLUDED.title, description = EXCLUDED.description,
+         weight = EXCLUDED.weight, updated_at = NOW()`,
+      [key, name, clean(x.title) || null, clean(x.description, 500) || null, clean(x.weight, 30) || null],
+    );
+    saved += 1;
+  }
+  return { saved };
 }
 
 // ── Каталог ─────────────────────────────────────────────────────────────────
 
 const stepKey = (g) => menuKey(g.iikoName || g.name);
 const itemKey = (g, m) => `${stepKey(g)}|${menuKey(m.iikoName || m.name)}`;
-const weightText = (w) => (w ? `${w} г` : null);
+// Вес из iiko — число (граммы), своё в админке — текст как есть («250 г», «2 шт.»)
+const weightText = (w) => {
+  const v = String(w ?? '').trim();
+  if (!v || v === '0') return null;
+  return /^\d+([.,]\d+)?$/.test(v) ? `${v} г` : v;
+};
 
 /** Самая дешёвая сумма набора: цена + обязательный выбор; для набора за 0 — самый дешёвый платный вариант. */
 export function lunchFromPrice(base, groups, needsChoice) {
@@ -142,7 +204,8 @@ const stepOut = (g) => ({
   max: g.max || 0,
   free: g.free || 0,
   items: g.items.map((m) => ({
-    id: m.id, name: m.name, price: Number(m.price) || 0, image: m.image || null, weight: weightText(m.weight), max: m.max || 0, def: m.def || 0,
+    id: m.id, name: m.name, price: Number(m.price) || 0, image: m.image || null, weight: weightText(m.weight), description: m.description || '',
+    max: m.max || 0, def: m.def || 0,
   })),
 });
 
@@ -182,12 +245,16 @@ export function buildBusinessLunch({ groups, products, settings, now = new Date(
     defs.set(id, parts.map((x, i) => {
       const s = set.combos[x.key];
       const enabled = s ? s.enabled !== false : looksLikeCombo(p) || sizes.length > 1;
-      return { ...x, p, i, enabled, auto: x.title, custom: s?.title || '', title: s?.title || x.title, order: s?.order ?? null, from: lunchFromPrice(x.base, x.groups, x.needsChoice) };
+      return {
+        ...x, p, i, enabled, auto: x.title, custom: s?.title || '', title: s?.title || x.title, order: s?.order ?? null, from: lunchFromPrice(x.base, x.groups, x.needsChoice),
+        image: s?.image || '', description: s?.description || '', ownWeight: s?.weight || '',
+      };
     }));
   }
   for (const parts of defs.values()) for (const c of parts) {
     metaCombos.push({
       key: c.key, title: c.title, auto: c.auto, custom: c.custom, iikoName: c.p.iikoName || c.p.name, enabled: c.enabled, order: c.order, price: c.from,
+      image: c.image, iikoImage: c.p.image || null, description: c.description, weight: c.ownWeight, iikoWeight: weightText(c.weight ?? c.p.weight),
       steps: c.groups.map(stepKey),
     });
   }
@@ -202,7 +269,12 @@ export function buildBusinessLunch({ groups, products, settings, now = new Date(
       const ik = itemKey(g, m);
       if (st.items.has(ik)) continue;
       const s = set.items[ik];
-      st.items.set(ik, { key: ik, iikoName: m.iikoName || m.name, name: m.name, price: Number(m.price) || 0, image: m.image || null, enabled: s?.enabled !== false, order: s?.order ?? null, pos: i });
+      st.items.set(ik, {
+        key: ik, iikoName: m.iikoName || m.name, name: m.name, price: Number(m.price) || 0, image: m.image || null, enabled: s?.enabled !== false, order: s?.order ?? null, pos: i,
+        // Своё название/описание/вес из админки (пусто — как в iiko); auto — название без служебных пометок
+        auto: lunchText(m.autoName || m.name), custom: m.own?.title || '', description: m.own?.description || '', weight: m.own?.weight || '',
+        iikoWeight: weightText(m.own?.weight ? m.iikoWeight : m.weight),
+      });
     }
   }
 
@@ -243,6 +315,10 @@ export function buildBusinessLunch({ groups, products, settings, now = new Date(
         fixed: lunchFixedPrice(groupsNow),
         base: c.base,
         stopped: Boolean(next.isInStopList),
+        // Фото, описание и вес набора: свои из админки главнее iiko
+        image: c.image || p.image || null,
+        description: c.description || '',
+        weight: weightText(c.ownWeight || c.weight || p.weight),
         order: c.order ?? (Number(p.order) || 0) + c.i * 0.001,
         steps: groupsNow.map(stepOut),
       });
@@ -274,6 +350,7 @@ export function buildBusinessLunch({ groups, products, settings, now = new Date(
     nextStart: nextLunchStart(schedule, now),
     // Одна позиция «Бизнес-ланч» в меню: обложка из админки или фото первого набора
     image: set.image || combos.map((c) => products.find((p) => String(p.id) === String(c.productId))?.image).find(Boolean) || null,
+    placement: resolvePlacement(set.placement, groups),
     combos,
     drinks,
   };
@@ -283,6 +360,14 @@ export function buildBusinessLunch({ groups, products, settings, now = new Date(
     businessLunch: combos.length || drinks.length ? businessLunch : null,
     meta: { schedule, combos: metaCombos, steps: [...metaSteps.values()].map((s) => ({ ...s, items: [...s.items.values()] })), drinks: metaDrinks },
   };
+}
+
+/** Место карточки ланча для гостя: { groupId, position, index } по разделу точки; нет такого раздела — null (по умолчанию). */
+export function resolvePlacement(placement, groups) {
+  const pl = normalizePlacement(placement);
+  if (!pl) return null;
+  const g = (groups || []).find((x) => categoryKey(x.iikoName || x.name, x.barSource) === pl.category);
+  return g ? { groupId: String(g.id), position: pl.position, ...(pl.index ? { index: pl.index } : {}) } : null;
 }
 
 const metaByRestaurant = new Map(); // restaurantId → meta последней сборки каталога (для админки)
@@ -335,6 +420,7 @@ export async function getLunchAdmin(restaurants, getCatalog) {
     schedule: settings.networkSchedule,
     text: scheduleText(settings.networkSchedule),
     image: settings.image || null,
+    placement: normalizePlacement(settings.placement),
     points,
     combos: [...combos.values()].sort(byOrder),
     steps: [...steps.values()].map((s) => ({ ...s, items: s.items.sort((a, b) => (a.order ?? 1e6 + a.pos) - (b.order ?? 1e6 + b.pos)) })),

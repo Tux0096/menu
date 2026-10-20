@@ -21,8 +21,21 @@ async function load() {
 }
 onMounted(load);
 
-const snapshot = () => JSON.stringify((list.value ?? []).map((c) => [c.key, c.title, c.tab, c.hidden]));
+const snapshot = () => JSON.stringify((list.value ?? []).map((c) => [c.key, c.title, c.tab, c.hidden, c.showFrom || '', c.showUntil || '']));
 const dirty = computed(() => Boolean(list.value) && snapshot() !== initial.value);
+
+// Время показа раздела («Завтраки до 12:00»): по времени точки; вне времени раздел скрыт у гостя, официант видит пометку
+const hoursText = (c: MenuCategory) => {
+  const f = c.showFrom || '';
+  const u = c.showUntil || '';
+  return f && u ? `с ${f} до ${u}` : u ? `до ${u}` : f ? `с ${f}` : '';
+};
+const hoursError = (c: MenuCategory) => (c.showFrom && c.showUntil && c.showFrom === c.showUntil ? 'Начало и конец совпадают' : '');
+const hasError = computed(() => (list.value ?? []).some((c) => hoursError(c)));
+function clearHours(c: MenuCategory) {
+  c.showFrom = '';
+  c.showUntil = '';
+}
 const emit = defineEmits<{ 'update:dirty': [boolean] }>();
 watch(dirty, (v) => emit('update:dirty', v), { immediate: true });
 useLeaveGuard(dirty);
@@ -63,7 +76,7 @@ async function save() {
   try {
     await useAuthFetch('/admin/network-menu/categories', {
       method: 'PUT',
-      body: { items: list.value.map((c) => ({ name: c.name, bar: c.bar, title: c.title, tab: c.tab || null, hidden: c.hidden })) },
+      body: { items: list.value.map((c) => ({ name: c.name, bar: c.bar, title: c.title, tab: c.tab || null, hidden: c.hidden, showFrom: c.showFrom || '', showUntil: c.showUntil || '' })) },
     }, { restaurant: false });
     initial.value = snapshot();
     notify.success('Разделы сохранены', 'Гости увидят новый порядок, когда откроют или обновят меню');
@@ -137,7 +150,7 @@ const missingImages = computed(() => (list.value ?? []).filter((c) => !c.hidden 
           <span v-if="missingImages" class="text-amber-700">Без картинки: {{ missingImages }}.</span>
         </div>
         <UButton color="white" :disabled="!dirty || saving" @click="reset">Отменить</UButton>
-        <UButton :loading="saving" :disabled="!dirty" icon="i-heroicons-check" @click="save">Сохранить</UButton>
+        <UButton :loading="saving" :disabled="!dirty || hasError" icon="i-heroicons-check" @click="save">Сохранить</UButton>
       </div>
       <LoadError v-if="loadError" :message="loadError" class="m-4" />
       <TableSkeleton v-else-if="!list" :rows="6" />
@@ -191,10 +204,25 @@ const missingImages = computed(() => (list.value ?? []).filter((c) => !c.hidden 
             </label>
             <UButton v-if="c.image" size="xs" color="white" :loading="imageSaving === c.key" @click="setImage(c, null)">Стандартная</UButton>
           </div>
+          <!-- Время показа: «до 12:00» / «с 18:00» / окно; пусто — раздел виден всегда -->
+          <div class="flex basis-full flex-wrap items-center gap-x-3 gap-y-1 sm:pl-[5.5rem] text-xs text-slate-600">
+            <UIcon name="i-heroicons-clock" class="h-4 w-4" :class="hoursText(c) ? 'text-brand-500' : 'text-slate-400'" />
+            <span class="font-medium">Показывать</span>
+            <label class="flex items-center gap-1">с
+              <input v-model="c.showFrom" type="time" class="h-8 rounded-md px-2 text-sm ring-1 ring-brand-100" :aria-label="`Раздел ${c.title || c.name}: показывать с`">
+            </label>
+            <label class="flex items-center gap-1">до
+              <input v-model="c.showUntil" type="time" class="h-8 rounded-md px-2 text-sm ring-1 ring-brand-100" :aria-label="`Раздел ${c.title || c.name}: показывать до`">
+            </label>
+            <UButton v-if="c.showFrom || c.showUntil" size="2xs" color="gray" variant="ghost" icon="i-heroicons-x-mark" @click="clearHours(c)">Всегда</UButton>
+            <span v-if="hoursError(c)" class="text-red-600">{{ hoursError(c) }}</span>
+            <span v-else-if="hoursText(c)" class="text-slate-500">Гость видит раздел {{ hoursText(c) }} (по времени точки), вне времени он скрыт и заказать из него нельзя</span>
+            <span v-else class="text-slate-400">без ограничения — раздел виден всегда</span>
+          </div>
         </li>
       </ul>
       <p v-if="list?.length" class="border-t border-brand-50 px-4 py-3 text-xs text-slate-500">
-        Скрытый раздел не видят ни гости, ни приложение официанта — вместе с его блюдами. «Авто» — вкладка по кассе и названию (напитки — в «Бар»).
+        Скрытый раздел не видят ни гости, ни приложение официанта — вместе с его блюдами. Раздел со временем показа вне времени скрыт у гостя, а официант видит его с пометкой («до 12:00») и добавить блюдо не может. «Авто» — вкладка по кассе и названию (напитки — в «Бар»).
         Картинка: лучше PNG без фона, квадрат от 400 px; без своей — картинка из iiko или стандартная по названию.
       </p>
     </div>
@@ -219,6 +247,7 @@ const missingImages = computed(() => (list.value ?? []).filter((c) => !c.hidden 
           <img v-if="shown(c)" :src="thumbUrl(shown(c), 160)" alt="" class="h-12 w-14 object-contain" />
           <UIcon v-else name="i-heroicons-photo" class="h-8 w-8 text-slate-300" />
           <span class="line-clamp-2 text-[10px] leading-tight">{{ c.title || c.name }}</span>
+          <span v-if="hoursText(c)" class="rounded bg-amber-50 px-1 text-[9px] leading-tight text-amber-700">{{ hoursText(c) }}</span>
         </div>
       </div>
       <p v-if="!previewTiles.length" class="py-6 text-center text-xs text-slate-500">Во вкладке нет разделов</p>

@@ -395,10 +395,33 @@
     </div>`;
   }
 
+  // Разделы со временем показа («Завтраки до 12:00»): официант их видит, но вне времени блюда не добавить (сервер тоже откажет)
+  function windowOpen(w, now = new Date()) {
+    if (!w) return true;
+    let m;
+    try {
+      const parts = new Intl.DateTimeFormat('en-US', { timeZone: w.tz || 'Europe/Samara', hourCycle: 'h23', hour: 'numeric', minute: 'numeric' }).formatToParts(now);
+      m = Number(parts.find((x) => x.type === 'hour').value) * 60 + Number(parts.find((x) => x.type === 'minute').value);
+    } catch { return !w.closedNow; }
+    const t = (v) => (v ? Number(v.split(':')[0]) * 60 + Number(v.split(':')[1]) : null);
+    const f = t(w.from); const u = t(w.until);
+    if (f != null && u != null) return f < u ? m >= f && m < u : m >= f || m < u;
+    if (f != null) return m >= f;
+    return u == null || m < u;
+  }
+
   /** Выбор блюд — шторка поверх экрана стола: поиск, категории, «+» добавляет выбранному гостю. */
   function pickerHtml(seats, nameOf) {
     const q = S.productSearch.trim().toLowerCase();
     const products = S.catalog?.products || [];
+    const groupOf = new Map((S.catalog?.groups || []).map((g) => [String(g.id), g]));
+    const closedGroups = new Set([...groupOf.values()].filter((g) => g.window && !windowOpen(g.window)).map((g) => String(g.id)));
+    // Блюдо недоступно по времени, если все его места в меню (раздел и копии) закрыты; возвращает пометку «до 12:00»
+    const hoursNote = (p) => {
+      if (!closedGroups.size || !closedGroups.has(String(p.parentGroup))) return '';
+      const open = products.some((x) => String(x.id) === String(p.id) && !closedGroups.has(String(x.parentGroup)));
+      return open ? '' : groupOf.get(String(p.parentGroup))?.window?.text || '';
+    };
     const groups = (S.catalog?.groups || []).filter((g) => products.some((p) => p.parentGroup === g.id));
     if (!S.pickCat || !groups.some((g) => g.id === S.pickCat)) S.pickCat = groups[0]?.id || null;
     const found = q ? products.filter((p) => !p.isAlias && p.name.toLowerCase().includes(q) || String(p.sku || '').toLowerCase().includes(q)).slice(0, 40) : products.filter((p) => p.parentGroup === S.pickCat);
@@ -411,9 +434,9 @@
         ${S.catalog?.businessLunch?.combos?.length ? `<button class="lunch-btn ${S.catalog.businessLunch.active ? '' : 'is-off'}" data-open-lunch>
           <span><b>Бизнес-ланч</b><small>${S.catalog.businessLunch.active ? `Собрать набор · ${esc(S.catalog.businessLunch.text)}` : `Сейчас недоступен · доступен ${esc(S.catalog.businessLunch.text)}`}</small></span><i>›</i></button>` : ''}
         ${products.length ? `<input class="inp" id="prod-search" style="width:100%" placeholder="Поиск: название или артикул" value="${esc(S.productSearch)}" autocomplete="off">
-          ${q ? '' : `<div class="picker__cats">${groups.map((g) => `<button class="${g.id === S.pickCat ? 'is-active' : ''}" data-pick-cat="${esc(g.id)}">${esc(g.name)}</button>`).join('')}</div>`}
-          <div class="pick-list">${found.map((p) => { const n = inCart(p); return `<button class="pick-item" data-add="${esc(p.id)}" ${p.isInStopList ? 'disabled' : ''}>
-            <span class="pick-item__name">${esc(p.name)}${p.isInStopList ? ' <span class="pill" data-tone="bad">стоп</span>' : ''}${p.sku ? ` <span class="muted" style="font-size:11px">арт. ${esc(p.sku)}</span>` : ''}</span>
+          ${q ? '' : `<div class="picker__cats">${groups.map((g) => `<button class="${g.id === S.pickCat ? 'is-active' : ''}" data-pick-cat="${esc(g.id)}">${esc(g.name)}${g.window ? ` <small class="picker__hours ${closedGroups.has(String(g.id)) ? 'is-closed' : ''}">${esc(g.window.text)}</small>` : ''}</button>`).join('')}</div>`}
+          <div class="pick-list">${found.map((p) => { const n = inCart(p); const hours = hoursNote(p); return `<button class="pick-item" data-add="${esc(p.id)}" ${p.isInStopList || hours ? 'disabled' : ''}>
+            <span class="pick-item__name">${esc(p.name)}${p.isInStopList ? ' <span class="pill" data-tone="bad">стоп</span>' : ''}${hours ? ` <span class="pill" data-tone="wait">${esc(hours)}</span>` : ''}${p.sku ? ` <span class="muted" style="font-size:11px">арт. ${esc(p.sku)}</span>` : ''}</span>
             <span class="pick-item__price">${hasVariants(p) ? '<span class="pill" style="font-size:10px">выбор</span> от ' : ''}${rub(p.price)}</span><span class="pick-item__add ${n ? 'has' : ''}">${n || '+'}</span></button>`; }).join('') || '<div class="muted" style="padding:12px">Ничего не найдено</div>'}</div>`
     : '<div class="error-box">Меню этого ресторана пустое — выгрузите его из iiko (админка → «Меню и стоп-лист»).</div>'}
       </div>
@@ -1261,7 +1284,7 @@
         <div class="muted" style="margin:8px 0 6px"><b>Набор</b></div>
         <div class="vchips">${b.combos.map((c, i) => `<button class="vchip ${st.combo === c ? 'is-on' : ''}" data-lc="${i}" ${c.stopped ? 'disabled' : ''}>${esc(c.title)} · ${c.fixed ? '' : 'от '}${rub(c.price)}</button>`).join('')}</div>
         ${st.combo ? st.combo.steps.map((g, gi) => `<div class="muted" style="margin:12px 0 6px;display:flex;justify-content:space-between;gap:8px"><b>${esc(g.title)}</b><span style="${total(g) < g.min ? 'color:var(--danger)' : ''}">${g.min > 0 && g.max === 1 ? 'выберите 1' : g.min > 0 ? `минимум ${g.min}` : 'по желанию'}</span></div>
-          <div class="vchips">${g.items.map((m) => `<button class="vchip ${st.mods.get(String(m.id)) ? 'is-on' : ''}" data-lm="${gi}:${esc(m.id)}">${esc(m.name)}${!st.combo.fixed && m.price > 0 ? ` +${rub(m.price)}` : ''}</button>`).join('')}</div>`).join('') : ''}
+          <div class="vchips">${g.items.map((m) => `<button class="vchip ${st.mods.get(String(m.id)) ? 'is-on' : ''}" data-lm="${gi}:${esc(m.id)}" ${m.description ? `title="${esc(m.description)}"` : ''}>${esc(m.name)}${m.weight ? ` <small class="muted">${esc(m.weight)}</small>` : ''}${!st.combo.fixed && m.price > 0 ? ` +${rub(m.price)}` : ''}</button>`).join('')}</div>`).join('') : ''}
         ${b.drinks?.length ? `<div class="muted" style="margin:12px 0 6px"><b>Напиток к ланчу</b> (по желанию)</div>
           <div class="vchips">${b.drinks.map((d) => `<button class="vchip ${st.drink === d.id ? 'is-on' : ''}" data-ld="${esc(d.id)}" ${d.stopped ? 'disabled' : ''}>${esc(d.name)} · ${rub(d.price)}</button>`).join('')}</div>` : ''}
         <div style="display:flex;gap:8px;margin-top:16px"><button class="btn" data-modal-close>Отмена</button>
