@@ -747,3 +747,7 @@ html.sheet-open, html.sheet-open body { overflow: hidden; }
 /* Ваш официант */
 .waiter-line { margin: 0 0 8px; padding: 10px 14px; border-radius: 16px; background: #fff; font-size: 14px; color: #555; }
 .waiter-line b { color: var(--ink, #091027); }
+
+.age-modal.is-shake .age-modal__box { animation: age-shake .35s ease; }
+@keyframes age-shake { 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
+@media (prefers-reduced-motion: reduce) { .age-modal.is-shake .age-modal__box { animation: none; } }
