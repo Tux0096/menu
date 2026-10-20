@@ -125,15 +125,15 @@
     const iikoForm = choose
       ? `<div class="hint">Смена открыта на нескольких точках — где вы работаете?</div>
          ${choose.restaurants.map((r) => `<button type="button" class="btn" data-pick="${esc(r.slug)}">${esc(r.name)}</button>`).join('')}`
-      : `<input class="inp" name="pin" type="password" inputmode="text" maxlength="32" placeholder="PIN из iiko" aria-label="Код сотрудника из iiko (карта или PIN)" autocomplete="one-time-code" autocapitalize="off" required autofocus>`;
+      : `<input class="inp" name="pin" type="password" inputmode="text" maxlength="32" placeholder="Табельный номер" aria-label="Табельный номер сотрудника в iiko (или номер карты)" autocomplete="one-time-code" autocapitalize="off" required autofocus>`;
     const pwdForm = `<input class="inp" name="login" placeholder="Логин" autocomplete="username" required>
       <input class="inp" name="password" type="password" placeholder="Пароль" autocomplete="current-password" required>`;
     const form = loginMode === 'iiko' ? iikoForm : loginMode === 'pin' ? pinForm : pwdForm;
     const hint = loginMode === 'iiko'
-      ? 'Код сотрудника из iiko (карта или PIN). Ресторан определится по открытой смене на кассе.'
+      ? 'Табельный номер из iiko (или номер карты). Ресторан определится по открытой смене на кассе.'
       : loginMode === 'pin' ? 'PIN из 4–6 цифр выдаёт администратор. Ресторан телефон запомнит.'
         : 'Для админки. Права зависят от должности: администратор — всё, маркетинг — контент меню.';
-    const switchLabel = loginMode === 'password' ? (serverMode === 'iiko' ? 'Войти по PIN из iiko' : 'Войти по PIN (официант)') : 'Войти по логину и паролю';
+    const switchLabel = loginMode === 'password' ? (serverMode === 'iiko' ? 'Войти по табельному номеру' : 'Войти по PIN (официант)') : 'Войти по логину и паролю';
     $('#app').innerHTML = `<div class="login"><form id="login">
       <div class="brand">ФУДЖИ<small>персонал</small></div>
       ${form}
