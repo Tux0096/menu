@@ -397,6 +397,9 @@ const SCHEMA = `
   CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_users_iiko ON staff_users (iiko_employee_id);
   -- Должность в iiko и время последнего входа (список «Из iiko» в админке)
   ALTER TABLE staff_users ADD COLUMN IF NOT EXISTS iiko_position VARCHAR(200);
+  -- Вход по табельному из базы «Фуджи Тим» (services/fuji-team.js): сотрудник — по табельному номеру
+  ALTER TABLE staff_users ADD COLUMN IF NOT EXISTS team_code VARCHAR(32);
+  CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_users_team_code ON staff_users (team_code);
   ALTER TABLE staff_users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
   -- Роль «Маркетинг»: только контент меню (баннеры, подсказки AI, карточки блюд)
   ALTER TABLE staff_users DROP CONSTRAINT IF EXISTS staff_users_role_check;

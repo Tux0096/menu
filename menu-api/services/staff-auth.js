@@ -3,6 +3,7 @@ import pool from '../db/pool.js';
 import { createLimiter, httpError, sendError } from '../lib/http.js';
 import { hashPassword, signToken, verifyPassword, verifyToken } from '../lib/passwords.js';
 import { iikoShiftStillOpen, iikoStaffLogin, iikoStaffLoginEnabled } from './iiko-staff.js';
+import { fujiTeamEnabled, fujiTeamStaffLogin } from './fuji-team.js';
 
 // Маркетинг — не ступень иерархии: доступ только к контенту меню (баннеры, подсказки, карточки блюд)
 const ROLE_LEVEL = { marketing: 0, waiter: 1, manager: 2, admin: 3 };
@@ -65,10 +66,12 @@ export async function pinLogin(restaurantId, pin, clientKey = '') {
 
 /** Вход сотрудника зала по коду из iiko: точка — та, где у него открыта смена (services/iiko-staff.js). */
 export async function iikoPinLogin(code, clientKey = '', restaurant = null) {
-  const { row, restaurant: r } = await iikoStaffLogin(code, clientKey, restaurant);
+  // База «Фуджи Тим» подключена — табельный сверяем с ней, в iiko не ходим
+  const team = fujiTeamEnabled();
+  const { row, restaurant: r } = team ? await fujiTeamStaffLogin(code, clientKey, restaurant) : await iikoStaffLogin(code, clientKey, restaurant);
   staffCache.delete(row.id);
   const staff = mapStaff(row);
-  await audit(staff, 'login.iiko', 'staff', staff.id, { restaurant: r.slug });
+  await audit(staff, team ? 'login.team' : 'login.iiko', 'staff', staff.id, { restaurant: r.slug });
   return { token: issueToken(staff), staff, restaurant: { slug: r.slug, name: r.name } };
 }
 
@@ -178,8 +181,8 @@ export async function saveStaff(data, actor = null) {
     }
   }
   // Вход через iiko включён: официанты берутся из iiko, в админке заводят только учётки админки
-  if (iikoStaffLoginEnabled() && data.role === 'waiter' && !data.id) {
-    throw httpError(400, 'Официанты входят по коду из iiko — заводить их здесь не нужно');
+  if ((iikoStaffLoginEnabled() || fujiTeamEnabled()) && data.role === 'waiter' && !data.id) {
+    throw httpError(400, 'Официанты входят по табельному номеру — заводить их здесь не нужно');
   }
   // Официант входит по PIN: логин и пароль ему не обязательны — логин создаётся сам, пароль случайный (входа по нему нет)
   const pinOnly = data.role === 'waiter' && !data.id && !String(data.login || '').trim();
