@@ -113,7 +113,7 @@
   };
   async function resolveLoginMode() {
     if (!serverMode) {
-      serverMode = await fetch('/api/v1/staff/login-mode').then((r) => r.json()).then((d) => (d.mode === 'iiko' ? 'iiko' : 'pin')).catch(() => 'pin');
+      serverMode = await fetch('/api/v1/staff/login-mode').then((r) => r.json()).then((d) => { S.loginSource = d.source || ''; return d.mode === 'iiko' ? 'iiko' : 'pin'; }).catch(() => 'pin');
     }
     // Пароль выбран вручную (или админский адрес) — иначе режим от сервера
     loginMode = ls.get('loginMode') === 'password' || (HOST === 'admin' && ls.get('loginMode') !== 'staff') ? 'password' : serverMode;
@@ -127,14 +127,14 @@
     const pinForm = `<select class="inp" name="restaurant" aria-label="Ресторан">${(loginRests || []).map((r) => `<option value="${esc(r.slug)}" ${r.slug === rest ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select>
       <input class="inp" name="pin" type="password" inputmode="numeric" pattern="\\d{4,6}" maxlength="6" placeholder="PIN" autocomplete="one-time-code" required autofocus>`;
     const iikoForm = choose
-      ? `<div class="hint">Смена открыта на нескольких точках — где вы работаете?</div>
+      ? `<div class="hint">${S.loginSource === 'team' ? 'Где вы сегодня работаете?' : 'Смена открыта на нескольких точках — где вы работаете?'}</div>
          ${choose.restaurants.map((r) => `<button type="button" class="btn" data-pick="${esc(r.slug)}">${esc(r.name)}</button>`).join('')}`
       : `<input class="inp" name="pin" type="password" inputmode="text" maxlength="32" placeholder="Табельный номер" aria-label="Табельный номер сотрудника в iiko (или номер карты)" autocomplete="one-time-code" autocapitalize="off" required autofocus>`;
     const pwdForm = `<input class="inp" name="login" placeholder="Логин" autocomplete="username" required>
       <input class="inp" name="password" type="password" placeholder="Пароль" autocomplete="current-password" required>`;
     const form = loginMode === 'iiko' ? iikoForm : loginMode === 'pin' ? pinForm : pwdForm;
     const hint = loginMode === 'iiko'
-      ? 'Табельный номер из iiko (или номер карты). Ресторан определится по открытой смене на кассе.'
+      ? (S.loginSource === 'team' ? 'Табельный номер из iiko.' : 'Табельный номер из iiko (или номер карты). Ресторан определится по открытой смене на кассе.')
       : loginMode === 'pin' ? 'PIN из 4–6 цифр выдаёт администратор. Ресторан телефон запомнит.'
         : 'Для админки. Права зависят от должности: администратор — всё, маркетинг — контент меню.';
     const switchLabel = loginMode === 'password' ? (serverMode === 'iiko' ? 'Войти по табельному номеру' : 'Войти по PIN (официант)') : 'Войти по логину и паролю';

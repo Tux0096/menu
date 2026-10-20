@@ -15,6 +15,7 @@ import { getRestaurantCatalog, invalidateCatalogCache } from '../services/catalo
 import { bumpCatalogVersion } from '../lib/catalog-version.js';
 import { audit, listStaff, saveStaff, staffAuth } from '../services/staff-auth.js';
 import { iikoStaffLoginEnabled } from '../services/iiko-staff.js';
+import { fujiTeamEnabled } from '../services/fuji-team.js';
 import {
   deleteOverride, deleteRow, getAdminMenu, listAudit, listFeedback, listRestaurants, listRows, saveOverride, saveRow,
   tableQrSvg, tableUrl, updateRestaurant,
@@ -428,7 +429,7 @@ for (const [path, table] of [['chips', 'ai_chips'], ['promos', 'promo_blocks']])
 admin.get('/feedback', h(async (req) => listFeedback((await staffRestaurant(req)).id)));
 admin.get('/audit', h(async (req) => listAudit(200, req.staff.restaurantId || null)));
 // Вход официантов и управляющих зала через iiko включён — тогда в «Сотрудниках» только учётки админки
-admin.get('/staff/mode', h(async () => ({ iikoLogin: iikoStaffLoginEnabled() })));
+admin.get('/staff/mode', h(async () => ({ iikoLogin: iikoStaffLoginEnabled() || fujiTeamEnabled(), source: fujiTeamEnabled() ? 'team' : 'iiko' })));
 admin.get('/staff', h(async (req) => listStaff(req.staff)));
 admin.post('/staff', h(async (req) => {
   const row = await saveStaff(req.body || {}, req.staff);

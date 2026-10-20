@@ -16,6 +16,7 @@ import { listWaiterNotifications, markAllNotificationsRead, markNotificationRead
 import { httpError } from '../lib/http.js';
 import { reserveSyncStatus, syncReserves } from '../services/iiko-reserves.js';
 import { iikoCoolingDown } from '../iiko-client.js';
+import { fujiTeamEnabled } from '../services/fuji-team.js';
 import { SEES_ALL_ROLES } from '../lib/notification-rules.js';
 import { listFeedback, listRestaurants } from '../services/admin.js';
 import { listReserves, markArrived, reservePhone, seatReservation } from '../services/reservations.js';
@@ -38,9 +39,11 @@ router.get('/api/v1/staff/me', staffAuth('waiter', ['marketing']), h(async (req)
 })));
 // Приложение официанта: вход по PIN в выбранном ресторане
 // С IIKO_STAFF_LOGIN=on — код сотрудника из iiko, точка определяется по открытой смене (как в iikoWaiter)
-router.get('/api/v1/staff/login-mode', (req, res) => res.json({ mode: iikoStaffLoginEnabled() ? 'iiko' : 'pin' }));
+// С базой «Фуджи Тим» (FUJI_TEAM_DATABASE_URL) — табельный сверяется с ней, смена в iiko не проверяется
+const byCode = () => fujiTeamEnabled() || iikoStaffLoginEnabled();
+router.get('/api/v1/staff/login-mode', (req, res) => res.json({ mode: byCode() ? 'iiko' : 'pin', source: fujiTeamEnabled() ? 'team' : undefined }));
 router.post('/api/v1/staff/pin-login', h(async (req) => {
-  if (iikoStaffLoginEnabled()) {
+  if (byCode()) {
     requireBody(req.body, 'pin');
     // Только через iiko: вход — при открытой личной смене на кассе (лишние смены не открываются)
     return iikoPinLogin(req.body.pin, req.ip, req.body.restaurant || null);
