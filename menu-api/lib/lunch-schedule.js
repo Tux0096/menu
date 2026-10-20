@@ -9,7 +9,7 @@ export const DEFAULT_TZ = 'Europe/Samara';
 export const DEFAULT_SCHEDULE = { days: [1, 2, 3, 4, 5], from: '12:00', to: '16:00', tz: DEFAULT_TZ };
 const DAY_NAMES = ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'];
 
-const toMinutes = (hhmm) => {
+export const toMinutes = (hhmm) => {
   const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || '').trim());
   if (!m) return null;
   const v = Number(m[1]) * 60 + Number(m[2]);

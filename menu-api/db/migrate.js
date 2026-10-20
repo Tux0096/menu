@@ -444,6 +444,9 @@ const SCHEMA = `
   ALTER TABLE category_content ADD COLUMN IF NOT EXISTS sort_order INT;
   ALTER TABLE category_content ADD COLUMN IF NOT EXISTS tab VARCHAR(10);
   ALTER TABLE category_content ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN NOT NULL DEFAULT FALSE;
+  -- Раздел показывается только в часы: «с HH:MM» и/или «до HH:MM» по времени точки (пусто — всегда)
+  ALTER TABLE category_content ADD COLUMN IF NOT EXISTS show_from VARCHAR(5);
+  ALTER TABLE category_content ADD COLUMN IF NOT EXISTS show_until VARCHAR(5);
   -- Разделы кухни и бара с одним названием настраиваются отдельно: у раздела бара ключ «название|bar», старый ключ — у кухни.
   -- Раздел, который есть только в баре, переезжает на новый ключ со своими настройками (копия; старая строка остаётся)
   INSERT INTO category_content (key, name, image_url, title, sort_order, tab, is_hidden)
@@ -474,6 +477,9 @@ const SCHEMA = `
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (kind, key)
   );
+  -- Блюда шагов бизнес-ланча: описание и вес вариантов (рядом с названием и фото)
+  ALTER TABLE modifier_content ADD COLUMN IF NOT EXISTS description VARCHAR(500);
+  ALTER TABLE modifier_content ADD COLUMN IF NOT EXISTS weight VARCHAR(30);
   -- Конструктор бизнес-ланча: scope 'network' — настройки сети (расписание, наборы, варианты шагов, напитки),
   -- scope = ID ресторана — переопределение расписания точки
   CREATE TABLE IF NOT EXISTS business_lunch_settings (

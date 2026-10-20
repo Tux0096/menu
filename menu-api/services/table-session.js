@@ -40,7 +40,7 @@ import { arriveByQr } from './reservations.js';
 import { RESERVE_TZ, STATE_LABELS, clockText, reserveState } from '../lib/iiko-reserve-sync.js';
 import { getSource, productSourceMap } from './sources.js';
 import { alcoholView, assertAgeConfirmed, assertAlcoSale } from '../lib/alco-rules.js';
-import { menuIndex, priceLine, priceVariant, rowVariantKey, variantKey } from './menu-pricing.js';
+import { assertHoursRows, menuIndex, priceLine, priceVariant, rowVariantKey, variantKey } from './menu-pricing.js';
 import { assertLunchRows } from './business-lunch.js';
 import { stopListLoadedAt } from './stoplist.js';
 import { isSessionBusy, withSessionMutex } from '../lib/session-mutex.js';
@@ -726,10 +726,12 @@ export async function submitToWaiter(sessionId, cartItems, guestId, { ageConfirm
     const pending = fresh.items.filter((i) => !i.is_locked);
     if (!pending.length) throw httpError(400, 'Корзина пуста — добавьте блюда из меню');
     // Бизнес-ланч уже в корзине, а время вышло — официанту его не передаём
-    const index = await menuIndex(fresh.restaurant);
-    assertLunchRows(index, pending.map((i) => ({ key: i.iiko_product_id || i.product_id })));
+    const pendingIndex = await menuIndex(fresh.restaurant);
+    const pendingKeys = pending.map((i) => ({ key: i.iiko_product_id || i.product_id }));
+    assertLunchRows(pendingIndex, pendingKeys);
+    assertHoursRows(pendingIndex, pendingKeys); // раздел закрылся по времени («Завтраки до 12:00») — 409
     // Алкоголь уже в корзине, а продажа закрылась — официанту его не передаём
-    if (pending.some((i) => index.get(String(i.iiko_product_id || i.product_id))?.alcohol)) assertAlcoSale(index.alcoRules);
+    if (pending.some((i) => pendingIndex.get(String(i.iiko_product_id || i.product_id))?.alcohol)) assertAlcoSale(pendingIndex.alcoRules);
 
     const isReorder = fresh.items.some((i) => i.is_locked);
     const status = isReorder ? WORKFLOW.REORDER_PENDING : WORKFLOW.CART_READY;

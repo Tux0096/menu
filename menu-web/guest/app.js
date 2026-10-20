@@ -361,6 +361,33 @@
     return false;
   }
 
+  // ── Время показа разделов («Завтраки до 12:00») ──────────────
+  // Сервер отдаёт у раздела window { from, until, tz, text }; открыт ли он сейчас, считаем здесь по времени точки,
+  // чтобы кэш каталога не задерживал скрытие. Заказ позиции закрытого раздела сервер всё равно отклонит (409).
+  function windowOpen(w, now = new Date()) {
+    if (!w) return true;
+    let m;
+    try {
+      const parts = new Intl.DateTimeFormat('en-US', { timeZone: w.tz || 'Europe/Samara', hourCycle: 'h23', hour: 'numeric', minute: 'numeric' }).formatToParts(now);
+      m = Number(parts.find((x) => x.type === 'hour').value) * 60 + Number(parts.find((x) => x.type === 'minute').value);
+    } catch { return !w.closedNow; }
+    const t = (v) => (v ? Number(v.split(':')[0]) * 60 + Number(v.split(':')[1]) : null);
+    const f = t(w.from); const u = t(w.until);
+    if (f != null && u != null) return f < u ? m >= f && m < u : m >= f || m < u;
+    if (f != null) return m >= f;
+    return u == null || m < u;
+  }
+  /** ID разделов, закрытых по времени прямо сейчас. */
+  const closedGroupIds = () => new Set((S.catalog?.groups || []).filter((g) => g.window && !windowOpen(g.window)).map((g) => String(g.id)));
+  /** Раздел, из-за которого блюдо сейчас нельзя заказать: все места блюда (раздел и копии) закрыты по времени. */
+  function hoursGroupOf(p) {
+    const closed = closedGroupIds();
+    if (!closed.size || !p) return null;
+    const same = (S.catalog.products || []).filter((x) => String(x.id) === String(p.id));
+    if (!same.length || same.some((x) => !closed.has(String(x.parentGroup)))) return null;
+    return (S.catalog.groups || []).find((g) => String(g.id) === String(same[0].parentGroup)) || null;
+  }
+
   /** Корзина = сервер (источник правды) ⊕ несохранённые локальные правки. */
   function cartFromSession(session) {
     const next = {};
@@ -1035,6 +1062,8 @@
       && (String(i.productId) === id || String(i.iikoProductId) === id));
     if (isStopped(p) || stoppedOnServer) return 'Закончился — уберите из заказа';
     if (p.lunchCombo && S.catalog?.businessLunch && !S.catalog.businessLunch.active) return `Бизнес-ланч доступен ${S.catalog.businessLunch.text} — уберите из заказа`;
+    const hg = hoursGroupOf(p);
+    if (hg) return `Раздел «${hg.name}» доступен ${hg.window.text} — уберите из заказа`;
     const left = Number(p.stopBalance) || 0;
     if (left && freshQty > left) return `Осталось ${left} шт. — уменьшите количество`;
     return null;
@@ -1096,10 +1125,14 @@
     // В поиске блюдо один раз (копия того же блюда в бизнес-ланче — isAlias — не повторяется)
     // Наборы бизнес-ланча выбираются в конструкторе (баннер вверху раздела), в списке их нет; в поиске — есть
     const lunchGid = q ? null : lunchGroupId();
-    const filtered = q ? products.filter((p) => !p.isAlias && !p.lunchCombo && norm(`${p.name} ${p.description || ''}`).includes(q))
-      : lunchGid ? products.filter((p) => !p.lunchCombo) : products;
+    const spot = q ? null : lunchSpot();
+    // Разделы вне времени показа («до 12:00») у гостя скрыты вместе с блюдами
+    const closed = closedGroupIds();
+    const open = closed.size ? products.filter((p) => !closed.has(String(p.parentGroup))) : products;
+    const filtered = q ? open.filter((p) => !p.isAlias && !p.lunchCombo && norm(`${p.name} ${p.description || ''}`).includes(q))
+      : lunchGid ? open.filter((p) => !p.lunchCombo) : open;
     const byGroup = new Map();
-    if (lunchGid) byGroup.set(lunchGid, []); // раздел остаётся, даже если в нём одни наборы
+    if (spot) byGroup.set(spot.gid, []); // раздел остаётся, даже если в нём одни наборы
     for (const p of filtered) {
       const g = p.parentGroup || 'other';
       if (!byGroup.has(g)) byGroup.set(g, []);
@@ -1129,6 +1162,7 @@
     }
     if (!S.catalog) return `${topbar()}<main class="screen"><div class="skeleton skeleton--search"></div><div class="skeleton skeleton--cats"></div><div class="list">${'<div class="skeleton"></div>'.repeat(4)}</div></main>`;
     const sections = menuSections();
+    const spot = S.menu.search ? null : lunchSpot();
     // В поиске наборов нет — по «ланч» или блюду набора показываем саму позицию «Бизнес-ланч»
     const lunchHit = Boolean(S.menu.search) && lunchMatches(S.menu.search.trim());
     eagerBudget = 4;
@@ -1151,8 +1185,15 @@
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="2" width="5" height="5" rx="1.5"/><rect x="9" y="2" width="5" height="5" rx="1.5"/><rect x="2" y="9" width="5" height="5" rx="1.5"/><rect x="9" y="9" width="5" height="5" rx="1.5"/></svg>Меню</button>${sections.map((s) => `<button data-cat="${esc(s.id)}" class="${String(S.activeCat) === String(s.id) ? 'is-active' : ''}">${esc(s.name)}</button>`).join('')}</div>`}
       ${S.menu.search ? '' : bannersHtml('menu')}
       ${lunchHit ? `<div class="list" style="margin-top:8px">${lunchCard()}</div>` : ''}
-      ${sections.length ? sections.map((s, i) => `<h2 class="section-title" id="cat-${esc(s.id)}">${esc(s.name)}</h2>${!S.menu.search && String(s.id) === lunchGroupId() ? `<div class="list">${lunchCard()}</div>` : ''}
-        <div class="list ${i === sections.length - 1 && !S.menu.search && !hasBar ? 'list--last' : ''}">${s.items.map((p) => dishCard(p)).join('')}</div>`).join('') + switchCard
+      ${sections.length ? sections.map((s, i) => {
+    // Карточка бизнес-ланча стоит среди блюд раздела на месте из админки
+    const cards = s.items.map((p) => dishCard(p));
+    if (!S.menu.search && spot && String(s.id) === spot.gid) {
+      cards.splice(spot.position === 'last' ? cards.length : spot.position === 'index' ? Math.min(spot.index - 1, cards.length) : 0, 0, lunchCard());
+    }
+    return `<h2 class="section-title" id="cat-${esc(s.id)}">${esc(s.name)}</h2>
+        <div class="list ${i === sections.length - 1 && !S.menu.search && !hasBar ? 'list--last' : ''}">${cards.join('')}</div>`;
+  }).join('') + switchCard
     : lunchHit ? '' : S.catalog.products?.length
       ? `<div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.webp')}" alt="">
           <div class="empty__title">Ничего не нашлось</div><div>Спросите Фуджи ИИ — он подберёт похожее</div>
@@ -1546,6 +1587,15 @@
   // Наборы и ассортимент — catalog.businessLunch (сервер: настройки админки, время действия точки).
   // Заказ — обычная позиция с модификаторами (resolveSel), напиток — отдельная позиция бара.
   const lunch = () => S.catalog?.businessLunch || null;
+  /** Где в меню карточка бизнес-ланча: раздел из админки («первой / последней / на месте №N») или, по умолчанию, первой в разделе «Бизнес-ланч». */
+  function lunchSpot() {
+    const gid = lunchGroupId();
+    if (!gid) return null;
+    const pl = lunch().placement;
+    const closed = closedGroupIds();
+    const to = pl && (S.catalog.groups || []).some((g) => String(g.id) === String(pl.groupId)) && !closed.has(String(pl.groupId)) ? pl : null;
+    return to ? { gid: String(to.groupId), position: to.position, index: to.index || 1 } : closed.has(gid) ? null : { gid, position: 'first', index: 1 };
+  }
   /** Раздел «Бизнес-ланч» кухни: там лежат наборы (сервер помечает их lunchCombo). */
   const lunchGroupId = () => {
     if (!lunch()?.combos?.length) return null;
@@ -1622,8 +1672,10 @@
     let foot = '';
     const off = !b.active;
     if (cur === 'combo') {
-      body = `<h3 class="lunch__h">Выберите набор</h3><div class="lunch__combos">${b.combos.map((c) => `<button class="lunch-combo ${LC.combo?.id === c.id ? 'is-on' : ''} ${c.stopped ? 'is-stopped' : ''}" data-lunch-combo="${esc(c.id)}" ${c.stopped ? 'disabled' : ''}>
-          <span class="lunch-combo__name">${esc(c.title)}</span><span class="lunch-combo__steps">${esc(c.steps.map((s) => s.title).join(' · '))}</span>
+      body = `<h3 class="lunch__h">Выберите набор</h3><div class="lunch__combos">${b.combos.map((c) => `<button class="lunch-combo ${LC.combo?.id === c.id ? 'is-on' : ''} ${c.stopped ? 'is-stopped' : ''} ${c.image ? 'has-img' : ''}" data-lunch-combo="${esc(c.id)}" ${c.stopped ? 'disabled' : ''}>
+          ${c.image ? `<span class="lunch-combo__img"><img src="${esc(imgSrc(c.image, 160))}" alt="" loading="lazy"></span>` : ''}
+          <span class="lunch-combo__name">${esc(c.title)}${c.weight ? `<small>${esc(c.weight)}</small>` : ''}</span><span class="lunch-combo__steps">${esc(c.steps.map((s) => s.title).join(' · '))}</span>
+          ${c.description ? `<span class="lunch-combo__desc">${esc(c.description)}</span>` : ''}
           <b class="lunch-combo__price">${c.stopped ? 'Недоступен' : lunchPrice(c)}</b></button>`).join('')}</div>`;
       foot = '';
     } else if (cur === 'drink') {
@@ -1640,6 +1692,7 @@
         return `<button class="lunch-item ${on ? 'is-on' : ''}" data-lunch-item="${esc(it.id)}" data-step="${cur}">
           <span class="lunch-item__photo">${img ? `<img src="${esc(img)}" alt="" loading="lazy">` : `<em>${esc(it.name.slice(0, 1))}</em>`}<i class="lunch-check" aria-hidden="true"></i></span>
           <span class="lunch-item__name">${esc(it.name)}</span>
+          ${it.description ? `<span class="lunch-item__desc">${esc(it.description)}</span>` : ''}
           <span class="lunch-item__meta">${esc(it.weight || '')}${!LC.combo.fixed && it.price > 0 ? `${it.weight ? ' · ' : ''}+${rub(it.price)}` : ''}</span></button>`;
       }).join('')}</div>`;
     }
