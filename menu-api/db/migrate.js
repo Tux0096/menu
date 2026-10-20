@@ -446,6 +446,13 @@ const SCHEMA = `
     updated_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (kind, key)
   );
+  -- Конструктор бизнес-ланча: scope 'network' — настройки сети (расписание, наборы, варианты шагов, напитки),
+  -- scope = ID ресторана — переопределение расписания точки
+  CREATE TABLE IF NOT EXISTS business_lunch_settings (
+    scope VARCHAR(64) PRIMARY KEY,
+    data JSONB NOT NULL DEFAULT '{}',
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+  );
   -- Отчёт выгрузки внешнего меню iiko по разделам: сколько позиций попало к гостям и почему остальные нет
   CREATE TABLE IF NOT EXISTS menu_sync_reports (
     restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,

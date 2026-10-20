@@ -4,6 +4,7 @@
  */
 import { httpError } from '../lib/http.js';
 import { getRestaurantCatalog } from './catalog.js';
+import { assertLunchOpen } from '../lib/lunch-schedule.js';
 
 /** Сколько штук одной позиции можно заказать за раз (защита от опечаток и переполнения сумм) */
 export const MAX_LINE_QTY = 50;
@@ -26,6 +27,7 @@ export async function menuIndex(restaurant) {
       sizes: p.sizes || [],
       groups: p.modifierGroups || [],
       needsChoice: Boolean(p.needsChoice), // набор за 0 ₽ — только с платным выбором
+      lunch: p.lunchCombo ? catalog.businessLunch?.schedule || null : null, // набор бизнес-ланча — расписание точки
     };
     if (p.id) index.set(String(p.id), entry);
     if (p.iikoId) index.set(String(p.iikoId), entry);
@@ -44,6 +46,8 @@ export function priceLine(index, key, { qty, prevQty = 0, totalQty = qty, client
   const p = index.get(String(key));
   if (!p) throw httpError(400, `«${label}» больше нет в меню — уберите из корзины`);
   if (!(p.price > 0)) throw httpError(400, `«${p.name.slice(0, 60)}» нельзя заказать через меню — позовите официанта`);
+  // Бизнес-ланч — только в своё время (корзина гостя, сохранение и отправка официантом)
+  if (p.lunch) assertLunchOpen(p.lunch);
   if (qty > MAX_LINE_QTY) throw httpError(400, `«${p.name.slice(0, 60)}»: не больше ${MAX_LINE_QTY} шт. за раз`);
   if (p.isInStopList && totalQty > prevQty) throw httpError(409, `«${p.name.slice(0, 60)}» закончилось — уберите из корзины`);
   if (p.balance && totalQty > p.balance && totalQty > prevQty) {

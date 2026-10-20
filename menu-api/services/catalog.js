@@ -9,6 +9,7 @@ import { cleanMenuName, menuKey } from '../lib/menu-key.js';
 import { orderGroups } from './menu-order.js';
 import { getStopIndex } from './stoplist.js';
 import { bumpCatalogVersion, catalogVersion } from '../lib/catalog-version.js';
+import { attachBusinessLunch } from './business-lunch.js';
 
 const TTL_MS = parseInt(process.env.CATALOG_TTL_MS || '300000', 10);
 const rawCache = new Map(); // restaurantId -> { at, source, data }
@@ -474,10 +475,13 @@ async function buildRestaurantCatalog(restaurant, { force = false } = {}) {
   for (const p of sections.products) {
     if (/^\d+$/.test(String(p.weight || ''))) p.weight = `${p.weight} ${barIds.has(String(p.parentGroup)) ? 'мл' : 'г'}`;
   }
+  // Конструктор бизнес-ланча: блок businessLunch (active по времени точки), скрытые в админке варианты шагов
+  const lunch = await attachBusinessLunch(restaurant, sections);
   return {
     ...raw.data,
     groups: sections.groups,
-    products: sections.products,
+    products: lunch.products,
+    businessLunch: lunch.businessLunch,
     stopList: [...stop],
     source: raw.source,
     fetchedAt: raw.fetchedAt || new Date(raw.at).toISOString(),
