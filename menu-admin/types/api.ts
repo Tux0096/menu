@@ -117,6 +117,8 @@ export interface ReservationsResponse {
   restaurant: { slug: string; name: string };
   items: Reservation[];
   sameNames: string[];
+  /** Последняя загрузка из iiko (null — с запуска сервера ещё не было) */
+  sync: { at: string; ok: boolean; seen: number; sections?: number; error?: string } | null;
 }
 
 export type MenuSource = 'main' | 'bar' | string;

@@ -21,6 +21,21 @@ async function load() {
   }
 }
 
+// «Обновить из iiko»: внеочередная загрузка броней точки
+const syncing = ref(false);
+async function syncNow() {
+  syncing.value = true;
+  loadError.value = '';
+  try {
+    data.value = await useAuthFetch<ReservationsResponse>('/manager/reservations/sync', { method: 'POST' });
+  } catch (e) {
+    loadError.value = getErrorMessage(e);
+  } finally {
+    syncing.value = false;
+  }
+}
+const syncAt = computed(() => data.value?.sync?.at ? new Date(data.value.sync.at).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '');
+
 // Брони и «пришли» меняются в течение дня — перечитываем сами, пока вкладка открыта
 const { dashboardRefreshSec } = useRuntimeConfig().public;
 let timer: ReturnType<typeof setInterval> | undefined;
@@ -65,8 +80,25 @@ const columns = [
 <template>
   <div>
     <PageHeader title="Брони" icon="i-heroicons-calendar-days" description="Брони столов на сегодня из iiko. Только просмотр: брони создаются и меняются в iiko, ко времени брони стол открывается у официантов сам.">
-      <UButton icon="i-heroicons-arrow-path" color="white" :loading="loading" aria-label="Обновить" @click="load" />
+      <UButton icon="i-heroicons-cloud-arrow-down" color="white" :loading="syncing" @click="syncNow">Обновить из iiko</UButton>
     </PageHeader>
+
+    <UAlert
+      v-if="data?.sync?.ok"
+      class="mb-4"
+      color="green"
+      variant="soft"
+      icon="i-heroicons-check-circle"
+      :title="`Загружено из iiko в ${syncAt}: броней ${data.sync.seen}, залов ${data.sync.sections ?? '—'}`"
+    />
+    <UAlert
+      v-else-if="data"
+      class="mb-4"
+      color="red"
+      variant="soft"
+      icon="i-heroicons-exclamation-triangle"
+      :title="data.sync ? `Не удалось загрузить брони из iiko (${syncAt}): ${data.sync.error}` : 'Брони из iiko ещё не загружались после перезапуска сервера — нажмите «Обновить из iiko»'"
+    />
 
     <div class="mb-4 grid gap-4 sm:grid-cols-3">
       <StatCard label="Броней сегодня" icon="i-heroicons-calendar-days" :loading="!data" :value="active.length" />
