@@ -288,33 +288,48 @@
       ${open ? (alco().requireDocCheck ? '<div class="alco-note__sub">Официант может попросить документ</div>' : '') : `<div class="alco-note__sub">${esc(alcoClosedText())}</div>`}</div></div>`;
   }
   /**
-   * Окно «Вам есть 18 лет?» поверх всего (в том числе поверх карточки блюда — её не закрываем).
+   * Заглушка «Вам есть 18 лет?» поверх всего (в том числе поверх карточки блюда — её не закрываем).
+   * Висит, пока гость не ответит: тап мимо окна, Esc и прокрутка под ним не работают.
    * Да — запоминаем на визит и вызываем onYes; Нет — ничего не добавляем (onNo — убрать уже лежащий в корзине алкоголь).
    */
   function openAgeModal(onYes, onNo = null) {
-    $('#age-modal')?.remove();
+    if ($('#age-modal')) return; // уже спрашиваем — второе окно не открываем
     const el = document.createElement('div');
     el.id = 'age-modal';
     el.className = 'age-modal';
-    el.innerHTML = `<div class="age-modal__box" role="dialog" aria-modal="true" aria-labelledby="age-title">
+    el.innerHTML = `<div class="age-modal__box" role="alertdialog" aria-modal="true" aria-labelledby="age-title">
       <div class="age-modal__badge">18+</div>
       <h2 id="age-title">Вам есть 18 лет?</h2>
       <p>${esc(alco()?.rulesText || 'Алкоголь продаём только совершеннолетним.')}</p>
       ${alco()?.requireDocCheck ? '<p class="age-modal__doc">Официант может попросить документ.</p>' : ''}
       <button class="btn btn--dark btn--center" data-age="yes">Да, мне есть 18</button>
       <button class="btn btn--outline btn--center" data-age="no">Нет</button></div>`;
+    // Esc не закрывает ни окно, ни шторку под ним; Tab не уводит фокус из окна
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); }
+      if (e.key === 'Tab') {
+        const btns = [...el.querySelectorAll('[data-age]')];
+        const i = btns.indexOf(document.activeElement);
+        e.preventDefault();
+        btns[(i + (e.shiftKey ? btns.length - 1 : 1)) % btns.length].focus();
+      }
+    };
+    const scrollY = document.documentElement.style.overflow;
     const done = (yes) => {
       el.remove();
-      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('keydown', onKey, true);
+      document.documentElement.style.overflow = scrollY;
       if (yes) { ageRemember(); onYes?.(); } else { toast('Алкоголь можно заказать только с 18 лет', true); onNo?.(); }
     };
-    const onKey = (e) => { if (e.key === 'Escape') done(false); };
     el.addEventListener('click', (e) => {
       const b = e.target.closest('[data-age]');
       if (b) done(b.dataset.age === 'yes');
-      else if (e.target === el) done(false);
+      // тап мимо окна — окно на месте, слегка «вздрагивает»: нужен ответ
+      else if (e.target === el) { el.classList.remove('is-shake'); void el.offsetWidth; el.classList.add('is-shake'); }
     });
-    document.addEventListener('keydown', onKey);
+    el.addEventListener('touchmove', (e) => { if (e.target === el) e.preventDefault(); }, { passive: false });
+    document.addEventListener('keydown', onKey, true);
+    document.documentElement.style.overflow = 'hidden';
     document.body.appendChild(el);
     el.querySelector('[data-age="yes"]').focus();
   }
@@ -450,6 +465,7 @@
       if (msg) toast(msg);
     }
     announceWaiter(session);
+    pushPromptUpdate(session);
   }
 
   /** Имя официанта для гостя — первое слово («Анна Иванова» → «Анна») */
@@ -466,6 +482,56 @@
     toast(`Ваш официант — ${name}, он(а) скоро подойдёт`, false, 'status-help.svg');
   }
   const waiterLine = (s) => (waiterFirstName(s) && !visitOver(s) ? `<div class="waiter-line">Ваш официант: <b>${esc(waiterFirstName(s))}</b></div>` : '');
+
+  // ── Web Push: «Ваш стол обслуживает официант …», «Ваш заказ готов» ──
+  // Разрешение просим только по нажатию на плашку. Нет PushManager (например, iOS Safari не из «Домой») — плашки нет. Без SW меню работает как раньше.
+  const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  const b64ToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(s.length / 4) * 4, '=')), (c) => c.charCodeAt(0));
+  async function pushSubscribe(session) {
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const { publicKey } = await api('GET', '/api/v1/push/vapid-public-key');
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) });
+    }
+    await api('POST', '/api/v1/table-order/push-subscribe', { sessionId: session.sessionId, subscription: sub.toJSON() });
+    store.set(`pushOn:${session.sessionId}`, true);
+  }
+  function pushPromptHide() { $('#push-prompt')?.remove(); }
+  /** Вызывается при обновлении сессии стола: покажет плашку или тихо привяжет уже разрешённые уведомления к новому визиту */
+  function pushPromptUpdate(session) {
+    try {
+      if (!pushSupported() || !session?.sessionId || visitOver(session)) { pushPromptHide(); return; }
+      const sid = session.sessionId;
+      if (Notification.permission === 'granted') {
+        pushPromptHide();
+        if (!store.get(`pushOn:${sid}`) && !S.pushBusy) {
+          S.pushBusy = true;
+          pushSubscribe(session).catch(() => {}).finally(() => { S.pushBusy = false; });
+        }
+        return;
+      }
+      if (Notification.permission === 'denied' || store.get(`pushNo:${sid}`)) { pushPromptHide(); return; }
+      if ($('#push-prompt')) return;
+      const el = document.createElement('div');
+      el.id = 'push-prompt';
+      el.className = 'push-prompt';
+      el.innerHTML = `<div class="push-prompt__text"><b>Включить уведомления</b><span>Сообщим, кто вас обслуживает и когда блюда готовы</span></div>
+        <button type="button" class="push-prompt__go">Включить</button><button type="button" class="push-prompt__x" aria-label="Не сейчас">×</button>`;
+      el.querySelector('.push-prompt__x').onclick = () => { store.set(`pushNo:${sid}`, true); pushPromptHide(); };
+      el.querySelector('.push-prompt__go').onclick = async () => {
+        pushPromptHide();
+        try {
+          const perm = await Notification.requestPermission();
+          if (perm !== 'granted') { store.set(`pushNo:${sid}`, true); return; }
+          await pushSubscribe(S.session || session);
+          toast('Уведомления включены');
+        } catch { toast('Не удалось включить уведомления', true); }
+      };
+      document.body.appendChild(el);
+    } catch { /* push необязателен */ }
+  }
 
   /** Вход за стол. false — за столом уже сидят: показан вопрос «присоединиться?». */
   async function enterTable({ join = false, name = '', then = null } = {}) {
@@ -1440,6 +1506,8 @@
     const r = findProduct(id) ? null : (S.ai.results || []).find((x) => String(x.productId) === String(id));
     const p = findProduct(id) || (r && { id: r.productId, iikoId: r.iikoId, name: r.name, price: r.price, image: r.image, weight: r.weight, description: r.description });
     if (!p) return;
+    // Алкоголь: сначала заглушка 18+ — карточку открываем только после «Да»
+    if (isAlco(p) && needAge()) { openAgeModal(() => openProduct(id)); return; }
     const sel = hasOptions(p) ? initSel(p) : null;
     const draw = () => productDetailHtml(p, sel);
     const redraw = () => {

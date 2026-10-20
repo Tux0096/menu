@@ -5,6 +5,7 @@
  *   is_locked = FALSE — черновик гостя / дозаказ, ещё не отправлен на кухню;
  *   is_locked = TRUE  — отправлено в iiko, гость не может убрать.
  */
+import { notifyOrderReady } from './guest-push.js';
 import { uuidOrNull } from '../lib/uuid.js';
 import pool from '../db/pool.js';
 import { isValidQrKey, QR_RESTAURANT_SLUG, qrSignedRequired } from '../lib/qr-config.js';
@@ -1398,6 +1399,7 @@ async function refreshFromIikoNow(sessionId, prefetched = null) {
         payload: { sessionId, itemIds: ready.map((r) => r.id), lines: ready.map((r) => ({ name: r.name, qty: r.quantity })) },
         mergeLines: true,
       });
+      notifyOrderReady(sessionId); // Web Push гостям (не чаще раза в 2 мин)
     }
 
     const fresh = await pool.query(

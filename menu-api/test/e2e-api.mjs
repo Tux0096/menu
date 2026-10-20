@@ -83,6 +83,29 @@ assert.ok(notes.some((n) => n.session_id === s.sessionId && n.type === 'cart_rea
 assert.ok(notes.some((n) => n.session_id === s.sessionId && n.type === 'guest_seated' && n.body.includes('Алексей')));
 step(`официант видит уведомления (${notes.filter((n) => n.session_id === s.sessionId).length} по столу)`);
 
+// Web Push гостю: подписка принимается, неверная — 400; отправка при «Взять стол» (сервер с WEB_PUSH_DRY_RUN=true — без сети)
+{
+  const { createECDH, randomBytes } = await import('node:crypto');
+  const ecdh = createECDH('prime256v1'); ecdh.generateKeys();
+  const sub = {
+    endpoint: `https://fcm.googleapis.com/fcm/send/e2e-${randomBytes(6).toString('hex')}`,
+    keys: { p256dh: ecdh.getPublicKey().toString('base64url'), auth: randomBytes(16).toString('base64url') },
+  };
+  r = await api('GET', '/api/v1/push/vapid-public-key');
+  assert.equal(r.status, 200); assert.ok(r.data.publicKey && !('privateKey' in r.data));
+  r = await api('POST', '/api/v1/table-order/push-subscribe', { sessionId: s.sessionId, subscription: sub });
+  assert.equal(r.status, 401);
+  r = await api('POST', '/api/v1/table-order/push-subscribe', { sessionId: s.sessionId, subscription: { endpoint: 'http://127.0.0.1/x', keys: sub.keys } }, G);
+  assert.equal(r.status, 400);
+  r = await api('POST', '/api/v1/table-order/push-subscribe', { sessionId: s.sessionId, subscription: { ...sub, keys: { p256dh: 'abc', auth: 'def' } } }, G);
+  assert.equal(r.status, 400);
+  r = await api('POST', '/api/v1/table-order/push-subscribe', { sessionId: s.sessionId, subscription: { endpoint: 'https://evil.example/x', keys: sub.keys } }, G);
+  assert.equal(r.status, 400);
+  ok(await api('POST', '/api/v1/table-order/push-subscribe', { sessionId: s.sessionId, subscription: sub }, G), 'push subscribe');
+  ok(await api('POST', '/api/v1/table-order/push-subscribe', { sessionId: s.sessionId, subscription: sub }, G), 'push resubscribe');
+  step('Web Push: публичный ключ отдаётся, подписка принимается (повтор — тот же адрес), неверная/чужой хост — 400, без входа — 401');
+}
+
 // 7. Правка заказа, гости, места
 // Просмотр стола без «Взять стол» заказ в работу не принимает; взял стол — гость видит «Официант уточняет заказ»
 s = ok(await api('POST', `/api/v1/waiter/session/${s.sessionId}/take`, {}, W), 'take');

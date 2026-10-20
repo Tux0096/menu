@@ -1,6 +1,6 @@
 /** Фоновые задачи API: выгрузка меню iiko, стоп-листы, статусы кухни, проверки сервиса и онлайн-оплат. */
 import pool from '../db/pool.js';
-import { isIikoDemo } from '../iiko-client.js';
+import { asBackground, isIikoDemo } from '../iiko-client.js';
 import { syncAllRestaurants } from '../db/sync-iiko.js';
 import { warmImages } from './images.js';
 import { checkPendingPayments } from './payments.js';
@@ -8,6 +8,7 @@ import { refreshStopLists, registerWebhooks } from './stoplist.js';
 import { invalidateCatalogCache, warmCatalogs } from './catalog.js';
 import { importOpenOrders } from './iiko-import.js';
 import { syncReserves, tickReserves } from './iiko-reserves.js';
+import { cleanupGuestPush, initGuestPush } from './guest-push.js';
 import { refreshKitchenStatuses, runServiceChecks } from './table-session.js';
 
 // ── Меню и стоп-листы iiko ──────────────────────────────────────────────────
@@ -78,36 +79,38 @@ export function startBackgroundJobs() {
   // Бездействие гостя 5+ мин, долгое ожидание официанта
   setInterval(() => runServiceChecks().catch((e) => console.warn('service checks:', e.message)), 30000);
   // Статусы блюд на кухне: вебхуки iiko + страховочный опрос
-  setInterval(() => refreshKitchenStatuses().catch((e) => console.warn('kitchen statuses:', e.message)), parseInt(process.env.KITCHEN_POLL_MS || '20000', 10));
+  setInterval(() => asBackground(refreshKitchenStatuses).catch((e) => console.warn('kitchen statuses:', e.message)), parseInt(process.env.KITCHEN_POLL_MS || '30000', 10));
 
   // Заказы, открытые на кассе iiko, — в систему (меню гостя, терминал официанта, админка). IIKO_IMPORT=false — выключить
   if (process.env.IIKO_IMPORT !== 'false') {
-    const importTick = () => importOpenOrders().catch((e) => console.warn('импорт заказов iiko:', e.message));
-    setInterval(importTick, parseInt(process.env.IIKO_IMPORT_MS || '30000', 10));
-    setTimeout(importTick, 20_000).unref?.();
+    const importTick = () => asBackground(importOpenOrders).catch((e) => console.warn('импорт заказов iiko:', e.message));
+    setInterval(importTick, parseInt(process.env.IIKO_IMPORT_MS || '45000', 10));
+    setTimeout(importTick, 60_000).unref?.();
   }
 
   // Брони столов из iiko (только чтение): загрузка раз в 90 с, разбор (стол ко времени брони, «не пришли») — раз в 30 с.
   // IIKO_RESERVES=false — выключить
   if (process.env.IIKO_RESERVES !== 'false') {
-    const reserveSync = () => syncReserves().catch((e) => console.warn('брони iiko:', e.message));
-    setInterval(reserveSync, parseInt(process.env.IIKO_RESERVE_MS || '90000', 10));
-    setInterval(() => tickReserves().catch((e) => console.warn('брони:', e.message)), 30000);
-    setTimeout(reserveSync, 25_000).unref?.();
+    const reserveSync = () => asBackground(syncReserves).catch((e) => console.warn('брони iiko:', e.message));
+    setInterval(reserveSync, parseInt(process.env.IIKO_RESERVE_MS || '120000', 10));
+    setInterval(() => asBackground(tickReserves).catch((e) => console.warn('брони:', e.message)), 30000);
+    setTimeout(reserveSync, 90_000).unref?.();
   }
 
+  // Старт после выката: выгрузка, стоп-листы и вебхуки — через общую очередь фоновых запросов к iiko
   warmCatalogs()
-    .then(() => syncIikoMenu())
-    .then(() => refreshAllStopLists())
-    .then(() => registerWebhooksWithRetry())
+    .then(() => asBackground(() => syncIikoMenu()))
+    .then(() => asBackground(refreshAllStopLists))
+    .then(() => asBackground(() => registerWebhooksWithRetry()))
     .catch((e) => console.warn('startup iiko:', e.message))
     .then(() => warmImages())
     .catch((e) => console.warn('картинки меню:', e.message));
   // Новые точки, подключённые к ключу, получают вебхук без перезапуска
-  setInterval(() => registerWebhooksWithRetry(), 6 * 60 * 60 * 1000);
-  setInterval(() => syncIikoMenu(), 5 * 60 * 1000); // раз в 5 минут проверяем, не пора ли (IIKO_SYNC_MS)
+  setInterval(() => asBackground(() => registerWebhooksWithRetry()), 6 * 60 * 60 * 1000);
+  setInterval(() => asBackground(() => syncIikoMenu()), 5 * 60 * 1000); // раз в 5 минут проверяем, не пора ли (IIKO_SYNC_MS)
   setInterval(() => checkPendingPayments().catch((e) => console.warn('онлайн-оплата:', e.message)), 30000);
-  setInterval(refreshAllStopLists, parseInt(process.env.STOP_LIST_REFRESH_MS || '600000', 10));
+  setInterval(() => asBackground(refreshAllStopLists), parseInt(process.env.STOP_LIST_REFRESH_MS || '600000', 10));
+  initGuestPush();
   setInterval(cleanupExpired, 6 * 60 * 60 * 1000);
   setTimeout(cleanupExpired, 60_000).unref?.();
 }
@@ -115,6 +118,8 @@ export function startBackgroundJobs() {
 /** Просроченные входы гостей не нужны: токен с истёкшим сроком всё равно не принимается */
 async function cleanupExpired() {
   try {
+    const gone = await cleanupGuestPush();
+    if (gone) console.log(`уборка: удалено подписок на уведомления закрытых визитов — ${gone}`);
     const { rowCount } = await pool.query("DELETE FROM guest_tokens WHERE expires_at < NOW() - INTERVAL '1 day'");
     if (rowCount) console.log(`уборка: удалено просроченных входов гостей — ${rowCount}`);
   } catch (e) {
