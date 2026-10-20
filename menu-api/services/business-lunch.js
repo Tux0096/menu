@@ -117,14 +117,20 @@ export function lunchFixedPrice(groups) {
 }
 
 /** Группы набора для гостя: скрытые в админке варианты убираются, порядок — из админки, потом как в iiko. */
+// Служебные пометки iiko в названиях ланча: «Блюдо Суп + Горячее», «Крем-суп грибной (ланч)», «Супы(ланч)»
+export const lunchText = (t) => String(t || '').replace(/\s*\((бизнес[- ]?)?ланч\)/gi, '').replace(/^блюдо\s+/i, '').replace(/\s+/g, ' ').trim();
+// Шаги в одном порядке во всех наборах: салат или ролл → суп → горячее → остальное
+const STEP_RANK = [/салат|ролл/i, /суп/i, /горяч/i];
+const stepRank = (name) => { const i = STEP_RANK.findIndex((re) => re.test(name || '')); return i < 0 ? STEP_RANK.length : i; };
+
 function shapeGroups(groups, items) {
-  return (groups || []).map((g) => {
+  return (groups || []).map((g, gi) => {
     const list = (g.items || []).map((m, i) => ({ m, i, s: items[itemKey(g, m)] }))
       .filter((x) => x.s?.enabled !== false)
       .sort((a, b) => (a.s?.order ?? 1e6 + a.i) - (b.s?.order ?? 1e6 + b.i))
-      .map((x) => x.m);
-    return { ...g, items: list };
-  });
+      .map((x) => ({ ...x.m, name: lunchText(x.m.name) }));
+    return { ...g, name: lunchText(g.name), items: list, gi };
+  }).sort((a, b) => stepRank(a.name) - stepRank(b.name) || a.gi - b.gi).map(({ gi, ...g }) => g);
 }
 
 const stepOut = (g) => ({
@@ -169,8 +175,8 @@ export function buildBusinessLunch({ groups, products, settings, now = new Date(
     const iikoName = p.iikoName || p.name;
     const sizes = p.sizes || [];
     const parts = sizes.length > 1
-      ? sizes.map((z) => ({ z, key: menuKey(`${iikoName} ${z.name}`), title: z.name || p.name, base: Number(z.price) || 0, groups: z.groups || [], needsChoice: Boolean(z.needsChoice), weight: z.weight }))
-      : [{ z: sizes[0] || null, key: menuKey(iikoName), title: p.name, base: Number(p.basePrice ?? p.price) || 0, groups: sizes[0]?.groups || p.modifierGroups || [], needsChoice: Boolean(p.needsChoice || sizes[0]?.needsChoice), weight: null }];
+      ? sizes.map((z) => ({ z, key: menuKey(`${iikoName} ${z.name}`), title: lunchText(z.name || p.name), base: Number(z.price) || 0, groups: z.groups || [], needsChoice: Boolean(z.needsChoice), weight: z.weight }))
+      : [{ z: sizes[0] || null, key: menuKey(iikoName), title: lunchText(p.name), base: Number(p.basePrice ?? p.price) || 0, groups: sizes[0]?.groups || p.modifierGroups || [], needsChoice: Boolean(p.needsChoice || sizes[0]?.needsChoice), weight: null }];
     defs.set(id, parts.map((x, i) => {
       const s = set.combos[x.key];
       const enabled = s ? s.enabled !== false : looksLikeCombo(p) || sizes.length > 1;
