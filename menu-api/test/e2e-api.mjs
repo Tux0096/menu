@@ -84,8 +84,11 @@ assert.ok(notes.some((n) => n.session_id === s.sessionId && n.type === 'guest_se
 step(`официант видит уведомления (${notes.filter((n) => n.session_id === s.sessionId).length} по столу)`);
 
 // 7. Правка заказа, гости, места
+// Просмотр стола без «Взять стол» заказ в работу не принимает; взял стол — гость видит «Официант уточняет заказ»
 s = ok(await api('POST', `/api/v1/waiter/session/${s.sessionId}/take`, {}, W), 'take');
-assert.equal(s.workflowStatus, 'waiter_review');
+assert.equal(s.workflowStatus, 'cart_ready'); assert.equal(s.waiterId, null);
+s = ok(await api('POST', `/api/v1/waiter/session/${s.sessionId}/assign`, {}, W), 'assign');
+assert.equal(s.workflowStatus, 'waiter_review'); assert.equal(s.waiterId, staff.staff.id);
 const items = s.items.map((i) => ({ ...i, seatNumber: 1 })).concat([{ ...line(p3, 1), seatNumber: 2, course: 2 }]);
 s = ok(await api('POST', `/api/v1/waiter/session/${s.sessionId}/cart`, { items, guestCount: 2 }, W), 'waiter cart');
 assert.equal(s.guestCount, 2); assert.equal(s.items.length, 3);
@@ -415,7 +418,7 @@ step('адрес и время работы точки: сохраняются �
     assert.equal(v.total, 350 + p1.price + 300);
     assert.deepEqual(v.removedItems.map((x) => x.name.replace(/ \(.*/, '')), ['Касса: стейк', 'Касса: борщ']);
     const feed = ok(await api('GET', '/api/v1/waiter/notifications?restaurant=novo-sadovaya', null, W), 'feed');
-    assert.ok(feed.some((n) => n.session_id === v.sessionId && n.type === 'items_removed' && /на кассе удалено/.test(n.title) && /стейк/.test(n.body)));
+    assert.ok(feed.some((n) => n.session_id === v.sessionId && n.type === 'items_removed' && /на кассе удалено/i.test(n.title) && /стейк/.test(n.body)));
     const seen2 = ok(await api('POST', '/api/v1/table/enter', { restaurantSlug: 'novo-sadovaya', tableNumber: T2 }, G), 'enter T2 again');
     assert.equal(seen2.removedItems.length, 2); assert.equal(seen2.total, v.total);
     const dash2 = ok(await api('GET', '/api/v1/manager/dashboard?restaurant=novo-sadovaya', null, { Authorization: `Bearer ${mgr.token}` }), 'dash2');
@@ -456,6 +459,99 @@ r = await fetch(`${BASE}/img?u=${encodeURIComponent('http://127.0.0.1:3101/healt
 assert.equal(r.status, 404); step('/img не ходит по внутренним адресам (404)');
 r = await api('GET', `/api/v1/waiter/session/${s.sessionId}?token=${staff.token}`);
 assert.equal(r.status, 401); step('токен персонала в адресе не принимается (401)');
+
+// Общие и «мои» столы: официант A берёт стол, официант B получает 409 и не видит новых уведомлений стола
+{
+  const TABLE2 = `${TABLE}b`;
+  const pinA = await api('POST', '/api/v1/staff/pin-login', { restaurant: 'novo-sadovaya', pin: '2580' });
+  if (pinA.status !== 200) {
+    step('пропуск: вход Анны по PIN 2580 недоступен (режим входа iiko) — шаг «общие и мои столы» не проверен');
+  } else {
+    const WA = { Authorization: `Bearer ${pinA.data.token}` };
+    const nameA = pinA.data.staff.name;
+    const sB = await api('POST', '/api/v1/staff/login', { login: 'waiter', password: '1111' });
+    const WB = { Authorization: `Bearer ${sB.data.token}` };
+    assert.notEqual(pinA.data.staff.id, sB.data.staff.id);
+
+    let t2 = ok(await api('POST', '/api/v1/table/enter', { restaurantSlug: 'novo-sadovaya', tableNumber: TABLE2 }, G), 'enter t2');
+    t2 = ok(await api('POST', '/api/v1/table/submit-to-waiter', { sessionId: t2.sessionId, items: [line(p1, 2), line(p2, 1)] }, G), 'submit t2');
+    const sid2 = t2.sessionId;
+    assert.equal(t2.waiterId, null); assert.equal(t2.waiterName, null);
+    const mine = (list) => list.filter((n) => n.session_id === sid2);
+    const wn = (who) => api('GET', '/api/v1/waiter/notifications?restaurant=novo-sadovaya&limit=200', null, who).then((x) => ok(x, 'notes'));
+    assert.ok(mine(await wn(WA)).some((n) => n.type === 'cart_ready') && mine(await wn(WB)).some((n) => n.type === 'cart_ready'));
+    step('стол без официанта («Общие»): новый заказ виден обоим официантам');
+    // короткое событие вместо всего заказа
+    const cart = mine(await wn(WA)).find((n) => n.type === 'cart_ready');
+    assert.match(cart.title, /^Стол .+ · Новый заказ$/); assert.match(cart.body.replace(/\s/g, ' '), /^2 позиции · [\d ]+ ₽$/);
+    step(`уведомление-событие: «${cart.title} · ${cart.body}»`);
+
+    // Просмотр и блокировка стола официантом не назначают
+    r = await api('GET', `/api/v1/waiter/session/${sid2}`, null, WA);
+    assert.equal(r.data.waiterId, null);
+    r = await api('POST', `/api/v1/waiter/session/${sid2}/assign`, {}, WA);
+    assert.equal(r.status, 200); assert.equal(r.data.waiterId, pinA.data.staff.id); assert.equal(r.data.waiterName, nameA);
+    step(`официант «${nameA}» взял стол №${TABLE2}`);
+    r = await api('POST', `/api/v1/waiter/session/${sid2}/assign`, {}, WB);
+    assert.equal(r.status, 409); assert.equal(r.data.code, 'ALREADY_ASSIGNED'); assert.ok(r.data.error.includes(nameA));
+    step(`второй официант: 409 «${r.data.error}»`);
+    r = await api('POST', `/api/v1/waiter/session/${sid2}/assign`, { staffId: pinA.data.staff.id }, WB);
+    assert.equal(r.status, 403); step('официант не может назначать других (403)');
+
+    // Гость видит имя официанта при обычном опросе визита
+    const gv = ok(await api('GET', `/api/v1/table/session/${sid2}`, null, G), 'guest poll');
+    assert.equal(gv.waiterName, nameA);
+    step(`гость видит официанта: ${gv.waiterName}`);
+
+    // Новые события стола: A видит, B — нет; «Стол взял(а) …» видят все
+    ok(await api('POST', '/api/v1/table/call-waiter', { sessionId: sid2, reason: 'cutlery' }, G), 'call t2');
+    const noteA = mine(await wn(WA)); const noteB = mine(await wn(WB));
+    assert.ok(noteA.some((n) => n.type === 'call_waiter' && /Вызов/.test(n.title)));
+    assert.ok(!noteB.some((n) => n.type === 'call_waiter' || n.type === 'cart_ready'), 'чужой стол: вызов и заказ скрыты');
+    assert.ok(noteB.some((n) => n.type === 'table_assigned' && n.title.includes(nameA)));
+    assert.ok(noteA.find((n) => n.type === 'cart_ready').is_read, 'общие уведомления стола закрыты при назначении');
+    step('лента B не видит новых уведомлений стола; «Стол взял(а) …» видят все');
+    // Управляющий видит всё
+    const mgrNotes = mine(await wn({ Authorization: `Bearer ${mgr.token}` }));
+    assert.ok(mgrNotes.some((n) => n.type === 'call_waiter'));
+    step('управляющий видит все уведомления');
+
+    // Управляющий переназначает; официант A отдаёт стол
+    const waiters = ok(await api('GET', '/api/v1/waiter/waiters?restaurant=novo-sadovaya', null, { Authorization: `Bearer ${mgr.token}` }), 'waiters');
+    assert.ok(waiters.some((w) => w.id === sB.data.staff.id));
+    r = await api('GET', '/api/v1/waiter/waiters?restaurant=novo-sadovaya', null, WA);
+    assert.equal(r.status, 403);
+    r = await api('POST', `/api/v1/waiter/session/${sid2}/unassign`, {}, WB);
+    assert.equal(r.status, 403);
+    r = ok(await api('POST', `/api/v1/waiter/session/${sid2}/unassign`, {}, WA), 'unassign');
+    assert.equal(r.waiterId, null);
+    r = ok(await api('POST', `/api/v1/waiter/session/${sid2}/assign`, { staffId: sB.data.staff.id }, { Authorization: `Bearer ${mgr.token}` }), 'mgr assign');
+    assert.equal(r.waiterId, sB.data.staff.id);
+    step('«Отдать в общие» и переназначение управляющим');
+
+    // «Выдача»: отправили на кухню — по названию блюда находится стол
+    r = await api('POST', `/api/v1/waiter/session/${sid2}/take`, {}, WB);
+    r = ok(await api('POST', `/api/v1/waiter/session/${sid2}/send-to-production`, {}, WB), 'send t2');
+    const dish = r.items[0];
+    assert.equal(dish.cook?.state, 'cooking'); assert.match(dish.cook.text, /^готовится \d+ мин/);
+    step(`время готовки у отправленной позиции: «${dish.cook.text}»`);
+    const aw = ok(await api('GET', `/api/v1/waiter/awaiting?restaurant=novo-sadovaya&q=${encodeURIComponent(dish.name.slice(0, 5))}`, null, WA), 'awaiting');
+    assert.ok(aw.items.some((i) => i.sessionId === sid2 && i.tableNumber === TABLE2 && i.name === dish.name), 'стол найден по названию блюда');
+    assert.ok(aw.dishes.some((d) => d.name === dish.name));
+    step(`«Выдача»: «${dish.name.slice(0, 5)}» → стол №${TABLE2} (${aw.items.length} поз.)`);
+    ok(await api('POST', `/api/v1/waiter/session/${sid2}/served`, { itemIds: [dish.id] }, WA), 'served');
+    const aw2 = ok(await api('GET', `/api/v1/waiter/awaiting?restaurant=novo-sadovaya&q=${encodeURIComponent(dish.name.slice(0, 5))}`, null, WA), 'awaiting2');
+    assert.ok(!aw2.items.some((i) => i.itemId === dish.id), 'вынесенное из выдачи пропало');
+    step('вынесенное блюдо уходит из «Выдачи»');
+    await api('POST', `/api/v1/waiter/session/${sid2}/close`, { force: true }, WB);
+
+    // Официант открывает стол сам — он сразу его
+    const opened = ok(await api('POST', `/api/v1/waiter/tables/${TABLE}c/open?restaurant=novo-sadovaya`, {}, WA), 'open by waiter');
+    assert.equal(opened.waiterId, pinA.data.staff.id);
+    step('«+ Открыть стол»: стол сразу назначен на официанта');
+    await api('POST', `/api/v1/waiter/session/${opened.sessionId}/close`, { force: true }, WA);
+  }
+}
 
 // Официант закрывает стол; в закрытый визит гость больше ничего не добавляет
 r = await api('POST', `/api/v1/waiter/session/${s.sessionId}/close`, {}, W);

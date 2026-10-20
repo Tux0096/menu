@@ -9,10 +9,16 @@ import {
   pickAliveTerminalGroup, withIikoCreds,
 } from '../iiko-client.js';
 import { createWaiterNotification } from './waiter-notifications.js';
+import { attachCookInfo } from './cooking.js';
+import { SEES_ALL_ROLES } from '../lib/notification-rules.js';
+import { assignedText, unassignedText } from '../lib/notification-text.js';
+import { buildAwaiting } from '../lib/awaiting.js';
+import { loadCookNorms } from './cooking.js';
 import { getSource, listSources, MAIN, productSourceMap } from './sources.js';
 import { menuIndex, priceLine, priceVariant, stopProblems } from './menu-pricing.js';
 import { assertLunchRows } from './business-lunch.js';
 import { withSessionMutex } from '../lib/session-mutex.js';
+import { uuidOrNull } from '../lib/uuid.js';
 import {
   getSessionContext,
   getSessionContexts,
@@ -41,7 +47,10 @@ export async function listActiveSessions(restaurantId) {
        updated_at DESC`,
     [restaurantId],
   );
-  return (await getSessionContexts(rows.map((r) => r.id))).map((ctx) => mapSession(ctx));
+  const ctxs = await getSessionContexts(rows.map((r) => r.id));
+  const views = ctxs.map((ctx) => mapSession(ctx));
+  if (ctxs[0]) await attachCookInfo(views, ctxs[0].restaurant).catch(() => {});
+  return views;
 }
 
 function assertEditable(ctx, staff) {
@@ -52,22 +61,170 @@ function assertEditable(ctx, staff) {
   if (lockedByOther) throw httpError(409, 'Стол сейчас редактирует другой официант', { code: 'EDIT_LOCKED' });
 }
 
-/** Взять стол в работу (блокировка редактирования на 2 минуты). */
+/**
+ * Открыть стол для работы: блокировка редактирования на 2 минуты. Официантом стола НЕ назначает — это `assignSession`.
+ * Заказ гостя «принимается в работу» (статус, прочитанные уведомления) только у ведущего официанта стола.
+ */
 export async function takeSession(sessionId, staff) {
+  let mine = false;
   await withTransaction(async (client) => {
     const ctx = await lockSession(client, sessionId);
     assertEditable(ctx, staff);
+    mine = String(ctx.session.waiter_id || '') === String(staff.id);
     await client.query(
       `UPDATE table_sessions SET locked_by = $2, locked_until = NOW() + ($3 || ' milliseconds')::interval,
-         waiter_id = COALESCE(waiter_id, $2),
-         workflow_status = CASE WHEN workflow_status IN ('cart_ready', 'reorder_pending') THEN 'waiter_review' ELSE workflow_status END,
+         workflow_status = CASE WHEN $4 AND workflow_status IN ('cart_ready', 'reorder_pending') THEN 'waiter_review' ELSE workflow_status END,
          updated_at = NOW()
        WHERE id = $1`,
-      [sessionId, staff.id, String(EDIT_LOCK_MS)],
+      [sessionId, staff.id, String(EDIT_LOCK_MS), mine],
     );
   });
-  await markSessionNotificationsRead(sessionId);
+  if (mine) await markSessionNotificationsRead(sessionId);
   return getSessionView(sessionId);
+}
+
+async function loadAssignee(client, staffId, restaurantId) {
+  const { rows } = await client.query(
+    `SELECT id, name, role FROM staff_users
+     WHERE id = $1 AND is_active = TRUE AND role IN ('waiter', 'manager') AND (restaurant_id = $2 OR restaurant_id IS NULL)`,
+    [uuidOrNull(staffId), restaurantId],
+  );
+  if (!rows[0]) throw httpError(404, 'Официант не найден в этом ресторане');
+  return rows[0];
+}
+
+/**
+ * «Взять стол»: стол привязывается к официанту, уходит из «Общих» в его «Мои столы».
+ * Занятый стол — 409 с именем официанта. Управляющий может переназначить ({ staffId }) или взять стол себе.
+ * Возвращает вид стола и { changed, from } для журнала.
+ */
+export async function assignSession(sessionId, staff, { staffId = null } = {}) {
+  const manager = SEES_ALL_ROLES.has(staff.role);
+  const other = Boolean(staffId) && String(staffId) !== String(staff.id);
+  if (other && !manager) throw httpError(403, 'Назначать официанта на стол может только управляющий');
+  let out = null;
+  await withSessionMutex(sessionId, () => withTransaction(async (client) => {
+    const ctx = await lockSession(client, sessionId);
+    const { session, restaurant } = ctx;
+    if (session.status !== 'open') throw httpError(409, 'Стол уже закрыт');
+    const target = other ? await loadAssignee(client, staffId, restaurant.id) : { id: staff.id, name: staff.name };
+    const current = session.waiter_id ? String(session.waiter_id) : null;
+    if (current === String(target.id)) { out = { changed: false, target }; return; }
+    if (current && !manager) {
+      throw httpError(409, `Стол уже ведёт ${session.waiter_name || 'другой официант'}`, {
+        code: 'ALREADY_ASSIGNED', details: { waiterId: current, waiterName: session.waiter_name || null },
+      });
+    }
+    const lockedByOther = Boolean(session.locked_by) && String(session.locked_by) !== String(staff.id)
+      && Boolean(session.locked_until) && new Date(session.locked_until) > new Date();
+    const self = !other;
+    await client.query(
+      `UPDATE table_sessions SET waiter_id = $2, waiter_assigned_at = NOW(),
+         locked_by = CASE WHEN $3::boolean AND NOT $4::boolean THEN $5::uuid WHEN locked_by = $6::uuid THEN NULL ELSE locked_by END,
+         locked_until = CASE WHEN $3::boolean AND NOT $4::boolean THEN NOW() + ($7 || ' milliseconds')::interval
+                             WHEN locked_by = $6::uuid THEN NULL ELSE locked_until END,
+         workflow_status = CASE WHEN $3::boolean AND workflow_status IN ('cart_ready', 'reorder_pending') THEN 'waiter_review' ELSE workflow_status END,
+         updated_at = NOW()
+       WHERE id = $1`,
+      [sessionId, target.id, self, lockedByOther, staff.id, current, String(EDIT_LOCK_MS)],
+    );
+    out = { changed: true, from: current, target, restaurant, session };
+  }));
+  if (out.changed) {
+    // Закрываем общие уведомления стола для остальных и оставляем в ленте одно — «Стол N взял(а) Анна»
+    await markSessionNotificationsRead(sessionId);
+    const selfAssigned = String(out.target.id) === String(staff.id);
+    const note = await createWaiterNotification({
+      restaurantId: out.restaurant.id, sessionId, tableNumber: out.session.table_number,
+      type: NOTIFY_TYPES.TABLE_ASSIGNED,
+      ...assignedText({ table: out.session.table_number, name: out.target.name }),
+      payload: { sessionId, waiterId: out.target.id, waiterName: out.target.name, by: staff.id },
+      // Push — только тому, кого назначил управляющий
+      pushStaffIds: [String(out.target.id)],
+      push: !selfAssigned,
+    });
+    await pool.query(
+      'INSERT INTO waiter_notification_reads (notification_id, staff_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+      [note.id, staff.id],
+    );
+  }
+  return { view: await getSessionView(sessionId), changed: out.changed, from: out.from || null, target: out.target };
+}
+
+/** «Отдать в общие»: стол снова без официанта, уведомления по нему идут всем. Свой стол; управляющий — любой. */
+export async function unassignSession(sessionId, staff) {
+  const manager = SEES_ALL_ROLES.has(staff.role);
+  let out = null;
+  await withSessionMutex(sessionId, () => withTransaction(async (client) => {
+    const ctx = await lockSession(client, sessionId);
+    const { session, restaurant } = ctx;
+    const current = session.waiter_id ? String(session.waiter_id) : null;
+    if (!current) { out = { changed: false }; return; }
+    if (current !== String(staff.id) && !manager) {
+      throw httpError(403, `Это стол официанта ${session.waiter_name || ''}`.trim(), { code: 'NOT_YOUR_TABLE' });
+    }
+    await client.query(
+      `UPDATE table_sessions SET waiter_id = NULL, waiter_assigned_at = NULL,
+         locked_by = CASE WHEN locked_by = $2::uuid THEN NULL ELSE locked_by END,
+         locked_until = CASE WHEN locked_by = $2::uuid THEN NULL ELSE locked_until END,
+         updated_at = NOW()
+       WHERE id = $1`,
+      [sessionId, current],
+    );
+    out = { changed: true, from: current, fromName: session.waiter_name || null, restaurant, session };
+  }));
+  if (out.changed && out.session.status === 'open') {
+    await createWaiterNotification({
+      restaurantId: out.restaurant.id, sessionId, tableNumber: out.session.table_number,
+      type: NOTIFY_TYPES.TABLE_UNASSIGNED,
+      ...unassignedText({ table: out.session.table_number, name: out.fromName }),
+      payload: { sessionId, from: out.from },
+      pushStaffIds: null,
+    });
+  }
+  return { view: await getSessionView(sessionId), changed: out.changed, from: out.from || null };
+}
+
+/** Официант сам открыл стол («+ Открыть стол»): стол сразу его, если у стола ещё нет официанта */
+export async function openAndTake(sessionId, staff) {
+  let assigned = false;
+  try {
+    assigned = (await assignSession(sessionId, staff)).changed;
+  } catch (e) {
+    if (e.code !== 'ALREADY_ASSIGNED') throw e;
+    return { view: await getSessionView(sessionId), assigned: false }; // чужой стол — только просмотр, без блокировки
+  }
+  return { view: await takeSession(sessionId, staff), assigned };
+}
+
+/** Официанты точки для выбора управляющим: с открытой сменой (входил недавно) — выше */
+export async function listRestaurantWaiters(restaurantId) {
+  const { rows } = await pool.query(
+    `SELECT id, name, role, (last_login_at > NOW() - INTERVAL '14 hours') AS on_shift
+     FROM staff_users
+     WHERE is_active = TRUE AND role IN ('waiter', 'manager') AND (restaurant_id = $1 OR restaurant_id IS NULL)
+     ORDER BY (last_login_at > NOW() - INTERVAL '14 hours') DESC NULLS LAST, name`,
+    [restaurantId],
+  );
+  return rows.map((r) => ({ id: r.id, name: r.name, role: r.role, onShift: Boolean(r.on_shift) }));
+}
+
+/** «Выдача»: отправленные на кухню и не вынесенные позиции открытых столов точки (видно всем официантам) */
+export async function listAwaiting(restaurantId, q = '') {
+  const { rows } = await pool.query(
+    `SELECT i.id, i.session_id, i.name, i.quantity, i.guest_name, i.seat_number, i.kitchen_status,
+            i.sent_at, i.ready_notified_at, i.updated_at, i.iiko_product_id, i.cooking_started_at, i.ready_at, i.cook_minutes,
+            s.table_number, s.waiter_id, w.name AS waiter_name
+     FROM table_order_items i
+     JOIN table_sessions s ON s.id = i.session_id
+     LEFT JOIN staff_users w ON w.id = s.waiter_id
+     WHERE s.restaurant_id = $1 AND s.status = 'open' AND i.is_locked
+       AND i.served_at IS NULL AND i.kitchen_status IS DISTINCT FROM 'Served'`,
+    [restaurantId],
+  );
+  const { rows: [restaurant] } = await pool.query('SELECT * FROM restaurants WHERE id = $1', [restaurantId]);
+  const norms = await loadCookNorms(restaurant, rows.map((r) => r.iiko_product_id)).catch(() => new Map());
+  return buildAwaiting(rows, q, Date.now(), norms);
 }
 
 /**
@@ -172,7 +329,7 @@ export async function updateOrder(sessionId, staff, { items = [], guestCount, se
          workflow_status = CASE WHEN workflow_status IN ('browsing','building_cart','cart_ready','reorder_pending')
                                 THEN 'waiter_review' ELSE workflow_status END,
          locked_by = $3, locked_until = NOW() + ($4 || ' milliseconds')::interval,
-         waiter_id = COALESCE(waiter_id, $3), seat_names = $5::jsonb, updated_at = NOW()
+         seat_names = $5::jsonb, updated_at = NOW()
        WHERE id = $1`,
       [sessionId, gc, staff.id, String(EDIT_LOCK_MS), JSON.stringify(names)],
     );
@@ -443,13 +600,12 @@ async function sendToKitchenNow(sessionId, staff) {
        iiko_table_id = COALESCE($4, iiko_table_id), iiko_last_error = $5,
        workflow_status = CASE WHEN $6 AND workflow_status <> 'bill_requested' THEN $7 ELSE workflow_status END,
        sent_to_production_at = CASE WHEN $6 THEN NOW() ELSE sent_to_production_at END,
-       waiter_id = COALESCE(waiter_id, $8),
        locked_by = CASE WHEN $6 AND $5::text IS NULL THEN NULL ELSE locked_by END,
        locked_until = CASE WHEN $6 AND $5::text IS NULL THEN NULL ELSE locked_until END,
        wait_notified_at = NULL, updated_at = NOW()
      WHERE id = $1`,
     [sessionId, JSON.stringify(orders), orders[MAIN]?.orderId || null, orders[MAIN]?.tableId || null,
-      errorText, sentIds.length > 0, WORKFLOW.IN_PRODUCTION, staff.id],
+      errorText, sentIds.length > 0, WORKFLOW.IN_PRODUCTION],
   );
   if (errors.length) {
     await createWaiterNotification({
@@ -457,7 +613,7 @@ async function sendToKitchenNow(sessionId, staff) {
       sessionId,
       tableNumber: session.table_number,
       type: NOTIFY_TYPES.IIKO_ERROR,
-      title: `Стол №${session.table_number} — ошибка iiko`,
+      title: `Стол ${session.table_number} · Ошибка iiko`,
       body: `${errorText}.${sentIds.length ? ' Остальное отправлено.' : ''} Не отправленное сохранено, можно повторить.`,
       payload: { sessionId },
     });

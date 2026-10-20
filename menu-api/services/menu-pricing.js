@@ -27,6 +27,7 @@ export async function menuIndex(restaurant) {
       sizes: p.sizes || [],
       groups: p.modifierGroups || [],
       needsChoice: Boolean(p.needsChoice), // набор за 0 ₽ — только с платным выбором
+      cookingMinutes: p.cookingMinutes ?? null, // норматив готовки из iiko, мин
       lunch: p.lunchCombo ? catalog.businessLunch?.schedule || null : null, // набор бизнес-ланча — расписание точки
     };
     if (p.id) index.set(String(p.id), entry);

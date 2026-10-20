@@ -9,11 +9,12 @@ import { iikoStaffLoginEnabled } from '../services/iiko-staff.js';
 import { isPushEnabled, registerDevice, unregisterDevice } from '../services/push.js';
 import { enterTable, getSessionView, markServed, resolveRestaurant } from '../services/table-session.js';
 import {
-  closeSession, getHallDashboard, listActiveSessions, releaseSession, sendToKitchen, takeSession, updateOrder,
+  assignSession, closeSession, getHallDashboard, listActiveSessions, listAwaiting, listRestaurantWaiters, openAndTake,
+  releaseSession, sendToKitchen, takeSession, unassignSession, updateOrder,
 } from '../services/waiter.js';
-import {
-  getWaiterTables, listWaiterNotifications, markAllNotificationsRead, markNotificationRead, setWaiterTables,
-} from '../services/waiter-notifications.js';
+import { listWaiterNotifications, markAllNotificationsRead, markNotificationRead } from '../services/waiter-notifications.js';
+import { httpError } from '../lib/http.js';
+import { SEES_ALL_ROLES } from '../lib/notification-rules.js';
 import { listFeedback, listRestaurants } from '../services/admin.js';
 import { assertStaffSession, staffRestaurant } from '../lib/staff-scope.js';
 import { getRestaurantCatalog } from '../services/catalog.js';
@@ -66,22 +67,11 @@ waiter.param('id', async (req, res, next, id) => {
 });
 waiter.get('/notifications', h(async (req) => {
   const r = await staffRestaurant(req);
-  return listWaiterNotifications(r.id, { unreadOnly: req.query.unread === '1', staffId: req.staff.id });
+  return listWaiterNotifications(r.id, { unreadOnly: req.query.unread === '1', staff: req.staff });
 }));
 waiter.post('/notifications/read-all', h(async (req) => {
   const r = await staffRestaurant(req);
   await markAllNotificationsRead(r.id, req.staff.id);
-}));
-// «Мои столы»: за какие столы официант отвечает — уведомления и push по ним приходят ему
-waiter.get('/my-tables', h(async (req) => {
-  const r = await staffRestaurant(req);
-  return { ...(await getWaiterTables(r.id, req.staff.id)), tablesCount: r.tables_count || 20 };
-}));
-waiter.put('/my-tables', h(async (req) => {
-  const r = await staffRestaurant(req);
-  const res = await setWaiterTables(r.id, req.staff.id, req.body?.tables, r.tables_count || 20);
-  audit(req.staff, 'waiter.tables', 'restaurant', r.id, { tables: res.tables });
-  return { ...res, tablesCount: r.tables_count || 20 };
 }));
 waiter.post('/notifications/:id/read', h(async (req) => { await markNotificationRead(req.params.id, (await staffRestaurant(req)).id, req.staff.id); }));
 // Стоп-лист для приёма заказа: что закончилось и что осталось в ограниченном количестве (только блюда меню)
@@ -130,16 +120,27 @@ waiter.get('/hall', h(async (req) => {
         waitingMinutes: x?.waitingMinutes ?? null,
         isOverdue: Boolean(x?.isOverdue),
         openedAt: x?.createdAt || null,
+        waiterId: x?.waiterId || null,
+        waiterName: x?.waiterName || null,
         mine: Boolean(x && x.waiterId && x.waiterId === req.staff.id),
       };
     }),
   };
 }));
-// Официант сам открывает стол (гость без QR) — дальше заказ как обычно
+// Официант сам открывает стол (гость без QR) — стол сразу его, дальше заказ как обычно
 waiter.post('/tables/:number/open', h(async (req) => {
   const r = await staffRestaurant(req);
   const view = await enterTable({ restaurantSlug: r.slug, tableNumber: req.params.number, guest: null, byStaff: true });
-  return takeSession(view.sessionId, req.staff);
+  const { view: opened, assigned } = await openAndTake(view.sessionId, req.staff);
+  if (assigned) audit(req.staff, 'table.assign', 'session', view.sessionId, { table: opened.tableNumber, opened: true });
+  return opened;
+}));
+// «Выдача»: блюда, которые ждут выноса, по всем открытым столам точки — видно всем официантам (вынести может любой)
+waiter.get('/awaiting', h(async (req) => listAwaiting((await staffRestaurant(req)).id, String(req.query.q || '').slice(0, 100))));
+// Официанты точки — управляющему для назначения на стол
+waiter.get('/waiters', h(async (req) => {
+  if (!SEES_ALL_ROLES.has(req.staff.role)) throw httpError(403, 'Недостаточно прав');
+  return listRestaurantWaiters((await staffRestaurant(req)).id);
 }));
 // Телефон официанта для push-уведомлений
 waiter.post('/devices', h(async (req) => {
@@ -159,6 +160,21 @@ waiter.get('/session/:id', h(async (req) => {
   return getSessionView(req.params.id);
 }));
 waiter.post('/session/:id/take', h(async (req) => takeSession(req.params.id, req.staff)));
+// «Взять стол»: стол уходит из «Общих» в «Мои». Занят — 409 с именем официанта; управляющий переназначает ({ staffId })
+waiter.post('/session/:id/assign', h(async (req) => {
+  const res = await assignSession(req.params.id, req.staff, { staffId: req.body?.staffId || null });
+  if (res.changed) {
+    audit(req.staff, 'table.assign', 'session', req.params.id,
+      { table: res.view.tableNumber, waiterId: res.target.id, waiterName: res.target.name, from: res.from });
+  }
+  return res.view;
+}));
+// «Отдать в общие»: стол снова без официанта
+waiter.post('/session/:id/unassign', h(async (req) => {
+  const res = await unassignSession(req.params.id, req.staff);
+  if (res.changed) audit(req.staff, 'table.unassign', 'session', req.params.id, { table: res.view.tableNumber, from: res.from });
+  return res.view;
+}));
 waiter.post('/session/:id/served', h(async (req) => markServed(req.params.id, req.body?.itemIds)));
 waiter.post('/session/:id/release', h(async (req) => releaseSession(req.params.id, req.staff)));
 waiter.post('/session/:id/cart', h(async (req) => {

@@ -19,6 +19,10 @@
     restaurant: ls.get('restaurant'),
     restaurants: [],
     tab: ls.get('tab', 'tables'),
+    wview: ls.get('wview', 'common'), // common | mine | notes | serve
+    serveQ: '',
+    serve: null,
+    waiters: null,
     notes: [],
     sessions: [],
     openId: null,
@@ -251,16 +255,16 @@
 
   // ── Официант ───────────────────────────────────────────────
   async function loadWaiter() {
-    const [notes, sessions, mine] = await Promise.all([
+    const [notes, sessions] = await Promise.all([
       api('GET', '/api/v1/waiter/notifications'),
       api('GET', '/api/v1/waiter/sessions'),
-      api('GET', '/api/v1/waiter/my-tables').catch(() => null),
     ]);
-    if (mine) S.myTables = { ...mine, draft: S.myTables?.dirty ? S.myTables.draft : new Set(mine.tables), dirty: Boolean(S.myTables?.dirty) };
+    loadWaiters();
     const fresh = notes.filter((n) => !n.is_read && !S.lastUnreadIds.has(n.id));
     if (S.lastUnreadIds.size && fresh.length) {
       beep();
-      if (fresh.some((n) => n.type === 'dish_ready')) { setTimeout(beep, 400); if (navigator.vibrate) navigator.vibrate([200, 100, 200]); }
+      // «Готово» и «долго ждут» — двойной сигнал и вибрация
+      if (fresh.some((n) => ['dish_ready', 'wait_too_long'].includes(n.type))) { setTimeout(beep, 400); if (navigator.vibrate) navigator.vibrate([200, 100, 200]); }
       toast(`${fresh[0].title}: ${fresh[0].body}`);
     }
     S.lastUnreadIds = new Set(notes.filter((n) => !n.is_read).map((n) => n.id));
@@ -297,6 +301,8 @@
     const seats = Array.from({ length: Math.max(e.guestCount, guests.length, 1) }, (_, i) => i + 1);
     const nameOf = (n) => guests.find((g) => g.seat === n)?.name || e.seatNames?.[n] || `Гость ${n}`;
     const lockedByOther = s.lockedBy && s.lockedBy !== S.staff.id;
+    const mineTable = s.waiterId === S.staff.id;
+    const canGive = s.status === 'open' && s.waiterId && (mineTable || isManagerRole());
     const pending = e.items.filter((i) => !i.isLocked);
     const pendingQty = pending.reduce((n, i) => n + i.quantity, 0);
     if (S.pickSeat && !seats.includes(S.pickSeat)) S.pickSeat = null;
@@ -310,7 +316,7 @@
       if (it.isLocked) {
         return `<div class="trow is-sent ${served ? 'is-served' : ''} ${it.isReady ? 'is-ready' : ''}">
           <div class="trow__main"><div class="trow__name">${esc(nameOnly(it))} <span class="muted">×${it.quantity}</span></div>${optsLine(it)}
-            <div class="trow__meta">${src}${stagePill(it)}${it.course ? ` · курс ${it.course}` : ''}</div></div>
+            <div class="trow__meta">${src}${stagePill(it)}${it.course ? ` · курс ${it.course}` : ''}${cookLine(it)}</div></div>
           ${it.isReady && !served ? `<button class="btn btn--sm btn--dark" data-served-item="${esc(it.id)}">Вынесено</button>` : `<b class="trow__sum">${rub(it.price * it.quantity)}</b>`}
         </div>`;
       }
@@ -337,11 +343,14 @@
       <div class="tscreen__head">
         <button class="back-btn" data-hide-editor aria-label="К списку столов"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
         <div class="tscreen__title"><div class="h2" style="margin:0">Стол №${esc(s.tableNumber)}</div>
-          <div class="muted" style="font-size:12px">Открыт ${time(s.createdAt)}${s.waitingMinutes != null ? ` · ждёт ${s.waitingMinutes} мин` : ''}${s.guest?.visitsCount ? ` · визитов: ${s.guest.visitsCount}` : ''}</div></div>
+          <div class="muted" style="font-size:12px">Открыт ${time(s.createdAt)}${s.waitingMinutes != null ? ` · ждёт ${s.waitingMinutes} мин` : ''}${s.guest?.visitsCount ? ` · визитов: ${s.guest.visitsCount}` : ''}${s.waiterId ? ` · ${mineTable ? 'мой стол' : esc(s.waiterName || 'официант')}` : ' · общий'}</div></div>
         ${statusPill(s)}
+        ${canGive ? `<div class="tmenu-wrap"><button class="icon-btn tmenu-btn" data-tmenu aria-label="Меню стола" aria-expanded="${Boolean(S.tmenu)}">⋯</button>
+          ${S.tmenu ? '<div class="tmenu"><button class="tmenu__item" data-unassign>Отдать в общие</button></div>' : ''}</div>` : ''}
       </div>
       ${s.openedInIiko ? `<div class="note-box">Открыт на кассе${s.iikoWaiterName ? ` · официант ${esc(s.iikoWaiterName)}` : ''}. Блюда удаляйте и отменяйте на кассе iiko — здесь они обновятся сами.</div>` : ''}
       ${(s.removedItems || []).filter((r) => Date.now() - new Date(r.at).getTime() < 30 * 60_000).length ? `<div class="note-box note-box--warn"><b>На кассе удалено:</b> ${s.removedItems.filter((r) => Date.now() - new Date(r.at).getTime() < 30 * 60_000).slice(-5).reverse().map((r) => `${esc(r.name)} ×${r.quantity}`).join('; ')}</div>` : ''}
+      ${assignBoxHtml(s)}
       ${lockedByOther ? '<div class="error-box">Стол сейчас редактирует другой официант</div>' : ''}
       ${s.readyCount ? `<div class="ready-box"><span>🔔 Готово на кухне: ${s.items.filter((i) => i.isReady).map((i) => `${esc(i.name)} ×${i.quantity}${i.guestName ? ` — ${esc(i.guestName)}` : ''}`).join(', ')}</span>
         <button class="btn btn--sm btn--dark" data-served>Вынесено всё</button></div>` : ''}
@@ -415,54 +424,58 @@
     tables: {
       async render() {
         await loadWaiter();
+        if (S.wview === 'serve') await loadServe();
+        const me = S.staff.id;
+        const isMgr = isManagerRole();
         const unread = S.notes.filter((n) => !n.is_read);
         const open = S.sessions.filter((x) => x.status === 'open' || x.sessionId === S.openId);
         const unreadBy = new Set(unread.map((n) => n.session_id));
         // Сверху — столы, которые ждут официанта: новый заказ/дозаказ, счёт, готовые блюда, долгое ожидание, вызов
         const needs = (x) => ['cart_ready', 'reorder_pending', 'bill_requested'].includes(x.workflowStatus) || x.readyCount > 0 || x.isOverdue || unreadBy.has(x.sessionId);
-        const hot = open.filter(needs);
-        const rest = open.filter((x) => !needs(x));
-        const myList = S.myTables?.tables || [];
-        const isMine = (x) => myList.includes(String(x.tableNumber));
-        const card = (x) => `<button class="tcard ${S.openId === x.sessionId ? 'is-open' : ''} ${needs(x) ? 'is-hot' : ''}" data-open="${esc(x.sessionId)}">
-          <div class="tcard__num">${esc(x.tableNumber)}${isMine(x) ? '<span class="tcard__mine" title="Мой стол">★</span>' : ''}</div>
-          <div class="tcard__body">
-            <div class="tcard__pills">${statusPill(x)}${x.openedInIiko ? ' <span class="pill" data-tone="work" title="Заказ открыт на кассе iiko">открыт на кассе</span>' : ''}${x.readyCount ? ` <span class="pill" data-tone="bad">🔔 Готово ${x.readyCount}</span>` : ''}${x.isOverdue ? ` <span class="overdue">⏱ ${x.waitingMinutes} мин</span>` : ''}</div>
-            <div class="tcard__guest">${esc((x.guests || []).length ? x.guests.map((g) => g.name).join(', ') : (x.guest?.name || (x.openedInIiko ? `Заказ на кассе${x.iikoWaiterName ? ` · ${x.iikoWaiterName}` : ''}` : 'Гость')))}${x.pendingCount ? ` · новых: ${x.pendingCount}` : ''}</div>
-          </div>
-          <div class="tcard__sum">${rub(x.total)}</div>
-        </button>`;
+        // «Общие» — открытые столы без официанта, «Мои» — назначенные на меня; чужие видит только управляющий
+        const common = open.filter((x) => !x.waiterId);
+        const mineList = open.filter((x) => x.waiterId === me);
+        const others = open.filter((x) => x.waiterId && x.waiterId !== me);
+        const card = (x, take = false) => `<div class="tcard-wrap ${S.openId === x.sessionId ? 'is-open' : ''} ${needs(x) ? 'is-hot' : ''}">
+          <button class="tcard" data-open="${esc(x.sessionId)}">
+            <div class="tcard__num">${esc(x.tableNumber)}</div>
+            <div class="tcard__body">
+              <div class="tcard__pills">${statusPill(x)}${x.openedInIiko ? ' <span class="pill" data-tone="work" title="Заказ открыт на кассе iiko">открыт на кассе</span>' : ''}${x.readyCount ? ` <span class="pill" data-tone="bad">🔔 Готово ${x.readyCount}</span>` : ''}${x.isOverdue ? ` <span class="overdue">⏱ ${x.waitingMinutes} мин</span>` : ''}</div>
+              <div class="tcard__guest">${esc((x.guests || []).length ? x.guests.map((g) => g.name).join(', ') : (x.guest?.name || (x.openedInIiko ? `Заказ на кассе${x.iikoWaiterName ? ` · ${x.iikoWaiterName}` : ''}` : 'Гость')))}${x.pendingCount ? ` · новых: ${x.pendingCount}` : ''}${x.waiterId && x.waiterId !== me ? ` · ${esc(x.waiterName || 'официант')}` : ''}</div>
+            </div>
+            <div class="tcard__sum">${rub(x.total)}</div>
+          </button>
+          ${take ? `<button class="btn btn--dark tcard__take" data-assign="${esc(x.sessionId)}">Взять стол</button>` : ''}
+        </div>`;
+        const section = (list, hotTitle, restTitle, take) => {
+          const hot = list.filter(needs); const rest = list.filter((x) => !needs(x));
+          return `${hot.length ? `<div class="tsection">${hotTitle} · ${hot.length}</div><div class="tlist">${hot.map((x) => card(x, take)).join('')}</div>` : ''}
+            ${rest.length ? `<div class="tsection">${hot.length ? 'Остальные' : restTitle} · ${rest.length}</div><div class="tlist">${rest.map((x) => card(x, take)).join('')}</div>` : ''}`;
+        };
         const openBtn = '<button class="btn btn--sm btn--dark open-table-btn" data-open-table-pick>+ Открыть стол</button>';
-        const tablesHtml = openBtn + (open.length
-          ? `${hot.length ? `<div class="tsection">Ждут вас · ${hot.length}</div><div class="tlist">${hot.map(card).join('')}</div>` : ''}
-             ${rest.length ? `<div class="tsection">${hot.length ? 'Остальные' : 'Активные столы'} · ${rest.length}</div><div class="tlist">${rest.map(card).join('')}</div>` : ''}`
-          : '<div class="empty-note">Нет активных столов. Когда гость отсканирует QR, стол появится здесь. Гость без QR — «+ Открыть стол».</div>');
+        const commonHtml = openBtn + (common.length || (isMgr && others.length)
+          ? `${section(common, 'Ждут официанта', 'Столы без официанта', true)}
+             ${isMgr && others.length ? `<div class="tsection">Ведут другие официанты · ${others.length}</div><div class="tlist">${others.map((x) => card(x)).join('')}</div>` : ''}`
+          : '<div class="empty-note">Нет столов без официанта. Когда гость отсканирует QR, стол появится здесь — его может взять любой официант. Гость без QR — «+ Открыть стол».</div>');
+        const mineHtml = openBtn + (mineList.length
+          ? section(mineList, 'Ждут вас', 'Мои столы', false)
+          : '<div class="empty-note">У вас пока нет столов. Откройте стол из вкладки «Общие» и нажмите «Взять стол» — он появится здесь.</div>');
         const notesHtml = `<div class="toolbar" style="margin-bottom:8px"><div class="grow muted">${unread.length ? `Непрочитанных: ${unread.length}` : 'Все прочитаны'}</div>
             ${unread.length ? '<button class="btn btn--sm" data-read-all>Прочитать все</button>' : ''}</div>
           <div class="feed">${S.notes.length ? S.notes.map((n) => `<button class="note ${n.is_read ? '' : 'is-unread'}" data-type="${esc(n.type)}" data-note="${esc(n.id)}" data-session="${esc(n.session_id || '')}">
             <div class="note__head"><span>${esc(n.title)}</span><span class="note__time">${time(n.created_at)}</span></div>
-            <div class="note__body">${esc(n.body)}</div></button>`).join('') : '<div class="muted">Пока тихо</div>'}</div>`;
-        const view = ['notes', 'mine'].includes(S.wview) ? S.wview : 'tables';
-        // «Мои столы»: за какие столы отвечаю — уведомления и push только по ним (плюс столы без ответственного)
-        const mt = S.myTables;
-        const mineHtml = !mt ? '<div class="muted">Загружаем…</div>' : `<p class="muted" style="margin:0 0 10px;font-size:13px">
-            Отметьте свои столы — уведомления и push будут приходить по ним, по столам, которые вы ведёте, и по столам, за которые никто не отвечает.
-            Ничего не отмечено — приходят по всем столам.</p>
-          <div class="mt-grid">${Array.from({ length: mt.tablesCount || 20 }, (_, i) => String(i + 1)).map((n) => {
-            const on = mt.draft.has(n); const who = mt.others?.[n];
-            return `<button class="mt-cell ${on ? 'is-on' : ''}" data-my-table="${n}" aria-pressed="${on}"><b>${n}</b>${who ? `<small>${esc(who.join(', '))}</small>` : ''}</button>`;
-          }).join('')}</div>
-          <div class="mt-bar"><span class="muted grow">${mt.draft.size ? `Выбрано: ${mt.draft.size}` : 'Все столы'}</span>
-            ${mt.draft.size ? '<button class="btn btn--sm" data-my-clear>Снять все</button>' : ''}
-            <button class="btn btn--sm btn--dark" data-my-save ${mt.dirty ? '' : 'disabled'}>Сохранить</button></div>`;
+            <div class="note__body">${esc(n.body)}${isMgr && n.table_waiter_name ? ` <span class="muted">· ${esc(n.table_waiter_name)}</span>` : ''}</div></button>`).join('') : '<div class="muted">Пока тихо</div>'}</div>`;
+        const view = ['common', 'mine', 'notes', 'serve'].includes(S.wview) ? S.wview : 'common';
+        const tabBtn = (k, label, badge = '') => `<button class="${view === k ? 'is-on' : ''}" data-wview="${k}">${label}${badge}</button>`;
         return `<div class="waiter ${S.openId && S.edit ? 'has-open' : ''}">
           <section class="waiter__list">
-            <div class="seg seg--wide seg--tabs" role="tablist">
-              <button class="${view === 'tables' ? 'is-on' : ''}" data-wview="tables">Столы · ${open.length}</button>
-              <button class="${view === 'notes' ? 'is-on' : ''}" data-wview="notes">Уведомления${unread.length ? ` <span class="dot-inline">${unread.length}</span>` : ''}</button>
-              <button class="${view === 'mine' ? 'is-on' : ''}" data-wview="mine">Мои столы${S.myTables?.tables?.length ? ` · ${S.myTables.tables.length}` : ''}</button>
+            <div class="seg seg--wide seg--tabs seg--4" role="tablist">
+              ${tabBtn('common', `Общие · ${common.length}`)}
+              ${tabBtn('mine', `Мои · ${mineList.length}`)}
+              ${tabBtn('notes', 'Уведомления', unread.length ? ` <span class="dot-inline">${unread.length}</span>` : '')}
+              ${tabBtn('serve', 'Выдача')}
             </div>
-            ${view === 'notes' ? notesHtml : view === 'mine' ? mineHtml : tablesHtml}
+            ${view === 'notes' ? notesHtml : view === 'mine' ? mineHtml : view === 'serve' ? serveHtml() : commonHtml}
           </section>
           <section class="waiter__table">${editorHtml() || '<div class="empty-note hide-sm">Выберите стол слева</div>'}</section>
         </div>`;
@@ -1004,11 +1017,105 @@
   }
   function closeModal() { $('#modal-root').innerHTML = ''; }
 
+  // ── Общие / мои столы, «Выдача» ────────────────────────────
+  const isManagerRole = () => ['manager', 'admin'].includes(S.staff?.role);
+
+  /** Свежий вид стола с сервера — в список и в открытый экран (несохранённые правки не затираем) */
+  function applySession(s) {
+    const i = S.sessions.findIndex((x) => x.sessionId === s.sessionId);
+    if (i >= 0) S.sessions[i] = s; else S.sessions.unshift(s);
+    if (S.openId === s.sessionId && S.edit && !S.edit.dirty) S.edit = editFrom(s);
+  }
+
+  async function loadWaiters() {
+    if (!isManagerRole() || S.waiters) return;
+    S.waiters = await api('GET', '/api/v1/waiter/waiters').catch(() => null);
+  }
+
+  /** Блок «Взять стол» на экране стола: общий — крупная кнопка, чужой — кто ведёт, управляющему — выбор официанта */
+  function assignBoxHtml(s) {
+    if (s.status !== 'open') return '';
+    const mgr = isManagerRole();
+    const mine = s.waiterId === S.staff.id;
+    let box = '';
+    if (!s.waiterId) {
+      box = `<div class="take-box"><div><b>Стол без официанта</b><div class="muted">Уведомления по нему приходят всем официантам</div></div>
+        <button class="btn btn--dark btn--lg" data-assign="${esc(s.sessionId)}">Взять стол</button></div>`;
+    } else if (!mine) {
+      box = `<div class="take-box is-other"><div>Стол ведёт <b>${esc(s.waiterName || 'другой официант')}</b></div>
+        ${mgr ? `<button class="btn btn--sm" data-assign="${esc(s.sessionId)}">Взять себе</button>` : ''}</div>`;
+    }
+    if (mgr) {
+      const list = S.waiters || [];
+      const opt = (w) => `<option value="${esc(w.id)}" ${w.id === s.waiterId ? 'selected' : ''}>${esc(w.name)}</option>`;
+      const onShift = list.filter((w) => w.onShift); const rest = list.filter((w) => !w.onShift);
+      box += `<div class="mgr-assign"><span class="muted">Официант стола</span>
+        <select class="sel sel--sm" data-assign-pick aria-label="Официант стола"><option value="">Выберите официанта…</option>
+          ${onShift.length ? `<optgroup label="На смене">${onShift.map(opt).join('')}</optgroup>` : ''}
+          ${rest.length ? `<optgroup label="${onShift.length ? 'Остальные официанты' : 'Все официанты'}">${rest.map(opt).join('')}</optgroup>` : ''}</select>
+        <button class="btn btn--sm btn--dark" data-assign-to>Назначить</button></div>`;
+    }
+    return box;
+  }
+
+  async function loadServe() {
+    S.serve = await api('GET', `/api/v1/waiter/awaiting?q=${encodeURIComponent(S.serveQ || '')}`).catch(() => S.serve || { dishes: [], items: [] });
+  }
+
+  /** Время готовки позиции: «готовится 12 мин из ~15» (жёлтое — дольше норматива, красное — в 1,5 раза), «готово, ждёт выноса 4 мин», «приготовлено за 14 мин» */
+  const cookLine = (it) => (it.cook ? `<span class="cook is-${it.cook.state === 'cooking' ? it.cook.level : 'ok'}">${esc(it.cook.text)}</span>` : '');
+  const waitText = (m) => (m == null || m < 1 ? 'только что' : `${m} мин`);
+
+  /** «Выдача»: поиск по блюдам, которые ждут выноса, и столы, где их ждут */
+  function serveHtml() {
+    const d = S.serve || { dishes: [], items: [] };
+    const q = S.serveQ || '';
+    const needle = q.trim().toLowerCase().replace(/ё/g, 'е');
+    const chips = d.dishes.filter((x) => !needle || x.name.toLowerCase().replace(/ё/g, 'е').includes(needle)).slice(0, 14);
+    const row = (i) => `<div class="srow is-${i.level} ${i.state === 'ready' ? 'is-ready' : ''}">
+        <button class="srow__main" data-open="${esc(i.sessionId)}">
+          <div class="srow__title">Стол <b>${esc(i.tableNumber)}</b>${i.guestName ? ` — ${esc(i.guestName)}` : ''}, ×${i.quantity}</div>
+          <div class="srow__name">${esc(i.name)}</div>
+          <div class="srow__meta"><span class="cook is-${i.level}">${esc(i.cook?.text || `${i.state === 'ready' ? 'ждут' : 'на кухне'} ${waitText(i.waitingMinutes)}`)}</span>${i.waiterName ? ` · ${esc(i.waiterName)}` : ''}</div>
+        </button>
+        <button class="btn btn--sm ${i.state === 'ready' ? 'btn--dark' : ''}" data-await-served="${esc(i.itemId)}" data-session="${esc(i.sessionId)}">Вынесено</button>
+      </div>`;
+    const ready = d.items.filter((i) => i.state === 'ready'); const cooking = d.items.filter((i) => i.state !== 'ready');
+    const group = (title, list) => (list.length ? `<div class="tsection">${title} · ${list.length}</div><div class="tlist">${list.map(row).join('')}</div>` : '');
+    return `<div class="serve">
+      <div class="serve__search"><input class="inp" id="serve-q" type="search" placeholder="Что вынести? Например, «Филадельфия»" value="${esc(q)}" autocomplete="off" enterkeyhint="search">
+        ${q ? '<button class="icon-btn" data-serve-clear aria-label="Сбросить">×</button>' : ''}</div>
+      ${chips.length ? `<div class="serve__chips">${chips.map((x) => `<button class="chip ${x.name === q ? 'is-on' : ''}" data-serve-pick="${esc(x.name)}">${esc(x.name)} <b>×${x.quantity}</b>${x.ready ? '<i class="chip__dot" title="Готово"></i>' : ''}</button>`).join('')}</div>` : ''}
+      <div id="serve-results">${d.items.length ? `${group('Готово — выносить', ready)}${group('Готовится', cooking)}`
+    : `<div class="empty-note">${q ? 'Такого блюда сейчас никто не ждёт.' : 'Все блюда вынесены. Здесь появятся позиции, отправленные на кухню и ещё не вынесенные.'}</div>`}</div>
+    </div>`;
+  }
+
+  let serveT;
+  /** Поиск по мере ввода: перерисовываем только список — поле ввода и клавиатура остаются */
+  function serveSearch(value) {
+    S.serveQ = value;
+    clearTimeout(serveT);
+    serveT = setTimeout(async () => {
+      await loadServe();
+      const box = $('#serve-results');
+      if (!box || S.wview !== 'serve') return;
+      const tmp = document.createElement('div'); tmp.innerHTML = serveHtml();
+      box.innerHTML = $('#serve-results', tmp).innerHTML;
+      const chips = $('.serve__chips'); const fresh = $('.serve__chips', tmp);
+      if (chips && fresh) chips.innerHTML = fresh.innerHTML; else if (chips) chips.remove();
+    }, 200);
+  }
+
   // ── Официант: действия ─────────────────────────────────────
   async function openTable(sessionId) {
-    S.openId = sessionId; S.productSearch = '';
+    S.openId = sessionId; S.productSearch = ''; S.tmenu = false;
+    const cur = S.sessions.find((x) => x.sessionId === sessionId);
     try {
-      const s = await api('POST', `/api/v1/waiter/session/${sessionId}/take`);
+      // Просмотр стола его не назначает и не блокирует: блокировка — на своём столе, на общем и чужом она берётся при правке
+      const s = cur && cur.waiterId === S.staff.id
+        ? await api('POST', `/api/v1/waiter/session/${sessionId}/take`)
+        : await api('GET', `/api/v1/waiter/session/${sessionId}`);
       const idx = S.sessions.findIndex((x) => x.sessionId === sessionId);
       if (idx >= 0) S.sessions[idx] = s; else S.sessions.unshift(s);
       S.edit = editFrom(s);
@@ -1267,7 +1374,50 @@
         return;
       }
       if (q('[data-open]')) { await openTable(q('[data-open]').dataset.open); return; }
-      if (q('[data-wview]')) { S.wview = q('[data-wview]').dataset.wview; render(); return; }
+      if (q('[data-wview]')) { S.wview = q('[data-wview]').dataset.wview; ls.set('wview', S.wview); render(); return; }
+      if (q('[data-serve-pick]')) { S.serveQ = q('[data-serve-pick]').dataset.servePick; render(); return; }
+      if (q('[data-serve-clear]')) { S.serveQ = ''; render(); return; }
+      // «Вынесено» прямо в строке «Выдачи»: отметка по позиции, вынести может любой официант точки
+      if (q('[data-await-served]')) {
+        const b = q('[data-await-served]'); if (b.disabled) return; b.disabled = true;
+        try {
+          await api('POST', `/api/v1/waiter/session/${b.dataset.session}/served`, { itemIds: [b.dataset.awaitServed] });
+          toast('Отмечено: вынесено');
+        } catch (err) { b.disabled = false; toast(err.message, true); }
+        render(); return;
+      }
+      if (q('[data-tmenu]')) { S.tmenu = !S.tmenu; render(); return; }
+      // «Взять стол» (с карточки и с экрана стола) / «Взять себе» у управляющего
+      if (q('[data-assign]')) {
+        const b = q('[data-assign]'); if (b.disabled) return; b.disabled = true;
+        try {
+          const s = await api('POST', `/api/v1/waiter/session/${b.dataset.assign}/assign`, {});
+          applySession(s); toast(`Стол №${s.tableNumber} теперь ваш`);
+        } catch (err) {
+          toast(err.message, true);
+          if (err.status === 409) await loadWaiter().catch(() => {});
+        }
+        render(); return;
+      }
+      // Управляющий назначает официанта на стол
+      if (q('[data-assign-to]')) {
+        const pick = $('[data-assign-pick]'); if (!pick?.value) { toast('Выберите официанта', true); return; }
+        try {
+          const s = await api('POST', `/api/v1/waiter/session/${S.openId}/assign`, { staffId: pick.value });
+          applySession(s); toast(`Стол №${s.tableNumber}: ${s.waiterName}`);
+        } catch (err) { toast(err.message, true); }
+        render(); return;
+      }
+      // «Отдать в общие»
+      if (q('[data-unassign]')) {
+        S.tmenu = false;
+        try {
+          const s = await api('POST', `/api/v1/waiter/session/${S.openId}/unassign`, {});
+          applySession(s); toast(`Стол №${s.tableNumber} отдан в общие`);
+        } catch (err) { toast(err.message, true); }
+        render(); return;
+      }
+      if (S.tmenu && !q('.tmenu-wrap')) { S.tmenu = false; render(); }
       // Гость пришёл без QR и позвал официанта: официант сам открывает стол и принимает заказ
       if (q('[data-open-table-pick]')) {
         let hall;
@@ -1285,29 +1435,13 @@
               if (cell.dataset.session) { closeModal(); await openTable(cell.dataset.session); return; }
               const s = await api('POST', `/api/v1/waiter/tables/${encodeURIComponent(cell.dataset.hallTable)}/open`);
               closeModal();
-              toast(`Стол №${cell.dataset.hallTable} открыт`);
+              toast(s.waiterId === S.staff.id ? `Стол №${cell.dataset.hallTable} открыт — он ваш` : `Стол №${cell.dataset.hallTable} открыт`);
               await loadWaiter();
               await openTable(s.sessionId || s.id);
             } catch (err) { cell.disabled = false; toast(err.message, true); }
           });
         });
         return;
-      }
-      if (q('[data-my-table]') && S.myTables) {
-        const n = q('[data-my-table]').dataset.myTable;
-        const d = new Set(S.myTables.draft);
-        if (d.has(n)) d.delete(n); else d.add(n);
-        S.myTables = { ...S.myTables, draft: d, dirty: true }; render(); return;
-      }
-      if (q('[data-my-clear]') && S.myTables) { S.myTables = { ...S.myTables, draft: new Set(), dirty: true }; render(); return; }
-      if (q('[data-my-save]') && S.myTables) {
-        const btn = q('[data-my-save]'); if (btn.disabled) return; btn.disabled = true;
-        try {
-          const res = await api('PUT', '/api/v1/waiter/my-tables', { tables: [...S.myTables.draft] });
-          S.myTables = { ...res, draft: new Set(res.tables), dirty: false };
-          toast(res.tables.length ? `Ваши столы: ${res.tables.join(', ')}` : 'Уведомления по всем столам');
-        } catch (err) { toast(err.message, true); btn.disabled = false; }
-        render(); return;
       }
       if (q('[data-hide-editor]')) {
         if (S.edit?.dirty) { clearTimeout(saveT); await saveEdit().catch(() => {}); }
@@ -1440,6 +1574,10 @@
       S.menu.search = e.target.value; clearTimeout(inputT);
       inputT = setTimeout(async () => { await render(); const i = $('#menu-search'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250);
     }
+  });
+
+  document.addEventListener('input', (e) => {
+    if (e.target.id === 'serve-q') serveSearch(e.target.value);
   });
 
   // ── Старт ──────────────────────────────────────────────────
