@@ -8,6 +8,7 @@ import { refreshStopLists, registerWebhooks } from './stoplist.js';
 import { invalidateCatalogCache, warmCatalogs } from './catalog.js';
 import { importOpenOrders } from './iiko-import.js';
 import { syncReserves, tickReserves } from './iiko-reserves.js';
+import { cleanupGuestPush, initGuestPush } from './guest-push.js';
 import { refreshKitchenStatuses, runServiceChecks } from './table-session.js';
 
 // ── Меню и стоп-листы iiko ──────────────────────────────────────────────────
@@ -108,6 +109,7 @@ export function startBackgroundJobs() {
   setInterval(() => syncIikoMenu(), 5 * 60 * 1000); // раз в 5 минут проверяем, не пора ли (IIKO_SYNC_MS)
   setInterval(() => checkPendingPayments().catch((e) => console.warn('онлайн-оплата:', e.message)), 30000);
   setInterval(refreshAllStopLists, parseInt(process.env.STOP_LIST_REFRESH_MS || '600000', 10));
+  initGuestPush();
   setInterval(cleanupExpired, 6 * 60 * 60 * 1000);
   setTimeout(cleanupExpired, 60_000).unref?.();
 }
@@ -115,6 +117,8 @@ export function startBackgroundJobs() {
 /** Просроченные входы гостей не нужны: токен с истёкшим сроком всё равно не принимается */
 async function cleanupExpired() {
   try {
+    const gone = await cleanupGuestPush();
+    if (gone) console.log(`уборка: удалено подписок на уведомления закрытых визитов — ${gone}`);
     const { rowCount } = await pool.query("DELETE FROM guest_tokens WHERE expires_at < NOW() - INTERVAL '1 day'");
     if (rowCount) console.log(`уборка: удалено просроченных входов гостей — ${rowCount}`);
   } catch (e) {

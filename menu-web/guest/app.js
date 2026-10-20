@@ -346,6 +346,7 @@
       if (msg) toast(msg);
     }
     announceWaiter(session);
+    pushPromptUpdate(session);
   }
 
   /** Имя официанта для гостя — первое слово («Анна Иванова» → «Анна») */
@@ -361,6 +362,56 @@
     toast(`Ваш официант — ${name}, он(а) скоро подойдёт`, false, 'status-help.svg');
   }
   const waiterLine = (s) => (waiterFirstName(s) && !visitOver(s) ? `<div class="waiter-line">Ваш официант: <b>${esc(waiterFirstName(s))}</b></div>` : '');
+
+  // ── Web Push: «Ваш стол обслуживает официант …», «Ваш заказ готов» ──
+  // Разрешение просим только по нажатию на плашку. Нет PushManager (например, iOS Safari не из «Домой») — плашки нет. Без SW меню работает как раньше.
+  const pushSupported = () => 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  const b64ToBytes = (s) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(s.length / 4) * 4, '=')), (c) => c.charCodeAt(0));
+  async function pushSubscribe(session) {
+    const reg = await navigator.serviceWorker.register('/sw.js');
+    await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      const { publicKey } = await api('GET', '/api/v1/push/vapid-public-key');
+      sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToBytes(publicKey) });
+    }
+    await api('POST', '/api/v1/table-order/push-subscribe', { sessionId: session.sessionId, subscription: sub.toJSON() });
+    store.set(`pushOn:${session.sessionId}`, true);
+  }
+  function pushPromptHide() { $('#push-prompt')?.remove(); }
+  /** Вызывается при обновлении сессии стола: покажет плашку или тихо привяжет уже разрешённые уведомления к новому визиту */
+  function pushPromptUpdate(session) {
+    try {
+      if (!pushSupported() || !session?.sessionId || visitOver(session)) { pushPromptHide(); return; }
+      const sid = session.sessionId;
+      if (Notification.permission === 'granted') {
+        pushPromptHide();
+        if (!store.get(`pushOn:${sid}`) && !S.pushBusy) {
+          S.pushBusy = true;
+          pushSubscribe(session).catch(() => {}).finally(() => { S.pushBusy = false; });
+        }
+        return;
+      }
+      if (Notification.permission === 'denied' || store.get(`pushNo:${sid}`)) { pushPromptHide(); return; }
+      if ($('#push-prompt')) return;
+      const el = document.createElement('div');
+      el.id = 'push-prompt';
+      el.className = 'push-prompt';
+      el.innerHTML = `<div class="push-prompt__text"><b>Включить уведомления</b><span>Сообщим, кто вас обслуживает и когда блюда готовы</span></div>
+        <button type="button" class="push-prompt__go">Включить</button><button type="button" class="push-prompt__x" aria-label="Не сейчас">×</button>`;
+      el.querySelector('.push-prompt__x').onclick = () => { store.set(`pushNo:${sid}`, true); pushPromptHide(); };
+      el.querySelector('.push-prompt__go').onclick = async () => {
+        pushPromptHide();
+        try {
+          const perm = await Notification.requestPermission();
+          if (perm !== 'granted') { store.set(`pushNo:${sid}`, true); return; }
+          await pushSubscribe(S.session || session);
+          toast('Уведомления включены');
+        } catch { toast('Не удалось включить уведомления', true); }
+      };
+      document.body.appendChild(el);
+    } catch { /* push необязателен */ }
+  }
 
   /** Вход за стол. false — за столом уже сидят: показан вопрос «присоединиться?». */
   async function enterTable({ join = false, name = '', then = null } = {}) {

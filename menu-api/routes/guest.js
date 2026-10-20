@@ -7,6 +7,7 @@ import { logAiQuery, recordAiFeedback } from '../services/ai-learning.js';
 import {
   getGuestByToken, guestAuth, guestTokenFromRequest, loginByFujiToken, loginByPhone, publicGuest, updateGuestProfile,
 } from '../services/guest-auth.js';
+import { getVapidPublicKey, subscribeGuest, unsubscribeGuest } from '../services/guest-push.js';
 import {
   assertGuestAtTable, callWaiter, enterTable, getSessionView, payBill, refreshFromIiko, requestBill, resolveRestaurant,
   saveGuestCart, submitFeedback, submitToWaiter, trackActivity,
@@ -19,6 +20,7 @@ export default router;
 // Гости ресторана часто выходят в интернет с одного IP (Wi-Fi зала) — лимиты с запасом на весь зал.
 const guestLoginLimit = rateLimit({ windowMs: 10 * 60_000, max: 100, message: 'Слишком много попыток входа — подождите 10 минут' });
 const aiLimit = rateLimit({ windowMs: 60_000, max: 60, message: 'Слишком много запросов к помощнику — подождите минуту' });
+const pushSubscribeLimit = rateLimit({ windowMs: 10 * 60_000, max: 60, message: 'Слишком много запросов — подождите' });
 const aiFeedbackLimit = rateLimit({ windowMs: 60_000, max: 120 });
 
 // ── Гость: вход ─────────────────────────────────────────────────────────────
@@ -129,6 +131,18 @@ router.post('/api/v1/table/guest-pay', guestAuth(), bySessionBody, h(async (req)
 router.post('/api/v1/table/feedback', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId', 'rating');
   return submitFeedback(req.body.sessionId, req.body);
+}));
+
+// ── Web Push гостю ──────────────────────────────────────────────────────────
+
+router.get('/api/v1/push/vapid-public-key', h(async () => ({ publicKey: await getVapidPublicKey() })));
+router.post('/api/v1/table-order/push-subscribe', pushSubscribeLimit, guestAuth(), bySessionBody, h(async (req) => {
+  requireBody(req.body, 'sessionId', 'subscription');
+  return subscribeGuest(req.body.sessionId, req.guest?.id || null, req.body.subscription);
+}));
+router.post('/api/v1/table-order/push-unsubscribe', pushSubscribeLimit, guestAuth(), bySessionBody, h(async (req) => {
+  requireBody(req.body, 'sessionId', 'endpoint');
+  return unsubscribeGuest(req.body.sessionId, req.body.endpoint);
 }));
 
 // ── AI ──────────────────────────────────────────────────────────────────────

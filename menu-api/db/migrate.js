@@ -594,6 +594,19 @@ const SCHEMA = `
   ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS reserve_guest_name VARCHAR(200);
   ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS reserve_phone VARCHAR(30);
   CREATE INDEX IF NOT EXISTS idx_table_sessions_reservation ON table_sessions(reservation_id) WHERE reservation_id IS NOT NULL;
+  ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS guest_push_ready_at TIMESTAMPTZ;
+
+  -- Web Push гостю (VAPID): подписка браузера привязана к визиту; адрес подписки уникален
+  CREATE TABLE IF NOT EXISTS guest_push_subscriptions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    session_id UUID NOT NULL REFERENCES table_sessions(id) ON DELETE CASCADE,
+    guest_id UUID REFERENCES guests(id) ON DELETE SET NULL,
+    endpoint TEXT NOT NULL UNIQUE,
+    p256dh TEXT NOT NULL,
+    auth TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_guest_push_session ON guest_push_subscriptions(session_id);
 `;
 
 const DEFAULT_CHIPS = [
