@@ -66,6 +66,9 @@ export interface ActiveSession {
   pendingCount?: number;
   waiterId?: string | null;
   createdAt?: string;
+  /** Заказ открыт на кассе iiko (импорт), а не гостем из меню */
+  openedInIiko?: boolean;
+  iikoWaiterName?: string | null;
 }
 
 export interface Dashboard {
