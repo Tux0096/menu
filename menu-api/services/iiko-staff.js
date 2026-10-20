@@ -39,9 +39,15 @@ async function listAll(path, body, pageSize = 500) {
 
 export async function iikoEmployees({ force = false } = {}) {
   if (!force && employeesCache && Date.now() - employeesCache.at < CACHE_MS) return employeesCache.list;
-  const list = await listAll('/api/employees/v1/employee/list', {
-    fields: ['id', 'name', 'firstName', 'lastName', 'cardNumber', 'mainRoleId', 'roleIds', 'isFired', 'isSystem', 'organizationIds'],
-  });
+  const base = ['id', 'name', 'firstName', 'lastName', 'cardNumber', 'mainRoleId', 'roleIds', 'isFired', 'isSystem', 'organizationIds'];
+  // Табельный номер (code) — им входят на of.; если iiko не знает поле — прежний список, вход по карте работает
+  let list;
+  try {
+    list = await listAll('/api/employees/v1/employee/list', { fields: [...base, 'code'] });
+  } catch (e) {
+    console.warn('iiko сотрудники: без табельного номера —', e.response?.status || e.message);
+    list = await listAll('/api/employees/v1/employee/list', { fields: base });
+  }
   employeesCache = { list, at: Date.now() };
   return list;
 }
@@ -121,7 +127,9 @@ export async function iikoStaffLogin(code, clientKey = '', restaurant = null) {
   byClient.assert(clientKey);
   allClients.assert('all');
   const [list, positions] = await Promise.all([iikoEmployees(), iikoPositions()]);
-  const e = list.find((x) => !x.isFired && !x.isSystem && x.cardNumber && safeEqual(String(x.cardNumber).trim(), value));
+  // Табельный номер сотрудника в iiko или номер его карты
+  const same = (v) => v != null && String(v).trim() !== '' && safeEqual(String(v).trim(), value);
+  const e = list.find((x) => !x.isFired && !x.isSystem && (same(x.code) || same(x.cardNumber)));
   if (!e) {
     byClient.hit(clientKey);
     allClients.hit('all');
