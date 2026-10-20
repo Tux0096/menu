@@ -38,6 +38,7 @@ router.get('/api/v1/staff/login-mode', (req, res) => res.json({ mode: iikoStaffL
 router.post('/api/v1/staff/pin-login', h(async (req) => {
   if (iikoStaffLoginEnabled()) {
     requireBody(req.body, 'pin');
+    // Только через iiko: вход — при открытой личной смене на кассе (лишние смены не открываются)
     return iikoPinLogin(req.body.pin, req.ip, req.body.restaurant || null);
   }
   requireBody(req.body, 'restaurant', 'pin');
