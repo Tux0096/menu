@@ -534,7 +534,7 @@ export async function getCatalogProducts(restaurant) {
   if (!restaurant) return [];
   const catalog = await getRestaurantCatalog(restaurant);
   return catalog.products.filter(
-    (p) => !p.isAlias && Number(p.price) > 0 && p.isPublished !== false && !p.isInStopList && isMainDish(p),
+    (p) => !p.isAlias && !p.lunchCombo && Number(p.price) > 0 && p.isPublished !== false && !p.isInStopList && isMainDish(p),
   );
 }
 
@@ -542,7 +542,8 @@ export async function getCatalogProducts(restaurant) {
 export async function getAvailableProducts(restaurant) {
   if (!restaurant) return [];
   const catalog = await getRestaurantCatalog(restaurant);
-  return catalog.products.filter((p) => !p.isAlias && Number(p.price) > 0 && p.isPublished !== false && !p.isInStopList);
+  // Наборы бизнес-ланча — в конструкторе, ИИ их отдельными блюдами не предлагает
+  return catalog.products.filter((p) => !p.isAlias && !p.lunchCombo && Number(p.price) > 0 && p.isPublished !== false && !p.isInStopList);
 }
 
 export function invalidateCatalogCache(restaurantId = null) {

@@ -64,6 +64,8 @@ export async function saveLunchSettings(body, restaurants) {
   const { rows } = await pool.query('SELECT data FROM business_lunch_settings WHERE scope = $1', [NETWORK]);
   const data = { ...emptySettings(), ...(rows[0]?.data || {}) };
   if (body.schedule) data.schedule = validateSchedule(body.schedule);
+  // Обложка позиции «Бизнес-ланч» в меню (пусто — фото первого набора)
+  if (body.image !== undefined) data.image = body.image ? String(body.image).slice(0, 500) : null;
   if (body.combos) data.combos = cleanMap(body.combos, (v) => ({ enabled: v.enabled !== false, title: clean(v.title), order: num(v.order) }));
   if (body.items) data.items = cleanMap(body.items, (v) => ({ enabled: v.enabled !== false, order: num(v.order) }));
   if (body.drinks) data.drinks = cleanMap(body.drinks, (v) => ({ enabled: v.enabled !== false, order: num(v.order) }));
@@ -270,6 +272,8 @@ export function buildBusinessLunch({ groups, products, settings, now = new Date(
     schedule,
     text: scheduleText(schedule),
     nextStart: nextLunchStart(schedule, now),
+    // Одна позиция «Бизнес-ланч» в меню: обложка из админки или фото первого набора
+    image: set.image || combos.map((c) => products.find((p) => String(p.id) === String(c.productId))?.image).find(Boolean) || null,
     combos,
     drinks,
   };
@@ -330,6 +334,7 @@ export async function getLunchAdmin(restaurants, getCatalog) {
   return {
     schedule: settings.networkSchedule,
     text: scheduleText(settings.networkSchedule),
+    image: settings.image || null,
     points,
     combos: [...combos.values()].sort(byOrder),
     steps: [...steps.values()].map((s) => ({ ...s, items: s.items.sort((a, b) => (a.order ?? 1e6 + a.pos) - (b.order ?? 1e6 + b.pos)) })),

@@ -907,7 +907,7 @@
     // В поиске блюдо один раз (копия того же блюда в бизнес-ланче — isAlias — не повторяется)
     // Наборы бизнес-ланча выбираются в конструкторе (баннер вверху раздела), в списке их нет; в поиске — есть
     const lunchGid = q ? null : lunchGroupId();
-    const filtered = q ? products.filter((p) => !p.isAlias && norm(`${p.name} ${p.description || ''}`).includes(q))
+    const filtered = q ? products.filter((p) => !p.isAlias && !p.lunchCombo && norm(`${p.name} ${p.description || ''}`).includes(q))
       : lunchGid ? products.filter((p) => !p.lunchCombo) : products;
     const byGroup = new Map();
     if (lunchGid) byGroup.set(lunchGid, []); // раздел остаётся, даже если в нём одни наборы
@@ -940,6 +940,8 @@
     }
     if (!S.catalog) return `${topbar()}<main class="screen"><div class="skeleton skeleton--search"></div><div class="skeleton skeleton--cats"></div><div class="list">${'<div class="skeleton"></div>'.repeat(4)}</div></main>`;
     const sections = menuSections();
+    // В поиске наборов нет — по «ланч» или блюду набора показываем саму позицию «Бизнес-ланч»
+    const lunchHit = Boolean(S.menu.search) && lunchMatches(S.menu.search.trim());
     eagerBudget = 4;
     // Кухня и бар — два меню: явный переключатель над разделами (что выбрано — видно сразу) и карточка в конце списка
     const hasBar = barGroupIds().size > 0 && !S.menu.search;
@@ -959,9 +961,10 @@
       ${S.menu.search ? '' : `<div class="cats" id="cats"><button class="cats__all" data-action="all-cats" aria-label="Все разделы меню">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="2" width="5" height="5" rx="1.5"/><rect x="9" y="2" width="5" height="5" rx="1.5"/><rect x="2" y="9" width="5" height="5" rx="1.5"/><rect x="9" y="9" width="5" height="5" rx="1.5"/></svg>Меню</button>${sections.map((s) => `<button data-cat="${esc(s.id)}" class="${String(S.activeCat) === String(s.id) ? 'is-active' : ''}">${esc(s.name)}</button>`).join('')}</div>`}
       ${S.menu.search ? '' : bannersHtml('menu')}
-      ${sections.length ? sections.map((s, i) => `<h2 class="section-title" id="cat-${esc(s.id)}">${esc(s.name)}</h2>${!S.menu.search && String(s.id) === lunchGroupId() ? lunchBanner() : ''}
+      ${lunchHit ? `<div class="list" style="margin-top:8px">${lunchCard()}</div>` : ''}
+      ${sections.length ? sections.map((s, i) => `<h2 class="section-title" id="cat-${esc(s.id)}">${esc(s.name)}</h2>${!S.menu.search && String(s.id) === lunchGroupId() ? `<div class="list">${lunchCard()}</div>` : ''}
         <div class="list ${i === sections.length - 1 && !S.menu.search && !hasBar ? 'list--last' : ''}">${s.items.map((p) => dishCard(p)).join('')}</div>`).join('') + switchCard
-    : S.catalog.products?.length
+    : lunchHit ? '' : S.catalog.products?.length
       ? `<div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.webp')}" alt="">
           <div class="empty__title">Ничего не нашлось</div><div>Спросите Фуджи ИИ — он подберёт похожее</div>
           <button class="btn btn--dark btn--center empty__btn" data-action="ask-ai-search">Спросить ИИ: «${esc(S.menu.search.trim().slice(0, 40))}»</button></div>`
@@ -1351,6 +1354,27 @@
   };
   const lunchPrice = (c) => (c.fixed ? rub(c.price) : `от ${rub(c.price)}`);
   const lunchOffText = () => `Доступен ${lunch().text}`;
+  /** Бизнес-ланч в меню — одна позиция с большим фото; нажатие открывает конструктор (набор → шаги) */
+  function lunchCard() {
+    const b = lunch();
+    if (!b?.combos?.length) return '';
+    const min = Math.min(...b.combos.map((c) => Number(c.price) || 0));
+
+    return `<article class="dish dish--big lunch-card ${b.active ? '' : 'is-off'}" data-lunch-open role="button" tabindex="0" aria-label="Бизнес-ланч — собрать набор">
+        <div class="dish__photo">${b.image ? imgHtml({ image: b.image, name: 'Бизнес-ланч' }, 'dish__img', 720) : '<div class="lunch-card__ph">🍱</div>'}
+          <span class="lunch-card__time">${b.active ? esc(b.text) : esc(lunchOffText())}</span></div>
+        <div class="dish__overlay"><div class="dish__name">Бизнес-ланч<small>Собери свой ланч · ${b.combos.length} ${b.combos.length > 4 ? 'наборов' : 'набора'}</small></div>
+          <span class="price-pill price-pill--big">от ${rub(min)}</span></div>
+      </article>`;
+  }
+  /** Поиск: «ланч», «бизнес» или название набора/блюда набора — показать позицию бизнес-ланча */
+  function lunchMatches(q) {
+    const b = lunch();
+    if (!q || !b?.combos?.length) return false;
+    const n = (t) => String(t || '').toLowerCase().replace(/ё/g, 'е');
+    const hay = ['бизнес-ланч бизнес ланч', ...b.combos.flatMap((c) => [c.title, ...c.steps.flatMap((st) => st.items.map((i) => i.name))])].map(n).join(' | ');
+    return hay.includes(n(q));
+  }
   function lunchBanner() {
     const b = lunch();
     if (!b?.combos?.length) return '';
