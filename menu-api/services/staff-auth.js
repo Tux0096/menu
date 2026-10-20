@@ -63,27 +63,6 @@ export async function pinLogin(restaurantId, pin, clientKey = '') {
   return { token: issueToken(staff), staff };
 }
 
-/**
- * Переход на вход через iiko: код не узнан в iiko — пробуем PIN из админки (официанты, заведённые раньше).
- * Ресторан берём у сотрудника; один PIN у разных сотрудников разных точек — просим выбрать ресторан.
- */
-export async function pinLoginAnyRestaurant(pin, clientKey = '') {
-  const code = String(pin || '').trim();
-  if (!/^\d{4,6}$/.test(code)) return null;
-  const clientId = `${clientKey}|any`;
-  pinByClient.assert(clientId);
-  const { rows } = await pool.query(
-    `SELECT * FROM staff_users WHERE is_active = TRUE AND pin_hash IS NOT NULL AND role IN ('waiter', 'manager')
-       AND restaurant_id IS NOT NULL`,
-  );
-  const found = rows.filter((u) => verifyPassword(code, u.pin_hash));
-  if (!found.length) { pinByClient.hit(clientId); return null; }
-  if (found.length > 1) throw httpError(409, 'Такой PIN есть в нескольких ресторанах — войдите по логину и паролю или смените PIN', { code: 'PIN_AMBIGUOUS' });
-  const staff = mapStaff(found[0]);
-  await audit(staff, 'login.pin', 'staff', staff.id, { fallback: true });
-  return { token: issueToken(staff), staff };
-}
-
 /** Вход сотрудника зала по коду из iiko: точка — та, где у него открыта смена (services/iiko-staff.js). */
 export async function iikoPinLogin(code, clientKey = '', restaurant = null) {
   const { row, restaurant: r } = await iikoStaffLogin(code, clientKey, restaurant);
