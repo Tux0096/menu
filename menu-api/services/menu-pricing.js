@@ -16,6 +16,7 @@ export async function menuIndex(restaurant) {
   if (indexes.has(catalog)) return indexes.get(catalog);
   const index = new Map();
   indexes.set(catalog, index);
+  index.alcoRules = catalog.alcohol || null; // правила точки: часы, 18+ (lib/alco-rules.js; catalog.alcohol хранит те же поля)
   for (const p of catalog.products || []) {
     const entry = {
       name: String(p.name || 'Позиция').slice(0, 300),
@@ -29,6 +30,7 @@ export async function menuIndex(restaurant) {
       needsChoice: Boolean(p.needsChoice), // набор за 0 ₽ — только с платным выбором
       cookingMinutes: p.cookingMinutes ?? null, // норматив готовки из iiko, мин
       lunch: p.lunchCombo ? catalog.businessLunch?.schedule || null : null, // набор бизнес-ланча — расписание точки
+      alcohol: Boolean(p.isAlcohol), // 18+ и правила продажи точки (index.alcoRules)
     };
     if (p.id) index.set(String(p.id), entry);
     if (p.iikoId) index.set(String(p.iikoId), entry);

@@ -94,11 +94,12 @@ router.post('/api/v1/table/activity', guestAuth(), bySessionBody, h(async (req) 
 }));
 router.post('/api/v1/table-order/cart', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId', 'items');
-  return saveGuestCart(req.body.sessionId, req.body.items, req.guest?.id || null);
+  // ageConfirmed — гость тапнул «Мне есть 18» в этом визите: сервер ставит отметку на алкогольные позиции
+  return saveGuestCart(req.body.sessionId, req.body.items, req.guest?.id || null, { ageConfirmed: req.body.ageConfirmed === true });
 }));
 router.post('/api/v1/table/submit-to-waiter', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId');
-  return submitToWaiter(req.body.sessionId, req.body.items, req.guest?.id || null);
+  return submitToWaiter(req.body.sessionId, req.body.items, req.guest?.id || null, { ageConfirmed: req.body.ageConfirmed === true });
 }));
 router.post('/api/v1/table/request-bill', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId');

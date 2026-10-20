@@ -310,14 +310,15 @@ export async function updateOrder(sessionId, staff, { items = [], guestCount, se
       await client.query(
         `INSERT INTO table_order_items
            (id, session_id, product_id, iiko_product_id, name, price, quantity, line_total, seat_number, course, batch_no, is_locked,
-            guest_id, guest_name, source, size_id, size_name, modifiers, options_text)
-         VALUES (COALESCE($18::uuid, gen_random_uuid()), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12,$13,$14,$15,$16,$17)
+            guest_id, guest_name, source, size_id, size_name, modifiers, options_text, age_confirmed_at)
+         VALUES (COALESCE($18::uuid, gen_random_uuid()), $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,FALSE,$11,$12,$13,$14,$15,$16,$17,$19)
          ON CONFLICT (id) DO NOTHING`,
         [sessionId, it.productId || null, it.iikoProductId, lineName(priced.name, v),
           price, qty, price * qty, it.seatNumber || null, it.course || null, nextBatch,
           guestOf(it.seatNumber)?.id || null, guestOf(it.seatNumber)?.name || null,
           sources.get(String(it.iikoProductId)) || 'main',
-          v?.sizeId || null, v?.sizeName || null, v?.mods.length ? JSON.stringify(v.mods) : null, v?.text || null, ownId],
+          v?.sizeId || null, v?.sizeName || null, v?.mods.length ? JSON.stringify(v.mods) : null, v?.text || null, ownId,
+          was?.age_confirmed_at || null], // отметку «гость подтвердил 18+» официант не теряет, переставляя позицию
       );
     }
     await recalcTotal(client, sessionId);

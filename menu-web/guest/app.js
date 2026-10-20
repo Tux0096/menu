@@ -249,6 +249,103 @@
     return (S.catalog?.products || []).find((p) => String(p.id) === String(id) || String(p.iikoId) === String(id));
   }
 
+  // ── Алкоголь: 18+ и правила точки ──────────────────────────
+  // Сервер помечает позиции (isAlcohol) и отдаёт правила точки (catalog.alcohol: часы, текст, нужно ли подтверждение 18+);
+  // он же отклоняет заказ вне правил (409) — здесь только понятный интерфейс.
+  const alco = () => S.catalog?.alcohol || null;
+  const isAlco = (p) => Boolean(p && (p.isAlcohol || findProduct(p.id)?.isAlcohol));
+  /** Продаётся ли алкоголь сейчас: флаг каталога, а после времени смены (nextChangeAt) — обратный, пока каталог не обновился. */
+  function alcoOpen() {
+    const a = alco();
+    if (!a) return true;
+    if (!a.enabled) return false;
+    return a.nextChangeAt && Date.now() >= Date.parse(a.nextChangeAt) ? !a.open : a.open !== false;
+  }
+  const alcoClosedText = () => {
+    const a = alco();
+    if (a && !a.enabled) return 'На этой точке алкоголь не продаётся';
+    return a?.from ? `Алкоголь продаём с ${a.from} до ${a.to}` : 'Алкоголь сейчас не продаётся';
+  };
+  // Подтверждение 18+ помнится на визит: sessionStorage по номеру визита (новый визит — спросим снова)
+  const ageKey = () => `fm:age18:${S.sessionId || S.restaurant || ''}`;
+  const ageOk = () => {
+    if (S.ageSession && S.ageSession === (S.sessionId || '-')) return true;
+    try { return sessionStorage.getItem(ageKey()) === '1'; } catch { return false; }
+  };
+  const ageRemember = () => {
+    S.ageSession = S.sessionId || '-';
+    try { sessionStorage.setItem(ageKey(), '1'); } catch { /* приватный режим: помним до перезагрузки страницы */ }
+  };
+  const needAge = () => Boolean(alco()?.requireAgeConfirm) && !ageOk();
+  /** Метка 18+ на фото блюда в списке. */
+  const alcoTag = (p) => (isAlco(p) ? '<span class="tag-18" title="Только с 18 лет">18+</span>' : '');
+  /** Правила точки в карточке блюда; вне часов — причина, почему добавить нельзя. */
+  function alcoNoteHtml(p) {
+    if (!isAlco(p) || !alco()) return '';
+    const open = alcoOpen();
+    return `<div class="alco-note ${open ? '' : 'is-closed'}"><span class="tag-18 tag-18--big">18+</span>
+      <div><div class="alco-note__rules">${esc(alco().rulesText || 'Алкоголь продаём только с 18 лет')}</div>
+      ${open ? (alco().requireDocCheck ? '<div class="alco-note__sub">Официант может попросить документ</div>' : '') : `<div class="alco-note__sub">${esc(alcoClosedText())}</div>`}</div></div>`;
+  }
+  /**
+   * Окно «Вам есть 18 лет?» поверх всего (в том числе поверх карточки блюда — её не закрываем).
+   * Да — запоминаем на визит и вызываем onYes; Нет — ничего не добавляем (onNo — убрать уже лежащий в корзине алкоголь).
+   */
+  function openAgeModal(onYes, onNo = null) {
+    $('#age-modal')?.remove();
+    const el = document.createElement('div');
+    el.id = 'age-modal';
+    el.className = 'age-modal';
+    el.innerHTML = `<div class="age-modal__box" role="dialog" aria-modal="true" aria-labelledby="age-title">
+      <div class="age-modal__badge">18+</div>
+      <h2 id="age-title">Вам есть 18 лет?</h2>
+      <p>${esc(alco()?.rulesText || 'Алкоголь продаём только совершеннолетним.')}</p>
+      ${alco()?.requireDocCheck ? '<p class="age-modal__doc">Официант может попросить документ.</p>' : ''}
+      <button class="btn btn--dark btn--center" data-age="yes">Да, мне есть 18</button>
+      <button class="btn btn--outline btn--center" data-age="no">Нет</button></div>`;
+    const done = (yes) => {
+      el.remove();
+      document.removeEventListener('keydown', onKey);
+      if (yes) { ageRemember(); onYes?.(); } else { toast('Алкоголь можно заказать только с 18 лет', true); onNo?.(); }
+    };
+    const onKey = (e) => { if (e.key === 'Escape') done(false); };
+    el.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-age]');
+      if (b) done(b.dataset.age === 'yes');
+      else if (e.target === el) done(false);
+    });
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(el);
+    el.querySelector('[data-age="yes"]').focus();
+  }
+  /** Убрать из корзины неотправленный алкоголь (продажа закрылась или гость ответил «Нет»). */
+  function dropAlcoLines() {
+    for (const [k, l] of Object.entries(S.cart)) {
+      if (!isAlco(l.product)) continue;
+      const keep = lockedQty(k);
+      if (keep > 0) S.cart[k] = { ...l, qty: keep }; else delete S.cart[k];
+    }
+    persistCart();
+  }
+  /**
+   * Ответ сервера про алкоголь: true — обработали. Нет подтверждения 18+ (корзина с прошлого визита): спрашиваем, «Да» — retry,
+   * «Нет» — алкоголь из корзины убираем. Продажа закрылась: алкоголь убираем, остальную корзину сохраняем (сама не уходит).
+   */
+  function alcoServerError(e, retry) {
+    const resave = () => { render(); if (S.sessionId) scheduleCartSave(); };
+    if (e.code === 'ALCO_AGE_REQUIRED') {
+      openAgeModal(retry, () => { dropAlcoLines(); resave(); });
+      return true;
+    }
+    if (e.code === 'ALCO_CLOSED') {
+      dropAlcoLines();
+      toast(e.message, true);
+      resave();
+      return true;
+    }
+    return false;
+  }
+
   /** Корзина = сервер (источник правды) ⊕ несохранённые локальные правки. */
   function cartFromSession(session) {
     const next = {};
@@ -283,6 +380,11 @@
     const line = S.cart[key] || { key, qty: 0, product, ...(sel ? { sizeId: sel.sizeId, mods: sel.mods, options: sel.options, price: sel.price } : {}) };
     const next = line.qty + delta;
     if (delta > 0 && isStopped(product)) { toast('Эта позиция сейчас недоступна', true); return; }
+    if (delta > 0 && isAlco(product)) {
+      if (!alcoOpen()) { toast(alcoClosedText(), true); return; }
+      // Первый алкоголь за визит — «Вам есть 18 лет?»; ответ «Да» добавляет блюдо
+      if (needAge()) { openAgeModal(() => { changeQty(product, delta, { sel, key: lineK }); S.productRedraw?.(); }); return; }
+    }
     // Ограниченный остаток в iiko: больше, чем осталось, официант на кухню не отправит
     const left = Number((findProduct(product.id) || product).stopBalance) || 0;
     if (delta > 0 && left && next - lockedQty(key) > left) { toast(`Осталось только ${left} шт.`, true); return; }
@@ -315,12 +417,14 @@
     if (!S.sessionId) return;
     const v = cartVer;
     try {
-      const session = await api('POST', '/api/v1/table-order/cart', { sessionId: S.sessionId, items: payloadItems() });
+      const session = await api('POST', '/api/v1/table-order/cart', { sessionId: S.sessionId, items: payloadItems(), ageConfirmed: ageOk() });
       if (v === cartVer) S.cartDirty = false;
       applySession(session, { keepCart: true });
       render();
     } catch (e) {
       if (e.network) { toast('Корзина сохранена на телефоне — отправим, когда появится связь', true); return; }
+      // Алкоголь без подтверждения 18+ или вне часов продажи: спрашиваем / убираем из корзины и сохраняем остальное
+      if (alcoServerError(e, scheduleCartSave)) return;
       // Сервер не принял корзину (блюдо уже готовится, визит закрыт, позицию нельзя заказать):
       // показываем причину и берём корзину с сервера — иначе опрос статусов встал бы
       S.cartDirty = false;
@@ -564,6 +668,8 @@
   };
   function pricePill(p, qty, stopped, cls = 'price-pill') {
     if (stopped) return `<span class="dish__soon">${Number(p.price) ? 'Закончился :(' : 'Скоро в продаже'}</span>`;
+    // Алкоголь вне часов продажи (или выключен на точке): добавить нельзя, причина — в карточке блюда
+    if (!qty && isAlco(p) && !alcoOpen()) return `<span class="dish__soon dish__soon--alco">${alco()?.enabled ? 'Сейчас не продаём' : 'Не продаётся'}</span>`;
     // Блюдо с выбором — кнопка открывает карточку (выбор размера, соуса…); количество видно на фото
     if (hasOptions(p)) return `<button class="${cls}" data-inc="${esc(p.id)}" aria-label="Выбрать ${esc(p.name)}">${fromPrice(p)}${cls.includes('big') ? `<img src="${UI('plus-circle.svg')}" alt="">` : ''}</button>`;
     if (!qty) return `<button class="${cls}" data-inc="${esc(p.id)}" aria-label="Добавить ${esc(p.name)}">${rub(p.price)}${cls.includes('big') ? `<img src="${UI('plus-circle.svg')}" alt="">` : ''}</button>`;
@@ -580,12 +686,12 @@
     const count = qty && !stopped ? `<span class="dish__count" data-key="count-${qty}" aria-label="В заказе ${qty}">${qty}</span>` : '';
     if (p.cardSize === 'big' && !reason) {
       return `<article class="dish dish--big ${stopped ? 'is-stopped' : ''} ${qty && !stopped ? 'has-qty' : ''} ${S.previewFocus === String(p.id) ? 'is-focus' : ''}" data-product="${esc(p.id)}">
-        <div class="dish__photo">${imgHtml(p, 'dish__img', 720)}${tagsHtml(p)}${count}</div>
+        <div class="dish__photo">${imgHtml(p, 'dish__img', 720)}${tagsHtml(p)}${alcoTag(p)}${count}</div>
         <div class="dish__overlay"><div class="dish__name">${esc(p.name)}</div>${pricePill(p, qty, stopped, 'price-pill price-pill--big')}</div>
       </article>`;
     }
     return `<article class="dish ${stopped ? 'is-stopped' : ''} ${qty && !stopped ? 'has-qty' : ''} ${S.previewFocus === String(p.id) ? 'is-focus' : ''}" data-product="${esc(p.id)}">
-      <div class="dish__photo">${imgHtml(p)}${tagsHtml(p)}${count}</div>
+      <div class="dish__photo">${imgHtml(p)}${tagsHtml(p)}${alcoTag(p)}${count}</div>
       <div class="dish__body">
         <div class="dish__name">${esc(p.name)}</div>
         ${sub ? `<div class="dish__desc">${esc(sub)}</div>` : ''}
@@ -1040,7 +1146,7 @@
       return `<div class="cart-line ${problem ? 'is-problem' : ''} ${S.openLine === l.key ? 'is-open' : ''}" data-key="cart-${esc(l.key)}">
         <div class="cart-line__row" data-swipe-del="${esc(l.key)}">
           ${thumb(findProduct(l.product.id) || l.product)}
-          <div class="cart-line__main"><div class="cart-line__name">${esc(l.product.name)}</div>${l.options ? `<div class="cart-line__opts">${esc(l.options)}</div>` : ''}<div class="cart-line__price">${rub(unitPrice(l))}</div>${problem ? `<span class="st st--stop">${esc(problem)}</span>` : ''}</div>
+          <div class="cart-line__main"><div class="cart-line__name">${esc(l.product.name)}${isAlco(l.product) ? ' <span class="tag-18 tag-18--inline">18+</span>' : ''}</div>${l.options ? `<div class="cart-line__opts">${esc(l.options)}</div>` : ''}<div class="cart-line__price">${rub(unitPrice(l))}</div>${problem ? `<span class="st st--stop">${esc(problem)}</span>` : ''}</div>
           ${paid ? '' : `<div class="stepper-mini">
             <button data-line-dec="${esc(l.key)}" aria-label="Убрать">${ICONS.minus}</button><b>${q}</b>
             <button data-line-inc="${esc(l.key)}" aria-label="Добавить">${ICONS.plus}</button></div>`}
@@ -1312,6 +1418,7 @@
         ${tagsHtml(p, { text: true })}
         <h2 class="product__name">${esc(p.name)}</h2>
         ${weight || p.stopBalance ? `<div class="product__weight">${esc(weight || '')}${p.stopBalance && !stopped ? `${weight ? ' · ' : ''}осталось ${Number(p.stopBalance)} шт.` : ''}</div>` : ''}
+        ${alcoNoteHtml(p)}
         ${sel && !stopped ? optionsHtml(p, sel) : ''}
         ${p.description ? `<div class="product__block"><div class="product__label">Описание</div><p>${esc(p.description)}</p></div>` : ''}
         ${nutri.length ? `<div class="product__block"><div class="product__label product__label--row">Пищевая ценность${toggle}</div>
@@ -1320,6 +1427,7 @@
       </div>
       <div class="product__cta">
         ${stopped ? `<button class="btn btn--dark btn--center" disabled>${Number(p.price) ? 'Закончился' : 'Скоро в продаже'}</button>`
+    : !lineQty && isAlco(p) && !alcoOpen() ? `<button class="btn btn--dark btn--center btn--muted" disabled>${esc(alcoClosedText())}</button>`
     : r?.missing.length ? `<button class="btn btn--dark btn--center btn--muted" data-need>Выберите: ${esc(r.missing.join(', '))}</button>`
       : lineQty ? `<div class="btn btn--dark btn--qty"><button data-dec="${esc(p.id)}" aria-label="Убрать">${ICONS.minus}</button>
           <span>${rub(lineQty * price)}<i></i>${lineQty}</span><button data-inc="${esc(p.id)}" aria-label="Добавить">${ICONS.plus}</button></div>`
@@ -1334,6 +1442,11 @@
     if (!p) return;
     const sel = hasOptions(p) ? initSel(p) : null;
     const draw = () => productDetailHtml(p, sel);
+    const redraw = () => {
+      const box = $('#product-sheet'); // шторку могла сменить форма входа за стол
+      if (box) { const top = box.closest('.sheet')?.scrollTop; box.innerHTML = draw(); watchLiveVideos(box); if (top != null) box.closest('.sheet').scrollTop = top; }
+    };
+    S.productRedraw = redraw; // после ответа «Да» в окне 18+ блюдо добавляется позже нажатия — карточка перерисовывается отсюда
     openSheet(`<div id="product-sheet">${draw()}</div>`, (sheet) => {
       sheet.addEventListener('click', (e) => {
         const inc = e.target.closest('[data-inc]'); const dec = e.target.closest('[data-dec]'); const nutri = e.target.closest('[data-nutri]');
@@ -1355,8 +1468,7 @@
         }
         else return;
         e.stopPropagation();
-        const box = $('#product-sheet'); // шторку могла сменить форма входа за стол
-        if (box) { const top = box.closest('.sheet')?.scrollTop; box.innerHTML = draw(); watchLiveVideos(box); if (top != null) box.closest('.sheet').scrollTop = top; }
+        redraw();
       });
     }, { cls: 'sheet--product' });
   }
@@ -1622,14 +1734,14 @@
     S.submitting = true; render();
     clearTimeout(saveTimer);
     try {
-      const session = await api('POST', '/api/v1/table/submit-to-waiter', { sessionId: S.sessionId, items: payloadItems() });
+      const session = await api('POST', '/api/v1/table/submit-to-waiter', { sessionId: S.sessionId, items: payloadItems(), ageConfirmed: ageOk() });
       S.cartDirty = false;
       S.changedSinceSubmit = false; store.set('changedSinceSubmit', false);
       applySession(session);
       toast(session.workflowStatus === 'reorder_pending' ? 'Дозаказ передан официанту' : 'Заказ передан — официант скоро подойдёт');
       go('order');
     } catch (e) {
-      toast(e.network ? 'Нет связи. Корзина сохранена — попробуйте ещё раз' : e.message, true);
+      if (!alcoServerError(e, submitToWaiter)) toast(e.network ? 'Нет связи. Корзина сохранена — попробуйте ещё раз' : e.message, true);
     } finally {
       S.submitting = false; render();
     }
@@ -2118,6 +2230,9 @@
   function startCatalogRefresh() {
     if (catalogTimer) return;
     catalogTimer = setInterval(() => { if (!document.hidden && !S.dragging) loadCatalog({ quiet: true }); }, 60_000);
+    // Часы продажи алкоголя закончились (или начались) без перезагрузки — кнопки «в корзину» обновляются сами
+    let alcoShown = alcoOpen();
+    setInterval(() => { const now = alcoOpen(); if (now !== alcoShown) { alcoShown = now; if (!S.dragging) render(); } }, 15_000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) loadCatalog({ quiet: true }); });
   }
 
