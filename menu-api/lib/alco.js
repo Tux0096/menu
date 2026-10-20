@@ -21,3 +21,20 @@ export function autoRoute(categoryName, splits) {
   }
   return null;
 }
+
+// Безалкогольные позиции в алкогольных разделах: «Бад б/а», «Протеиновый коктейль»
+const NOT_ALCO_ITEM = /(^|[\s(])б\/а($|[\s)])|б\.\s?а\.|протеин|без алкогол|0[.,]0\s?%/;
+// Пиво, сидр и медовуха — алкоголь для возрастного ограничения, хотя уходят на кухонную кассу (в alcoRegex их нет)
+const BEER_RE = /(^|\s)(пив[оаеы]?($|\s)|пивн|сидр|медовух|лагер|эль($|\s)|стаут)/i;
+
+/**
+ * Алкогольная ли позиция (для 18+ и правил продажи точки): по названию раздела меню и самой позиции.
+ * Правило то же, что при выборе кассы (alcoRegex), плюс пиво/сидр; «безалкогольное», «молочный коктейль» — нет.
+ */
+export function isAlcoholName(...names) {
+  const text = names.map((n) => String(n || '').toLowerCase().replace(/ё/g, 'е')).filter(Boolean);
+  if (text.some((t) => NOT_ALCO.test(t) || NOT_ALCO_ITEM.test(t))) return false;
+  let re;
+  try { re = new RegExp(alcoRegex(), 'i'); } catch { return false; }
+  return text.some((t) => re.test(t) || BEER_RE.test(t));
+}

@@ -594,6 +594,10 @@ const SCHEMA = `
   ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS reserve_guest_name VARCHAR(200);
   ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS reserve_phone VARCHAR(30);
   CREATE INDEX IF NOT EXISTS idx_table_sessions_reservation ON table_sessions(reservation_id) WHERE reservation_id IS NOT NULL;
+  -- Правила продажи алкоголя на точке (lib/alco-rules.js): продаётся ли, часы, текст, 18+ и проверка документа; NULL — по умолчанию
+  ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS alcohol_rules JSONB;
+  -- Гость подтвердил тапом «Мне есть 18» при добавлении алкоголя (NULL — не подтверждал, например добавил официант)
+  ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS age_confirmed_at TIMESTAMPTZ;
 `;
 
 const DEFAULT_CHIPS = [

@@ -26,6 +26,7 @@ import {
 import { getLunchAdmin, saveLunchSettings } from '../services/business-lunch.js';
 import { syncIikoMenu } from '../services/background-jobs.js';
 import { getCashdesks, getIikoSetup, setCashdesk, setIikoSetup, setSectionRoute } from '../services/cashdesks.js';
+import { alcoPublic, normalizeAlcoRules, validateAlcoRules } from '../lib/alco-rules.js';
 import { QR_SIGNED_REQUIRED, qrSignedRequired, setQrSignedRequired } from '../lib/qr-config.js';
 
 const router = express.Router();
@@ -257,6 +258,23 @@ admin.post('/point-info', h(async (req) => {
   );
   audit(req.staff, 'restaurant.info', 'restaurant', r.slug, { address, workHours });
   return { name: rows[0].name, address: rows[0].address || '', workHours: rows[0].hours_text || '' };
+}));
+// Правила продажи алкоголя точки: продаётся ли, часы (по времени точки), текст для гостей, 18+ и проверка документа.
+// Гость и официант видят их в карточках позиций и над заказом; сервер отклоняет заказ алкоголя вне правил
+admin.get('/alcohol', h(async (req) => {
+  const r = await staffRestaurant(req);
+  const rules = normalizeAlcoRules(r.alcohol_rules);
+  return { ...rules, preview: alcoPublic(rules) };
+}));
+admin.post('/alcohol', h(async (req) => {
+  const r = await staffRestaurant(req);
+  const rules = validateAlcoRules(req.body);
+  // Каталог гостя пересоберётся сам: любая успешная правка админки сбрасывает его версию
+  await pool.query('UPDATE restaurants SET alcohol_rules = $2 WHERE id = $1', [r.id, JSON.stringify(rules)]);
+  audit(req.staff, 'restaurant.alcohol', 'restaurant', r.slug, {
+    enabled: rules.enabled, from: rules.from, to: rules.to, requireAgeConfirm: rules.requireAgeConfirm, requireDocCheck: rules.requireDocCheck,
+  });
+  return { ...rules, preview: alcoPublic(rules) };
 }));
 admin.post('/cashdesks/route', h(async (req) => {
   const r = await staffRestaurant(req);

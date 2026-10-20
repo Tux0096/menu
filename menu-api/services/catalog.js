@@ -6,6 +6,8 @@
  */
 import pool from '../db/pool.js';
 import { categoryKey, cleanMenuName, menuKey } from '../lib/menu-key.js';
+import { isAlcoholName } from '../lib/alco.js';
+import { alcoPublic } from '../lib/alco-rules.js';
 import { assignDishVariants, dishCardKey } from '../lib/dish-key.js';
 import { orderGroups } from './menu-order.js';
 import { getStopIndex } from './stoplist.js';
@@ -489,6 +491,9 @@ async function buildRestaurantCatalog(restaurant, { force = false } = {}) {
     if (left) p.stopBalance = left;
     products.push(p);
   }
+  // Алкоголь (18+ и правила точки): по разделу или названию; копия блюда в другом разделе — тоже алкоголь
+  const alcoIds = new Set(products.filter((p) => isAlcoholName(p.parentGroupName, p.name)).map((p) => String(p.id)));
+  for (const p of products) if (alcoIds.has(String(p.id))) p.isAlcohol = true;
 
   // Приоритет из админки: больше — выше в своём разделе; остальные — как в iiko.
   // Порядок считает сервер — одинаково у гостя, официанта и в приложении.
@@ -508,6 +513,8 @@ async function buildRestaurantCatalog(restaurant, { force = false } = {}) {
     groups: sections.groups,
     products: lunch.products,
     businessLunch: lunch.businessLunch,
+    // Правила продажи алкоголя точки: гость видит плашку 18+, часы и «сейчас не продаётся»
+    alcohol: alcoPublic(restaurant.alcohol_rules),
     stopList: [...stop],
     source: raw.source,
     fetchedAt: raw.fetchedAt || new Date(raw.at).toISOString(),

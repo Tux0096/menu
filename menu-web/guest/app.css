@@ -625,6 +625,36 @@ html.sheet-open, html.sheet-open body { overflow: hidden; }
 .opt-hint { font-size: 10px; font-weight: 400; color: rgba(41, 41, 41, .55); }
 .opt-hint.is-missing { color: #D25E20; }
 .btn--muted { background: #B9B9B9; border-color: #B9B9B9; }
+
+/* ── Алкоголь: 18+, правила точки, окно «Вам есть 18 лет?» ── */
+.tag-18 {
+  position: absolute; left: 6px; bottom: 6px; z-index: 2; display: inline-grid; place-items: center; height: 20px; min-width: 28px; padding: 0 5px;
+  border-radius: 10px; background: rgba(255, 255, 255, .94); border: 1.5px solid var(--danger); color: var(--danger);
+  font-size: 10px; font-weight: 700; letter-spacing: .02em; line-height: 1;
+}
+.tag-18--big { position: static; flex-shrink: 0; height: 24px; min-width: 34px; font-size: 12px; }
+.tag-18--inline { position: static; height: 16px; min-width: 24px; padding: 0 4px; border-width: 1px; font-size: 9px; vertical-align: 1px; }
+.dish__soon--alco { color: var(--danger); opacity: .7; }
+.alco-note { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; padding: 10px 12px; border-radius: 12px; background: #fff; border: 1px solid #F1D4D8; }
+.alco-note.is-closed { background: #FDF1F2; border-color: #F5B5B5; }
+.alco-note__rules { font-size: 12px; line-height: 16px; color: var(--ink); }
+.alco-note__sub { margin-top: 3px; font-size: 12px; line-height: 15px; color: var(--danger); font-weight: 500; }
+.alco-note:not(.is-closed) .alco-note__sub { color: rgba(41, 41, 41, .6); font-weight: 400; }
+.age-modal {
+  position: fixed; inset: 0; z-index: 80; display: grid; place-items: center; padding: 20px; background: rgba(41, 41, 41, .4);
+  -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); animation: fade .2s;
+}
+.age-modal__box { width: 100%; max-width: 340px; padding: 24px 20px 20px; border-radius: 24px; background: var(--bg); text-align: center; box-shadow: var(--shadow-lg); }
+.age-modal__badge {
+  display: inline-grid; place-items: center; width: 56px; height: 56px; margin-bottom: 12px; border-radius: 50%;
+  border: 3px solid var(--danger); color: var(--danger); font-size: 20px; font-weight: 700;
+}
+.age-modal h2 { margin: 0 0 8px; font-size: 20px; font-weight: 500; color: var(--ink); }
+.age-modal p { margin: 0 0 8px; font-size: 13px; line-height: 17px; color: rgba(41, 41, 41, .75); }
+.age-modal p.age-modal__doc { color: var(--muted-2); font-size: 12px; }
+.age-modal .btn { margin-top: 10px; width: 100%; }
+.age-modal .btn[data-age="yes"] { margin-top: 16px; }
+
 .cart-line__opts { font-size: 11px; color: rgba(41, 41, 41, .6); margin-top: 3px; line-height: 1.25; }
 
 .order-card__note { margin: 0 0 12px; padding: 10px 12px; border-radius: 12px; background: var(--purple-soft); color: var(--purple); font-size: 13px; line-height: 1.35; }

@@ -361,6 +361,70 @@ step('адрес и время работы точки: сохраняются �
   }
 }
 
+// Алкоголь: правила точки в админке, подтверждение 18+ с корзиной, отказ вне часов, плашка для официанта
+{
+  const alco = catalog.products.find((p) => p.isAlcohol && !p.isAlias && !p.lunchCombo && Number(p.price) > 0 && !p.isInStopList
+    && !p.sizes?.length && !p.modifierGroups?.length);
+  if (!alco) console.log('- алкоголь: в меню точки нет простых алкогольных позиций (проверка пропущена)');
+  else {
+    const origin = ok(await api('GET', '/api/v1/admin/alcohol', null, A), 'alcohol admin');
+    const { preview: _p, ...originRules } = origin;
+    const setRules = async (rules) => ok(await api('POST', '/api/v1/admin/alcohol', { ...originRules, ...rules }, A), 'alcohol save');
+    const alcoLine = { productId: alco.id, iikoProductId: alco.iikoId || alco.id, name: alco.name, price: alco.price, quantity: 1 };
+    // Окно часов продажи, в которое «сейчас» не попадает: со сдвигом +2 ч на час (по времени точки)
+    const hhmm = (shiftMin) => new Intl.DateTimeFormat('en-GB', { timeZone: origin.tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' })
+      .format(new Date(Date.now() + shiftMin * 60000));
+    try {
+      await setRules({ enabled: true, from: '', to: '', text: 'Алкоголь только с документом', requireAgeConfirm: true, requireDocCheck: true });
+      const cat = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog alcohol');
+      assert.equal(cat.alcohol.open, true); assert.equal(cat.alcohol.rulesText, 'Алкоголь только с документом');
+      assert.ok(cat.products.find((p) => p.id === alco.id).isAlcohol);
+      assert.ok(!p1.isAlcohol && !p2.isAlcohol, 'обычные блюда не помечены как алкоголь');
+      step(`каталог: «${alco.name}» помечена 18+, правила точки «${cat.alcohol.rulesText}»`);
+
+      const ag = ok(await api('POST', '/api/v1/guest/login', { phone: '8 (900) 156-10-10', name: 'Алкоголь', consent: true }), 'login alcohol');
+      const AG = { 'X-Guest-Token': ag.token };
+      const as = ok(await api('POST', '/api/v1/table/enter', { restaurantSlug: 'novo-sadovaya', tableNumber: `${TABLE}-a` }, AG), 'enter alcohol');
+      r = await api('POST', '/api/v1/table-order/cart', { sessionId: as.sessionId, items: [alcoLine] }, AG);
+      assert.equal(r.status, 409); assert.equal(r.data.code, 'ALCO_AGE_REQUIRED');
+      step(`без подтверждения 18+ алкоголь в корзину не принимается: 409 «${r.data.error}»`);
+      const withAge = ok(await api('POST', '/api/v1/table-order/cart', { sessionId: as.sessionId, items: [alcoLine], ageConfirmed: true }, AG), 'alcohol cart');
+      assert.equal(withAge.items[0].isAlcohol, true); assert.equal(withAge.items[0].ageConfirmed, true);
+      assert.equal(withAge.alcohol.guestConfirmed, true); assert.equal(withAge.alcohol.requireDocCheck, true);
+      // Опрос корзины без флага (после перезагрузки страницы) строку с отметкой не ломает
+      ok(await api('POST', '/api/v1/table-order/cart', { sessionId: as.sessionId, items: [alcoLine] }, AG), 'alcohol cart again');
+      step('с подтверждением 18+ принято, отметка сохранена на позиции');
+      const wv = ok(await api('GET', `/api/v1/waiter/session/${as.sessionId}`, null, W), 'waiter view alcohol');
+      assert.equal(wv.alcohol.guestConfirmed, true); assert.match(wv.alcohol.rulesText, /документом/); assert.equal(wv.alcohol.warning, null);
+      step('официант видит блок алкоголя: «гость подтвердил 18+», правила точки, проверка документа');
+
+      await setRules({ from: hhmm(120), to: hhmm(180) });
+      const closedCat = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog closed alcohol');
+      assert.equal(closedCat.alcohol.open, false); assert.ok(closedCat.alcohol.nextChangeAt);
+      r = await api('POST', '/api/v1/table-order/cart', { sessionId: as.sessionId, items: [alcoLine, line(p1, 1)], ageConfirmed: true }, AG);
+      assert.equal(r.status, 409); assert.equal(r.data.code, 'ALCO_CLOSED'); assert.match(r.data.error, /^Алкоголь продаём с \d\d:\d\d до \d\d:\d\d$/);
+      step(`вне часов продажи: 409 «${r.data.error}»`);
+      r = await api('POST', '/api/v1/table/submit-to-waiter', { sessionId: as.sessionId }, AG);
+      assert.equal(r.status, 409); assert.equal(r.data.code, 'ALCO_CLOSED');
+      ok(await api('POST', '/api/v1/table-order/cart', { sessionId: as.sessionId, items: [line(p1, 1)] }, AG), 'food cart while closed');
+      step('вне часов еда в корзину принимается, алкоголь из корзины официанту не передаётся');
+
+      await setRules({ enabled: false, from: '', to: '' });
+      r = await api('POST', '/api/v1/table-order/cart', { sessionId: as.sessionId, items: [alcoLine], ageConfirmed: true }, AG);
+      assert.equal(r.status, 409); assert.equal(r.data.error, 'На этой точке алкоголь не продаётся');
+      step('алкоголь выключен на точке: 409 «На этой точке алкоголь не продаётся»');
+
+      r = await api('POST', '/api/v1/admin/alcohol', { ...originRules, from: '10:00', to: '' }, A);
+      assert.equal(r.status, 400); step('часы только с одним временем не сохраняются (400)');
+      r = await api('POST', '/api/v1/admin/alcohol', originRules, W);
+      assert.equal(r.status, 403); step('официанту настройки алкоголя недоступны (403)');
+      await api('POST', `/api/v1/waiter/session/${as.sessionId}/close`, { force: true }, W);
+    } finally {
+      await setRules(originRules);
+    }
+  }
+}
+
 // Заказы, открытые на кассе iiko (демо-касса): импорт, дозаказ гостя в тот же заказ, правки и закрытие на кассе
 {
   const T2 = `k${Math.floor(Math.random() * 9000) + 1000}`;
