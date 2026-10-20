@@ -93,6 +93,32 @@ export interface Dashboard {
   sessions: ActiveSession[];
 }
 
+/** Бронь стола из iiko на сегодня (телефон — только в маске) */
+export interface Reservation {
+  id: string;
+  time: string;
+  startsAt: string;
+  guestName: string;
+  guests: number;
+  table: string | null;
+  tables: string[];
+  phoneMasked: string;
+  hasPhone: boolean;
+  comment: string;
+  /** upcoming — стола ещё нет, waiting — ждём, arrived — пришли, no_show — не пришли, cancelled / closed — в iiko */
+  state: 'upcoming' | 'waiting' | 'arrived' | 'no_show' | 'cancelled' | 'closed';
+  stateLabel: string;
+  sessionId: string | null;
+  sameName: boolean;
+  conflict: boolean;
+}
+
+export interface ReservationsResponse {
+  restaurant: { slug: string; name: string };
+  items: Reservation[];
+  sameNames: string[];
+}
+
 export type MenuSource = 'main' | 'bar' | string;
 
 export interface AdminProduct {

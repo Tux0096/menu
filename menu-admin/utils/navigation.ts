@@ -44,6 +44,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/banners', label: 'Баннеры', icon: 'i-heroicons-photo', roles: CONTENT, group: 'marketing', hint: 'Карусель над меню, экран AI и заказа' },
   { to: '/ai-chips', label: 'AI-подсказки', icon: 'i-heroicons-sparkles', roles: CONTENT, group: 'marketing', hint: 'Чипы на экране AI-помощника' },
 
+  { to: '/reserves', label: 'Брони', icon: 'i-heroicons-calendar-days', roles: HALL, group: 'guests', hint: 'Брони столов на сегодня из iiko: время, стол, гость, статус' },
   { to: '/reviews', label: 'Отзывы', icon: 'i-heroicons-chat-bubble-left-right', roles: HALL, group: 'guests', hint: 'Оценки гостей после визита' },
 
   { to: '/qr', label: 'QR-коды столов', icon: 'i-heroicons-qr-code', roles: ADMIN, group: 'restaurant' },

@@ -2,8 +2,10 @@
 import express from 'express';
 import { h, safeEqual } from '../lib/http.js';
 import { demoApply } from '../lib/iiko-demo-orders.js';
+import { demoReservesApply } from '../lib/iiko-demo-reserves.js';
 import { isIikoDemo } from '../iiko-client.js';
 import { importOpenOrders, scheduleImport } from '../services/iiko-import.js';
+import { scheduleReserveSync, syncReserves } from '../services/iiko-reserves.js';
 import { staffAuth } from '../services/staff-auth.js';
 import pool from '../db/pool.js';
 import { refreshStopLists, webhookToken } from '../services/stoplist.js';
@@ -23,6 +25,8 @@ router.post('/api/v1/iiko/webhook', (req, res) => {
     const stopOrgs = new Set();
     for (const ev of events) {
       if (ev?.eventType === 'StopListUpdate' && ev.organizationId) stopOrgs.add(ev.organizationId);
+      // ReserveUpdate / Reserve* (если их включили в iikoWeb): бронь изменилась — перечитываем брони точки вне очереди
+      if (/^Reserve/i.test(String(ev?.eventType || '')) && ev.organizationId) scheduleReserveSync(ev.organizationId);
       // TableOrderError — ошибка создания заказа на стол: обновляем визит сразу, не дожидаясь фонового опроса
       if (['TableOrderUpdate', 'TableOrderError'].includes(ev?.eventType) && ev.eventInfo?.id) {
         // Заказ кухни или доп. источника (бар) — ищем по всем заказам визита
@@ -56,4 +60,13 @@ router.post('/api/v1/iiko/demo/table-orders', staffAuth('manager'), h(async (req
   );
   for (const r of rows) await refreshFromIiko(r.id);
   return { ...result, imported };
+}));
+
+// ── Демо-брони (без ключей iiko): завести, изменить, отменить бронь и сразу получить результат ──
+// Только в демо-режиме и только управляющему. Дальше всё как с настоящим iiko: загрузка броней, стол ко времени брони, отмена, «не пришли».
+router.post('/api/v1/iiko/demo/reserves', staffAuth('manager'), h(async (req) => {
+  if (!isIikoDemo()) throw Object.assign(new Error('Только в демо-режиме'), { status: 404 });
+  const result = demoReservesApply(req.body || {});
+  const synced = await syncReserves();
+  return { ...result, synced };
 }));

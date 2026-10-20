@@ -77,10 +77,11 @@ export function demoHasOrder(orderId) {
   return orders.has(String(orderId));
 }
 
-/** Схема зала: столы 1–40 и столы, на которых есть демо-заказы. */
-export function demoSections() {
+/** Схема зала: столы 1–40, столы с демо-заказами и столы демо-броней (extraTables). */
+export function demoSections(extraTables = []) {
   seed();
   const names = new Set(Array.from({ length: 40 }, (_, i) => String(i + 1)));
+  for (const t of extraTables) names.add(String(t));
   for (const o of orders.values()) if (o.demoTable != null) names.add(o.demoTable);
   return { restaurantSections: [{ id: uuidFrom('demo-section'), name: 'Зал', tables: [...names].map((n) => ({ id: demoTableId(n), name: `Стол ${n}`, number: /^\d+$/.test(n) ? Number(n) : undefined, isDeleted: false })) }] };
 }

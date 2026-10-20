@@ -448,6 +448,112 @@ step('адрес и время работы точки: сохраняются �
   }
 }
 
+// Брони столов из iiko (демо-брони): стол ко времени брони без официанта → гость входит по QR → «пришли»; отмена, «не пришли», конфликт, поиск
+{
+  const rnd = () => `${Math.floor(Math.random() * 9000) + 1000}`;
+  const [R1, R2, R3, R4, R5, R6] = ['r1', 'r2', 'r3', 'r4', 'r5', 'r6'].map((p) => `${p}${rnd()}`);
+  const rsv = (body) => api('POST', '/api/v1/iiko/demo/reserves', body, { Authorization: `Bearer ${mgr.token}` });
+  const put = (reserve) => rsv({ op: 'upsert', reserve });
+  const hall = async () => ok(await api('GET', '/api/v1/waiter/sessions?restaurant=novo-sadovaya', null, W), 'sessions');
+  const at = async (t) => (await hall()).filter((x) => x.tableNumber === t && x.status === 'open');
+  const feed = async () => ok(await api('GET', '/api/v1/waiter/notifications?restaurant=novo-sadovaya', null, W), 'feed');
+  const list = async (q = '') => ok(await api('GET', `/api/v1/waiter/reservations?restaurant=novo-sadovaya&q=${encodeURIComponent(q)}`, null, W), 'reservations');
+  const first = await put({ table: R1, startsInMin: 10, name: 'Мария', phone: '+7 900 156-08-08', guests: 4, comment: 'у окна' });
+  if (first.status === 404) {
+    step('брони iiko: не демо-режим — проверка пропущена');
+  } else {
+    assert.equal(first.status, 200, JSON.stringify(first.data));
+    // 1. За 15 минут до начала стол создан сам: без официанта, с именем и числом гостей
+    let v = (await at(R1))[0];
+    assert.ok(v, 'визит под бронь создан');
+    assert.equal(v.waiterId, null, 'визит брони — без официанта («Общие столы»)');
+    assert.equal(v.reservation.guestName, 'Мария'); assert.equal(v.reservation.guests, 4);
+    assert.equal(v.reservation.state, 'waiting'); assert.equal(v.guestCount, 4);
+    let n = (await feed()).find((x) => x.session_id === v.sessionId && x.type === 'reservation');
+    assert.ok(n, 'уведомление о столе под бронь');
+    assert.equal(n.title, `Стол ${R1}`); assert.match(n.body, /^Бронь \d\d:\d\d · Мария, 4 гостя$/);
+    await rsv({ op: 'upsert', reserve: { id: first.data.reserveId, table: R1 } }); // повторный опрос второго стола не заводит
+    assert.equal((await at(R1)).length, 1);
+    step(`бронь за 10 минут: стол ${R1} создан без официанта — «${n.title} · ${n.body}»`);
+
+    // 2. Гость сканирует QR и входит в визит брони → «Пришли гости по брони»
+    const entered = ok(await api('POST', '/api/v1/table/enter', { restaurantSlug: 'novo-sadovaya', tableNumber: R1 }, G), 'enter reserve');
+    assert.equal(entered.sessionId, v.sessionId, 'гость присоединился к визиту брони, а не завёл второй');
+    assert.equal(entered.reservation.state, 'arrived');
+    v = (await at(R1))[0];
+    assert.equal(v.reservation.arrived, true); assert.equal(v.waiterId, null);
+    const feed2 = await feed();
+    n = feed2.find((x) => x.session_id === v.sessionId && x.type === 'reservation_arrived');
+    assert.ok(n, 'уведомление «пришли»');
+    assert.equal(n.body, 'Пришли гости по брони: Мария (4)'); assert.equal(n.title, `Стол ${R1}`);
+    assert.ok(!feed2.some((x) => x.session_id === v.sessionId && x.type === 'guest_seated'), 'обычное «гость за столом» не дублирует');
+    step(`гость вошёл по QR: «${n.title} · ${n.body}», в карточке стола — «пришли»`);
+
+    // 3. Поиск по имени: ё = е, одинаковые имена — обе брони с телефоном (маска, полный номер — отдельным запросом)
+    await put({ table: R2, startsInMin: 120, name: 'Мария', phone: '8 (900) 111-22-33', guests: 2 });
+    await put({ table: R3, startsInMin: 150, name: 'Алёна', phone: '+7 900 000-12-34', guests: 3 });
+    const found = await list('мария');
+    const marias = found.items.filter((x) => x.guestName === 'Мария' && [R1, R2].includes(x.table));
+    assert.equal(marias.length, 2); assert.ok(marias.every((x) => x.sameName && x.hasPhone));
+    assert.deepEqual(marias.map((x) => x.phoneMasked).sort(), ['+7 *** ***-08-08', '+7 *** ***-22-33']);
+    assert.ok(!JSON.stringify(found).includes('156-08-08') && !JSON.stringify(found).includes('9001560808'), 'в списке нет полного номера');
+    assert.equal((await list('алена')).items.filter((x) => x.table === R3).length, 1, 'ё и е — одно и то же');
+    assert.equal((await list('АЛЁНА')).items.filter((x) => x.table === R3).length, 1);
+    const phone = ok(await api('GET', `/api/v1/waiter/reservations/${marias.find((x) => x.table === R1).id}/phone?restaurant=novo-sadovaya`, null, W), 'phone');
+    assert.equal(phone.phone, '+7 900 156-08-08');
+    step('поиск брони: «мария» → две брони с телефонами (маска), «алена» находит «Алёна», полный номер — по запросу');
+
+    // 4. «Посадить сейчас»: стол создаётся досрочно, без официанта; «Гости пришли» вручную
+    const second = marias.find((x) => x.table === R2);
+    const seat = ok(await api('POST', `/api/v1/waiter/reservations/${second.id}/seat?restaurant=novo-sadovaya`, {}, W), 'seat');
+    const sv = (await at(R2))[0];
+    assert.equal(sv.sessionId, seat.sessionId); assert.equal(sv.waiterId, null); assert.equal(sv.reservation.state, 'waiting');
+    ok(await api('POST', `/api/v1/waiter/reservations/${second.id}/arrived?restaurant=novo-sadovaya`, {}, W), 'arrived');
+    assert.equal((await at(R2))[0].reservation.state, 'arrived');
+    step('«Посадить сейчас» создаёт стол без официанта, «Гости пришли» отмечает вручную');
+
+    // 5. Бронь отменена в iiko, гостей нет → визит закрыт
+    const c = await put({ table: R4, startsInMin: 5, name: 'Олег', guests: 2 });
+    assert.equal((await at(R4)).length, 1);
+    await rsv({ op: 'cancel', reserveId: c.data.reserveId });
+    assert.equal((await at(R4)).length, 0); step('бронь отменена в iiko, гостей нет — визит закрыт');
+
+    // 6. Гость не пришёл через 30 минут после начала → «Бронь не пришла» и пометка «не пришли»
+    const ns = await put({ table: R5, startsInMin: 5, name: 'Игорь', guests: 5 });
+    assert.equal((await at(R5)).length, 1);
+    await put({ id: ns.data.reserveId, startsInMin: -31 });
+    n = (await feed()).find((x) => x.table_number === R5 && x.type === 'reservation_no_show');
+    assert.ok(n && /^Бронь не пришла · \d\d:\d\d · Игорь, 5 гостей$/.test(n.body), JSON.stringify(n));
+    assert.equal((await list('игорь')).items.find((x) => x.table === R5)?.state, 'no_show');
+    assert.equal((await at(R5))[0].reservation.state, 'no_show');
+    step(`гость не пришёл: «${n.body}», бронь помечена «не пришли»`);
+
+    // 7. Стол занят прежними гостями: второй визит не создаётся, конфликт виден официанту
+    ok(await api('POST', `/api/v1/waiter/tables/${R6}/open?restaurant=novo-sadovaya`, {}, W), 'open busy');
+    const busy = (await at(R6))[0];
+    await put({ table: R6, startsInMin: 5, name: 'Пётр', guests: 2 });
+    assert.equal((await at(R6)).length, 1); assert.equal((await at(R6))[0].sessionId, busy.sessionId, 'второй визит не создан');
+    assert.ok(!(await at(R6))[0].reservation, 'прежний визит не стал визитом брони');
+    const cf = (await list('пётр')).items.find((x) => x.table === R6);
+    assert.equal(cf.conflict, true); assert.equal(cf.conflictSessionId, busy.sessionId);
+    assert.ok((await feed()).some((x) => x.table_number === R6 && x.type === 'reservation_conflict' && /стол ещё занят/.test(x.body)));
+    r = await api('POST', `/api/v1/waiter/reservations/${cf.id}/seat?restaurant=novo-sadovaya`, {}, W);
+    assert.equal(r.status, 409); assert.equal(r.data.code, 'TABLE_BUSY');
+    ok(await api('POST', `/api/v1/waiter/session/${busy.sessionId}/close`, { force: true }, W), 'close busy');
+    await rsv({ op: 'noop' });
+    assert.equal((await at(R6)).length, 1); assert.equal((await at(R6))[0].reservation.guestName, 'Пётр', 'стол освободился — визит брони создан');
+    step('стол занят прежними гостями: конфликт показан официанту, после ухода гостей визит брони создан');
+
+    // 8. Список для управляющего (админка): маска телефона, без полного номера
+    const adminList = ok(await api('GET', '/api/v1/manager/reservations?restaurant=novo-sadovaya', null, { Authorization: `Bearer ${mgr.token}` }), 'manager reservations');
+    assert.ok(adminList.items.length >= 5); assert.ok(!JSON.stringify(adminList).includes('9001560808'));
+    r = await api('GET', '/api/v1/manager/reservations?restaurant=novo-sadovaya', null, W);
+    assert.equal(r.status, 403); step('брони в админке: только управляющему, телефон маскирован');
+
+    for (const t of [R1, R2, R4, R5, R6]) for (const x of await at(t)) await api('POST', `/api/v1/waiter/session/${x.sessionId}/close`, { force: true }, W);
+  }
+}
+
 // Безопасность: AI-отзыв — только от гостя, заголовки безопасности, внутренние адреса в /img
 r = await api('POST', '/api/v1/ai/feedback', { query: 'x', productId: p1.id });
 assert.equal(r.status, 401); step('отзыв о подсказке AI без входа гостя не принимается (401)');
