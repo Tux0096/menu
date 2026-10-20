@@ -28,6 +28,8 @@ import {
 } from '../lib/iiko-order-sync.js';
 import { demoHasOrder } from '../lib/iiko-demo-orders.js';
 import { createWaiterNotification } from './waiter-notifications.js';
+import { arriveByQr } from './reservations.js';
+import { RESERVE_TZ, STATE_LABELS, clockText, reserveState } from '../lib/iiko-reserve-sync.js';
 import { getSource, productSourceMap } from './sources.js';
 import { menuIndex, priceLine, priceVariant, rowVariantKey, variantKey } from './menu-pricing.js';
 import { assertLunchRows } from './business-lunch.js';
@@ -104,8 +106,11 @@ export async function resolveIikoTableId(restaurant, tableNumber, source = 'main
 export async function getSessionContexts(ids) {
   if (!ids.length) return [];
   const { rows: sessions } = await pool.query(
-    `SELECT s.*, g.name AS guest_name, g.phone AS guest_phone, g.visits_count AS guest_visits
-     FROM table_sessions s LEFT JOIN guests g ON g.id = s.guest_id WHERE s.id = ANY($1::uuid[])`,
+    `SELECT s.*, g.name AS guest_name, g.phone AS guest_phone, g.visits_count AS guest_visits,
+            rv.starts_at AS rv_starts_at, rv.arrived_at AS rv_arrived_at, rv.no_show_at AS rv_no_show_at,
+            rv.guests_count AS rv_guests, rv.comment AS rv_comment, rv.iiko_status AS rv_status
+     FROM table_sessions s LEFT JOIN guests g ON g.id = s.guest_id
+     LEFT JOIN reservations rv ON rv.id = s.reservation_id WHERE s.id = ANY($1::uuid[])`,
     [ids],
   );
   const { rows: rr } = await pool.query('SELECT * FROM restaurants WHERE id = ANY($1::uuid[])',
@@ -129,9 +134,12 @@ export async function getSessionContexts(ids) {
 
 export async function getSessionContext(sessionId, client = pool) {
   const { rows } = await client.query(
-    `SELECT s.*, g.name AS guest_name, g.phone AS guest_phone, g.visits_count AS guest_visits
+    `SELECT s.*, g.name AS guest_name, g.phone AS guest_phone, g.visits_count AS guest_visits,
+            rv.starts_at AS rv_starts_at, rv.arrived_at AS rv_arrived_at, rv.no_show_at AS rv_no_show_at,
+            rv.guests_count AS rv_guests, rv.comment AS rv_comment, rv.iiko_status AS rv_status
      FROM table_sessions s
      LEFT JOIN guests g ON g.id = s.guest_id
+     LEFT JOIN reservations rv ON rv.id = s.reservation_id
      WHERE s.id = $1`,
     [sessionId],
   );
@@ -218,6 +226,24 @@ function minutesSince(ts) {
   return Math.floor((Date.now() - new Date(ts).getTime()) / 60000);
 }
 
+/** Бронь визита для карточки стола: «Бронь 19:00 · Мария · 4 гостя · пришли / ждём». */
+function reservationOf(session) {
+  const state = reserveState({
+    startsAt: session.rv_starts_at, status: session.rv_status || 'new', arrivedAt: session.rv_arrived_at,
+    noShowAt: session.rv_no_show_at, sessionId: session.id,
+  });
+  return {
+    id: session.reservation_id,
+    time: clockText(session.rv_starts_at, RESERVE_TZ),
+    guestName: session.reserve_guest_name || '',
+    guests: session.rv_guests || session.guest_count || 1,
+    comment: session.rv_comment || '',
+    state,
+    stateLabel: STATE_LABELS[state],
+    arrived: state === 'arrived',
+  };
+}
+
 export function mapSession({ session, restaurant, items, guests = [] }, extra = {}) {
   const wf = session.workflow_status || WORKFLOW.BROWSING;
   const isPaid = session.payment_status === 'paid';
@@ -252,6 +278,8 @@ export function mapSession({ session, restaurant, items, guests = [] }, extra = 
       phoneMasked: maskPhone(session.guest_phone),
       visitsCount: session.guest_visits || 0,
     } : null,
+    // Визит создан под бронь из iiko: время, имя и число гостей, пришли ли (телефон — только в списке «Брони»)
+    reservation: session.reservation_id ? reservationOf(session) : null,
     guestsAtTable: (session.guest_ids || []).length || (session.guest_id ? 1 : 0),
     guests: tableGuests({ guests }),
     readyCount: mapped.filter((i) => i.isReady).reduce((s, i) => s + i.quantity, 0),
@@ -426,7 +454,9 @@ export async function enterTable({
       const isLead = !session.guest_id;
       const who = guest.name || 'Гость';
       const visits = guest.visitsCount ? ` · визитов: ${guest.visitsCount + 1}` : ' · первый визит';
-      if (joined) await createWaiterNotification({
+      // Визит создан под бронь, гость отсканировал QR: «Пришли гости по брони» вместо обычного «гость за столом»
+      const byReservation = joined ? await arriveByQr(session).catch((e) => (console.warn('бронь:', e.message), false)) : false;
+      if (joined && !byReservation) await createWaiterNotification({
         restaurantId: restaurant.id,
         sessionId: session.id,
         tableNumber: table,
@@ -902,6 +932,7 @@ export async function runServiceChecks() {
     `UPDATE table_sessions SET idle_notified_at = NOW()
      WHERE status = 'open' AND idle_notified_at IS NULL
        AND workflow_status IN ('browsing', 'building_cart')
+       AND (reservation_id IS NULL OR cardinality(guest_ids) > 0) -- стол под бронь, гостей ещё нет — напоминать нечего
        AND COALESCE(last_guest_activity_at, menu_opened_at, created_at) < NOW() - ($1 || ' milliseconds')::interval
        AND created_at > NOW() - INTERVAL '6 hours'
      RETURNING id, restaurant_id, table_number, last_guest_activity_at`,

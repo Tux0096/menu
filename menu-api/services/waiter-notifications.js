@@ -77,7 +77,8 @@ export async function setWaiterTables(restaurantId, staffId, tables, tablesCount
   return getWaiterTables(restaurantId, staffId);
 }
 
-const BROADCAST = new Set(['wait_too_long', 'iiko_error']);
+// Брони — всем: визит брони без официанта, а о приходе гостей и о том, что бронь не пришла, должен знать весь зал
+const BROADCAST = new Set(['wait_too_long', 'iiko_error', 'reservation', 'reservation_arrived', 'reservation_no_show', 'reservation_conflict']);
 
 /**
  * Лента официанта. Выбрал «Мои столы» — только по ним, по столам, которые ведёт сам, по столам без ответственного

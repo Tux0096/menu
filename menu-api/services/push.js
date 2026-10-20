@@ -65,7 +65,7 @@ export async function unregisterDevice(token) {
 }
 
 // Звук и важность по типу события: «готово», новый заказ и вызов — громкий канал
-const LOUD = new Set(['dish_ready', 'items_removed', 'cart_ready', 'reorder_intent', 'call_waiter', 'bill_requested', 'wait_too_long']);
+const LOUD = new Set(['dish_ready', 'reservation_arrived', 'reservation_conflict', 'items_removed', 'cart_ready', 'reorder_intent', 'call_waiter', 'bill_requested', 'wait_too_long']);
 
 /** Push всем телефонам официантов ресторана (не блокирует основной поток). */
 export async function pushToRestaurant(restaurantId, { title, body, type, sessionId, tableNumber, staffIds = [] }) {

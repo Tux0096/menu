@@ -2,6 +2,7 @@ import axios from 'axios';
 import { randomUUID } from 'crypto';
 import { AsyncLocalStorage } from 'async_hooks';
 import { demoAddItems, demoCreate, demoOrdersByIds, demoOrdersByTable, demoSections } from './lib/iiko-demo-orders.js';
+import { demoReserveTables, demoReservesByIds, demoReservesWorkload } from './lib/iiko-demo-reserves.js';
 import { isRemovedItem } from './lib/iiko-order-sync.js';
 import { IIKO_URL, requestIikoTokenFor, iikoApiLogin } from './lib/iiko-token.js';
 
@@ -91,7 +92,14 @@ function demoResponse(path, body) {
   }
   // Демо-касса в памяти (lib/iiko-demo-orders.js): открытые заказы по столам, IIKO_DEMO_TABLE_ORDERS
   if (path === '/api/1/reserve/available_restaurant_sections') {
-    return demoSections();
+    return demoSections(demoReserveTables());
+  }
+  // Демо-брони в памяти (lib/iiko-demo-reserves.js): IIKO_DEMO_RESERVES и /api/v1/iiko/demo/reserves
+  if (path === '/api/1/reserve/restaurant_sections_workload') {
+    return demoReservesWorkload(body);
+  }
+  if (path === '/api/1/reserve/status_by_id') {
+    return demoReservesByIds(body);
   }
   if (path === '/api/1/order/by_id') {
     return demoOrdersByIds(body);
@@ -161,6 +169,19 @@ export async function getRestaurantSections(organizationId, terminalGroupId) {
   return iikoPost('/api/1/reserve/available_restaurant_sections', {
     terminalGroupIds: [terminalGroupId],
   });
+}
+
+/**
+ * Занятость залов с бронями за период (только чтение): restaurantSectionIds — залы из схемы,
+ * dateFrom/dateTo — «ГГГГ-ММ-ДД ЧЧ:ММ:СС.000» по местному времени точки. Брони — в массивах reserves ответа.
+ */
+export async function getReservesWorkload(sectionIds, dateFrom, dateTo) {
+  return iikoPost('/api/1/reserve/restaurant_sections_workload', { restaurantSectionIds: sectionIds, dateFrom, dateTo });
+}
+
+/** Брони по ID: статус (New / Started / Closed) и детали (только чтение). */
+export async function getReservesByIds(organizationId, reserveIds) {
+  return iikoPost('/api/1/reserve/status_by_id', { organizationId, reserveIds });
 }
 
 /**

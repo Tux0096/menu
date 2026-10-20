@@ -41,4 +41,9 @@ export const NOTIFY_TYPES = {
   IIKO_ERROR: 'iiko_error',
   ITEMS_REMOVED: 'items_removed',
   DISH_READY: 'dish_ready',
+  // Брони из iiko: стол создан под бронь, гости пришли, бронь не пришла, стол брони занят прежними гостями
+  RESERVATION: 'reservation',
+  RESERVATION_ARRIVED: 'reservation_arrived',
+  RESERVATION_NO_SHOW: 'reservation_no_show',
+  RESERVATION_CONFLICT: 'reservation_conflict',
 };

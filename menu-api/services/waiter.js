@@ -526,7 +526,7 @@ export async function getHallDashboard(restaurantId) {
 
   const { rows: [today] } = await pool.query(
     `SELECT
-       COUNT(*)::int AS visits,
+       COUNT(*) FILTER (WHERE reservation_id IS NULL OR cardinality(guest_ids) > 0 OR sent_to_production_at IS NOT NULL)::int AS visits,
        COUNT(*) FILTER (WHERE sent_to_production_at IS NOT NULL)::int AS orders,
        COUNT(*) FILTER (WHERE payment_status = 'paid')::int AS paid,
        COALESCE(SUM(total) FILTER (WHERE sent_to_production_at IS NOT NULL), 0)::float AS revenue,

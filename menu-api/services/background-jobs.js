@@ -7,6 +7,7 @@ import { checkPendingPayments } from './payments.js';
 import { refreshStopLists, registerWebhooks } from './stoplist.js';
 import { invalidateCatalogCache, warmCatalogs } from './catalog.js';
 import { importOpenOrders } from './iiko-import.js';
+import { syncReserves, tickReserves } from './iiko-reserves.js';
 import { refreshKitchenStatuses, runServiceChecks } from './table-session.js';
 
 // ── Меню и стоп-листы iiko ──────────────────────────────────────────────────
@@ -84,6 +85,15 @@ export function startBackgroundJobs() {
     const importTick = () => importOpenOrders().catch((e) => console.warn('импорт заказов iiko:', e.message));
     setInterval(importTick, parseInt(process.env.IIKO_IMPORT_MS || '30000', 10));
     setTimeout(importTick, 20_000).unref?.();
+  }
+
+  // Брони столов из iiko (только чтение): загрузка раз в 90 с, разбор (стол ко времени брони, «не пришли») — раз в 30 с.
+  // IIKO_RESERVES=false — выключить
+  if (process.env.IIKO_RESERVES !== 'false') {
+    const reserveSync = () => syncReserves().catch((e) => console.warn('брони iiko:', e.message));
+    setInterval(reserveSync, parseInt(process.env.IIKO_RESERVE_MS || '90000', 10));
+    setInterval(() => tickReserves().catch((e) => console.warn('брони:', e.message)), 30000);
+    setTimeout(reserveSync, 25_000).unref?.();
   }
 
   warmCatalogs()

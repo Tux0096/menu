@@ -77,7 +77,7 @@
     if (fresh && S.token && fresh !== S.token) { S.token = fresh; ls.set('token', fresh); }
     const data = await res.json().catch(() => ({}));
     if (res.status === 401 && S.token) { logout(); throw new Error('Сессия истекла — войдите снова'); }
-    if (!res.ok) { const e = new Error(data.error || `Ошибка ${res.status}`); e.status = res.status; e.code = data.code; throw e; }
+    if (!res.ok) { const e = new Error(data.error || `Ошибка ${res.status}`); e.status = res.status; e.code = data.code; e.details = data.details; throw e; }
     return data;
   }
 
@@ -270,9 +270,34 @@
     if (open && S.edit && !S.edit.dirty) S.edit = editFrom(open);
   }
 
+  // Брони на сегодня; запрос по имени гостя — на сервере (ё = е, одинаковые имена — все брони)
+  async function loadReserves() {
+    const q = S.rsv?.q || '';
+    try {
+      const res = await api('GET', `/api/v1/waiter/reservations?q=${encodeURIComponent(q)}`);
+      S.rsv = { ...res, q };
+    } catch (e) {
+      S.rsv = { items: [], q, sameNames: [] };
+      toast(e.message, true);
+    }
+  }
+
   function statusPill(s) {
+    // Стол создан под бронь, гостей ещё нет — «Ждём гостей» вместо «Изучает меню»
+    if (s.reservation && !s.reservation.arrived && s.workflowStatus === 'browsing' && !(s.guests || []).length) {
+      const [l, t] = s.reservation.state === 'no_show' ? ['Не пришли', 'bad'] : ['Ждём гостей', 'wait'];
+      return `<span class="pill" data-tone="${t}">${l}</span>`;
+    }
     const [label, tone] = STATUS[s.workflowStatus] || [s.workflowStatus, ''];
     return `<span class="pill" data-tone="${tone}">${esc(label)}</span>`;
+  }
+
+  // Бейдж брони: «Бронь 19:00 · Мария · 4 гостя · пришли / ждём»
+  const guestsWord = (n) => { const v = Number(n) || 0; const l = v % 10; return `${v} ${v % 100 >= 11 && v % 100 <= 14 ? 'гостей' : l === 1 ? 'гость' : l >= 2 && l <= 4 ? 'гостя' : 'гостей'}`; };
+  const RSV_TONE = { arrived: 'ok', waiting: 'wait', upcoming: 'wait', no_show: 'bad', cancelled: 'bad', closed: '' };
+  function reserveBadge(r) {
+    const who = [`Бронь ${r.time}`, r.guestName, guestsWord(r.guests)].filter(Boolean).map(esc).join(' · ');
+    return `<span class="rsv-badge" data-tone="${RSV_TONE[r.state] || ''}">${who} · <b>${esc(r.stateLabel || '')}</b></span>`;
   }
 
   // ── Экран стола (официант): отдельный экран, блюда по гостям, панель действий снизу ──
@@ -340,6 +365,8 @@
           <div class="muted" style="font-size:12px">Открыт ${time(s.createdAt)}${s.waitingMinutes != null ? ` · ждёт ${s.waitingMinutes} мин` : ''}${s.guest?.visitsCount ? ` · визитов: ${s.guest.visitsCount}` : ''}</div></div>
         ${statusPill(s)}
       </div>
+      ${s.reservation ? `<div class="rsv-box">${reserveBadge(s.reservation)}${s.reservation.comment ? `<div class="muted" style="font-size:12px;margin-top:4px">${esc(s.reservation.comment)}</div>` : ''}
+        ${!s.reservation.arrived ? '<button class="btn btn--sm btn--dark" data-rsv-arrived-session>Гости пришли</button>' : ''}</div>` : ''}
       ${s.openedInIiko ? `<div class="note-box">Открыт на кассе${s.iikoWaiterName ? ` · официант ${esc(s.iikoWaiterName)}` : ''}. Блюда удаляйте и отменяйте на кассе iiko — здесь они обновятся сами.</div>` : ''}
       ${(s.removedItems || []).filter((r) => Date.now() - new Date(r.at).getTime() < 30 * 60_000).length ? `<div class="note-box note-box--warn"><b>На кассе удалено:</b> ${s.removedItems.filter((r) => Date.now() - new Date(r.at).getTime() < 30 * 60_000).slice(-5).reverse().map((r) => `${esc(r.name)} ×${r.quantity}`).join('; ')}</div>` : ''}
       ${lockedByOther ? '<div class="error-box">Стол сейчас редактирует другой официант</div>' : ''}
@@ -428,7 +455,8 @@
           <div class="tcard__num">${esc(x.tableNumber)}${isMine(x) ? '<span class="tcard__mine" title="Мой стол">★</span>' : ''}</div>
           <div class="tcard__body">
             <div class="tcard__pills">${statusPill(x)}${x.openedInIiko ? ' <span class="pill" data-tone="work" title="Заказ открыт на кассе iiko">открыт на кассе</span>' : ''}${x.readyCount ? ` <span class="pill" data-tone="bad">🔔 Готово ${x.readyCount}</span>` : ''}${x.isOverdue ? ` <span class="overdue">⏱ ${x.waitingMinutes} мин</span>` : ''}</div>
-            <div class="tcard__guest">${esc((x.guests || []).length ? x.guests.map((g) => g.name).join(', ') : (x.guest?.name || (x.openedInIiko ? `Заказ на кассе${x.iikoWaiterName ? ` · ${x.iikoWaiterName}` : ''}` : 'Гость')))}${x.pendingCount ? ` · новых: ${x.pendingCount}` : ''}</div>
+            ${x.reservation ? `<div class="tcard__rsv">${reserveBadge(x.reservation)}</div>` : ''}
+            <div class="tcard__guest">${esc((x.guests || []).length ? x.guests.map((g) => g.name).join(', ') : (x.guest?.name || x.reservation?.guestName || (x.openedInIiko ? `Заказ на кассе${x.iikoWaiterName ? ` · ${x.iikoWaiterName}` : ''}` : 'Гость')))}${x.pendingCount ? ` · новых: ${x.pendingCount}` : ''}</div>
           </div>
           <div class="tcard__sum">${rub(x.total)}</div>
         </button>`;
@@ -442,7 +470,31 @@
           <div class="feed">${S.notes.length ? S.notes.map((n) => `<button class="note ${n.is_read ? '' : 'is-unread'}" data-type="${esc(n.type)}" data-note="${esc(n.id)}" data-session="${esc(n.session_id || '')}">
             <div class="note__head"><span>${esc(n.title)}</span><span class="note__time">${time(n.created_at)}</span></div>
             <div class="note__body">${esc(n.body)}</div></button>`).join('') : '<div class="muted">Пока тихо</div>'}</div>`;
-        const view = ['notes', 'mine'].includes(S.wview) ? S.wview : 'tables';
+        const view = ['notes', 'mine', 'reserves'].includes(S.wview) ? S.wview : 'tables';
+        // «Брони»: сегодняшние брони из iiko по времени, поиск по имени (ё = е); телефон — маска, полный по нажатию «показать»
+        if (view === 'reserves') await loadReserves();
+        const rv = S.rsv || { items: [], q: '' };
+        const rsvCard = (r) => {
+          const dim = ['cancelled', 'closed'].includes(r.state);
+          return `<div class="rcard ${dim ? 'is-dim' : ''} ${r.sameName ? 'is-same' : ''}" data-state="${esc(r.state)}">
+            <button class="rcard__main" data-rsv-open="${esc(r.id)}" ${dim ? 'disabled' : ''}>
+              <div class="rcard__time">${esc(r.time)}</div>
+              <div class="rcard__body">
+                <div class="rcard__name">${esc(r.guestName || 'Без имени')}${r.sameName ? ' <span class="pill" data-tone="wait">тёзки</span>' : ''}</div>
+                <div class="rcard__meta">${r.table ? `Стол ${esc(r.table)}` : 'стол не назначен'}${(r.tables || []).length > 1 ? ` (+${r.tables.length - 1})` : ''} · ${esc(guestsWord(r.guests))}${r.comment ? ` · ${esc(r.comment)}` : ''}</div>
+              </div>
+              <span class="pill" data-tone="${RSV_TONE[r.state] || ''}">${esc(r.stateLabel)}</span>
+            </button>
+            ${r.conflict ? '<div class="rcard__warn">Стол ещё занят прежними гостями</div>' : ''}
+            <div class="rcard__phone">
+              ${r.hasPhone ? `<span class="muted">Телефон:</span> <b data-rsv-phone-text="${esc(r.id)}">${esc(r.phoneMasked)}</b> <button class="link-btn" data-rsv-phone="${esc(r.id)}">показать</button>` : '<span class="muted">Телефона нет</span>'}
+              ${!dim && r.canSeat ? `<span class="rcard__acts">${r.sessionId ? '' : `<button class="btn btn--sm" data-rsv-seat="${esc(r.id)}">Посадить сейчас</button>`}${r.state === 'arrived' ? '' : `<button class="btn btn--sm btn--dark" data-rsv-arrived="${esc(r.id)}">Гости пришли</button>`}</span>` : ''}
+            </div>
+          </div>`;
+        };
+        const reservesHtml = `<input class="inp" id="rsv-search" type="search" placeholder="Имя гостя" value="${esc(rv.q)}" autocomplete="off" style="width:100%;margin-bottom:10px">
+          ${rv.sameNames?.length ? `<div class="note-box note-box--warn">Совпали имена: ${rv.sameNames.map(esc).join(', ')} — смотрите телефон</div>` : ''}
+          <div class="tlist">${rv.items.length ? rv.items.map(rsvCard).join('') : `<div class="empty-note">${rv.q ? 'Такой брони на сегодня нет' : 'На сегодня броней нет'}</div>`}</div>`;
         // «Мои столы»: за какие столы отвечаю — уведомления и push только по ним (плюс столы без ответственного)
         const mt = S.myTables;
         const mineHtml = !mt ? '<div class="muted">Загружаем…</div>' : `<p class="muted" style="margin:0 0 10px;font-size:13px">
@@ -461,8 +513,9 @@
               <button class="${view === 'tables' ? 'is-on' : ''}" data-wview="tables">Столы · ${open.length}</button>
               <button class="${view === 'notes' ? 'is-on' : ''}" data-wview="notes">Уведомления${unread.length ? ` <span class="dot-inline">${unread.length}</span>` : ''}</button>
               <button class="${view === 'mine' ? 'is-on' : ''}" data-wview="mine">Мои столы${S.myTables?.tables?.length ? ` · ${S.myTables.tables.length}` : ''}</button>
+              <button class="${view === 'reserves' ? 'is-on' : ''}" data-wview="reserves">Брони</button>
             </div>
-            ${view === 'notes' ? notesHtml : view === 'mine' ? mineHtml : tablesHtml}
+            ${view === 'notes' ? notesHtml : view === 'mine' ? mineHtml : view === 'reserves' ? reservesHtml : tablesHtml}
           </section>
           <section class="waiter__table">${editorHtml() || '<div class="empty-note hide-sm">Выберите стол слева</div>'}</section>
         </div>`;
@@ -1268,6 +1321,43 @@
       }
       if (q('[data-open]')) { await openTable(q('[data-open]').dataset.open); return; }
       if (q('[data-wview]')) { S.wview = q('[data-wview]').dataset.wview; render(); return; }
+      // Брони: показать телефон, открыть стол брони / посадить сейчас, отметить «Гости пришли»
+      if (q('[data-rsv-phone]')) {
+        const btn = q('[data-rsv-phone]');
+        const res = await api('GET', `/api/v1/waiter/reservations/${btn.dataset.rsvPhone}/phone`);
+        const out = $(`[data-rsv-phone-text="${btn.dataset.rsvPhone}"]`);
+        if (out) out.textContent = res.phone || 'номера нет';
+        btn.remove();
+        return;
+      }
+      if (q('[data-rsv-open]') || q('[data-rsv-seat]') || q('[data-rsv-arrived]')) {
+        const arrivedBtn = q('[data-rsv-arrived]');
+        const el = q('[data-rsv-open]') || q('[data-rsv-seat]') || arrivedBtn;
+        const id = el.dataset.rsvOpen || el.dataset.rsvSeat || el.dataset.rsvArrived;
+        el.disabled = true;
+        try {
+          const res = await api('POST', `/api/v1/waiter/reservations/${id}/${arrivedBtn ? 'arrived' : 'seat'}`);
+          if (arrivedBtn) toast(`Стол ${res.tableNumber}: гости пришли`);
+          await loadWaiter();
+          await openTable(res.sessionId);
+        } catch (err) {
+          el.disabled = false;
+          toast(err.message, true);
+          // стол занят другими гостями — покажем их заказ
+          if (err.code === 'TABLE_BUSY' && err.details?.sessionId) { await loadWaiter(); await openTable(err.details.sessionId); }
+        }
+        return;
+      }
+      if (q('[data-rsv-arrived-session]') && S.openId) {
+        const cur = S.sessions.find((x) => x.sessionId === S.openId);
+        if (cur?.reservation) {
+          await api('POST', `/api/v1/waiter/reservations/${cur.reservation.id}/arrived`);
+          toast('Гости пришли');
+          await loadWaiter();
+          render();
+        }
+        return;
+      }
       // Гость пришёл без QR и позвал официанта: официант сам открывает стол и принимает заказ
       if (q('[data-open-table-pick]')) {
         let hall;
@@ -1435,6 +1525,11 @@
   });
   let inputT;
   document.addEventListener('input', (e) => {
+    if (e.target.id === 'rsv-search') {
+      S.rsv = { ...(S.rsv || { items: [] }), q: e.target.value }; clearTimeout(inputT);
+      inputT = setTimeout(async () => { await render(); const i = $('#rsv-search'); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } }, 250);
+      return;
+    }
     if (e.target.id === 'prod-search') { S.productSearch = e.target.value; clearTimeout(inputT); inputT = setTimeout(render, 200); }
     if (e.target.id === 'menu-search') {
       S.menu.search = e.target.value; clearTimeout(inputT);

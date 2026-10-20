@@ -377,3 +377,28 @@ html, body { overflow-x: clip; }
 .trow__comp { margin-top: 2px; font-size: 12px; line-height: 16px; color: var(--muted); }
 .vchip:disabled { opacity: .45; }
 .pick-sheet > :not(.pick-list) { flex-shrink: 0; }
+
+/* Брони из iiko: бейдж на столе и вкладка «Брони» */
+.rsv-badge { display: inline-block; max-width: 100%; padding: 4px 10px; border-radius: 12px; font-size: 12px; font-weight: 500; background: var(--bg); line-height: 1.35; }
+.rsv-badge b { font-weight: 700; }
+.rsv-badge[data-tone="ok"] { background: #EAF8F2; color: var(--ok); }
+.rsv-badge[data-tone="wait"] { background: #FFF4E0; color: #A35F00; }
+.rsv-badge[data-tone="bad"] { background: #FDECEE; color: var(--danger); }
+.tcard__rsv { margin-top: 4px; }
+.rsv-box { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 12px; padding: 10px 12px; background: var(--card); border-radius: 14px; box-shadow: var(--shadow); }
+.rsv-box .btn { margin-left: auto; }
+.rcard { background: var(--card); border-radius: 16px; box-shadow: var(--shadow); overflow: hidden; border-left: 4px solid transparent; }
+.rcard[data-state="arrived"] { border-left-color: var(--ok); }
+.rcard[data-state="waiting"], .rcard[data-state="upcoming"] { border-left-color: var(--warn); }
+.rcard[data-state="no_show"] { border-left-color: var(--danger); }
+.rcard.is-dim { opacity: .55; }
+.rcard.is-same { box-shadow: 0 0 0 2px #FFD99A; }
+.rcard__main { display: grid; grid-template-columns: 52px minmax(0, 1fr) auto; gap: 12px; align-items: center; width: 100%; text-align: left; padding: 12px 14px 8px; }
+.rcard__time { font-size: 18px; font-weight: 600; }
+.rcard__name { font-weight: 600; overflow-wrap: anywhere; }
+.rcard__meta { font-size: 13px; color: var(--muted); margin-top: 2px; overflow-wrap: anywhere; }
+.rcard__warn { margin: 0 14px 4px; padding: 6px 10px; border-radius: 10px; background: #FFF4E0; color: #A35F00; font-size: 12px; font-weight: 600; }
+.rcard__phone { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; padding: 0 14px 12px; font-size: 13px; }
+.rcard__acts { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+@media (max-width: 520px) { .seg--tabs { gap: 2px; padding: 3px; } .seg--tabs button { padding: 10px 6px; font-size: 12px; } }
+.link-btn { color: var(--violet); font-size: 13px; font-weight: 600; text-decoration: underline; padding: 2px 0; }
