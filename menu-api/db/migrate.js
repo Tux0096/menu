@@ -473,6 +473,8 @@ const SCHEMA = `
     created_at TIMESTAMPTZ DEFAULT NOW(),
     PRIMARY KEY (restaurant_id, source)
   );
+  -- Разбор бизнес-ланча из внешнего меню (как он лежит в iiko) — для админки
+  ALTER TABLE menu_sync_reports ADD COLUMN IF NOT EXISTS lunch JSONB;
   -- Строка заказа знает свой заказ iiko (после закрытия счёта на кассе дозаказ уходит в новый заказ)
   -- и онлайн-платёж, которым она оплачена: долг гостя и сумма в iiko считаются по строкам, а не «гость оплатил всё»
   ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS iiko_order_id VARCHAR(64);
