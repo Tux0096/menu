@@ -181,6 +181,20 @@ const SCHEMA = `
     ADD COLUMN IF NOT EXISTS ready_notified_at TIMESTAMP,
     ADD COLUMN IF NOT EXISTS served_at TIMESTAMP,
     ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP;
+  -- Тревога «готово, но не вынесено» отправлена (одна на позицию)
+  ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS ready_wait_notified_at TIMESTAMP;
+  -- Время готовки: когда начали готовить, когда готово, сколько готовилось (минуты), тревога «долго готовится» отправлена
+  ALTER TABLE table_order_items
+    ADD COLUMN IF NOT EXISTS cooking_started_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS ready_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS cook_minutes NUMERIC(8,2),
+    ADD COLUMN IF NOT EXISTS cook_slow_notified_at TIMESTAMPTZ;
+  CREATE INDEX IF NOT EXISTS idx_items_cook ON table_order_items(iiko_product_id) WHERE cook_minutes IS NOT NULL;
+  -- Норматив готовки блюда из номенклатуры iiko (cookingTime), минуты
+  ALTER TABLE products ADD COLUMN IF NOT EXISTS cooking_minutes NUMERIC(6,1);
+  -- Когда стол взял официант (кнопка «Взять стол» на of. или импорт из iiko); NULL — стол «общий»
+  ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS waiter_assigned_at TIMESTAMPTZ;
+  CREATE INDEX IF NOT EXISTS idx_table_sessions_waiter ON table_sessions(restaurant_id, waiter_id) WHERE status = 'open';
   -- product_id в каталоге prod-API не совпадает с products.id → убираем FK, если он был
   ALTER TABLE table_order_items DROP CONSTRAINT IF EXISTS table_order_items_product_id_fkey;
   ALTER TABLE table_order_items ALTER COLUMN product_id TYPE VARCHAR(100) USING product_id::text;
@@ -210,7 +224,7 @@ const SCHEMA = `
   CREATE INDEX IF NOT EXISTS idx_waiter_notifications_unread
     ON waiter_notifications(restaurant_id, is_read, created_at DESC);
   -- Прочитано — у каждого официанта своё: «прочитать все» одного не гасит счёт или вызов у остальных
-  -- Столы, за которые отвечает официант: уведомления и push по ним — ему. Не выбрал ни одного — видит все столы
+  -- Устарело: выбор номеров столов заменён назначением официанта на визит (table_sessions.waiter_id); таблица не используется
   CREATE TABLE IF NOT EXISTS waiter_tables (
     staff_id UUID NOT NULL,
     restaurant_id UUID NOT NULL REFERENCES restaurants(id) ON DELETE CASCADE,

@@ -11,6 +11,7 @@ import { isValidQrKey, QR_RESTAURANT_SLUG, qrSignedRequired } from '../lib/qr-co
 import {
   IDLE_REMINDER_MS,
   NOTIFY_TYPES,
+  READY_WAIT_MS,
   WAITER_RESPONSE_SLA_MS,
   WORKFLOW,
   WORKFLOW_GUEST_LABELS,
@@ -24,6 +25,11 @@ import {
   matchTableIdFromSections,
 } from '../iiko-client.js';
 import { createWaiterNotification } from './waiter-notifications.js';
+import { attachCookInfo, loadCookNorms } from './cooking.js';
+import { COOK_SLOW_FACTOR, cookInfo, iikoCookMinutes } from '../lib/cooking-time.js';
+import {
+  rubText, billText, callText, cookSlowText, newOrderText, readyText, readyWaitText, reorderText, removedText, waitText,
+} from '../lib/notification-text.js';
 import { getSource, productSourceMap } from './sources.js';
 import { menuIndex, priceLine, priceVariant, rowVariantKey, variantKey } from './menu-pricing.js';
 import { assertLunchRows } from './business-lunch.js';
@@ -100,8 +106,9 @@ export async function resolveIikoTableId(restaurant, tableNumber, source = 'main
 export async function getSessionContexts(ids) {
   if (!ids.length) return [];
   const { rows: sessions } = await pool.query(
-    `SELECT s.*, g.name AS guest_name, g.phone AS guest_phone, g.visits_count AS guest_visits
-     FROM table_sessions s LEFT JOIN guests g ON g.id = s.guest_id WHERE s.id = ANY($1::uuid[])`,
+    `SELECT s.*, g.name AS guest_name, g.phone AS guest_phone, g.visits_count AS guest_visits, w.name AS waiter_name
+     FROM table_sessions s LEFT JOIN guests g ON g.id = s.guest_id LEFT JOIN staff_users w ON w.id = s.waiter_id
+     WHERE s.id = ANY($1::uuid[])`,
     [ids],
   );
   const { rows: rr } = await pool.query('SELECT * FROM restaurants WHERE id = ANY($1::uuid[])',
@@ -125,9 +132,10 @@ export async function getSessionContexts(ids) {
 
 export async function getSessionContext(sessionId, client = pool) {
   const { rows } = await client.query(
-    `SELECT s.*, g.name AS guest_name, g.phone AS guest_phone, g.visits_count AS guest_visits
+    `SELECT s.*, g.name AS guest_name, g.phone AS guest_phone, g.visits_count AS guest_visits, w.name AS waiter_name
      FROM table_sessions s
      LEFT JOIN guests g ON g.id = s.guest_id
+     LEFT JOIN staff_users w ON w.id = s.waiter_id
      WHERE s.id = $1`,
     [sessionId],
   );
@@ -205,6 +213,11 @@ function mapItem(row) {
     isReady: row.kitchen_status === 'CookingCompleted' && !row.served_at,
     paidOnline: Boolean(row.paid_payment_id),
     servedAt: row.served_at || null,
+    // Время готовки: отправлено на кухню, начали готовить, готово, сколько готовилось (мин); `cook` дописывает getSessionView
+    sentAt: row.sent_at || null,
+    cookingStartedAt: row.cooking_started_at || null,
+    readyAt: row.ready_at || row.ready_notified_at || null,
+    cookMinutes: row.cook_minutes != null ? Number(row.cook_minutes) : null,
   };
 }
 
@@ -261,6 +274,8 @@ export function mapSession({ session, restaurant, items, guests = [] }, extra = 
     isOverdue: waitingMinutes != null && waitingMinutes * 60000 >= WAITER_RESPONSE_SLA_MS,
     lockedBy: session.locked_until && new Date(session.locked_until) > new Date() ? session.locked_by : null,
     waiterId: session.waiter_id || null,
+    waiterName: session.waiter_id ? (session.waiter_name || 'Официант') : null,
+    waiterAssignedAt: session.waiter_id ? session.waiter_assigned_at || null : null,
     canGuestRemoveItems: !isPaid,
     canGuestSubmit: !isPaid && pending.length > 0,
     canGuestPay: PAYMENTS_ENABLED && PAYABLE.includes(wf) && !isPaid && parseFloat(session.total || 0) > 0,
@@ -302,6 +317,7 @@ export async function getSessionView(sessionId) {
       else if (p?.balance) i.stopBalance = p.balance;
     }
   }
+  await attachCookInfo(view, ctx.restaurant).catch(() => {});
   view.stoppedPending = view.items.filter((i) => i.isStopped).map((i) => i.name);
   view.stopListUpdatedAt = stopListLoadedAt();
   return view;
@@ -669,10 +685,12 @@ export async function submitToWaiter(sessionId, cartItems, guestId) {
       sessionId,
       tableNumber: fresh.session.table_number,
       type: isReorder ? NOTIFY_TYPES.REORDER_INTENT : NOTIFY_TYPES.CART_READY,
-      title: `Стол №${fresh.session.table_number}`,
-      body: `${isReorder ? 'Дозаказ' : 'Новый заказ'}: `
-        + `${pending.map((i) => `${i.name} ×${i.quantity}${i.guest_name ? ` (${i.guest_name})` : ''}`).join(', ')} — ${Math.round(sum)} ₽`,
-      payload: { sessionId, itemsCount: pending.length, sum, isReorder },
+      // Дозаказ — только новые позиции, не весь стол; детали — в открытом столе
+      ...(isReorder
+        ? reorderText({ table: fresh.session.table_number, lines: pending.map((i) => ({ name: i.name, qty: i.quantity })) })
+        : newOrderText({ table: fresh.session.table_number, count: pending.length, sum })),
+      payload: { sessionId, itemsCount: pending.length, sum, isReorder, lines: pending.map((i) => ({ name: i.name, qty: i.quantity })) },
+      mergeLines: isReorder,
     };
   }));
   await createWaiterNotification(notify);
@@ -721,10 +739,10 @@ export async function requestBill(sessionId, { guest = null, guestIds = null, me
   };
   const who = whole ? 'за весь стол' : names.length === 1 && names[0] === by ? `только ${by}` : names.join(' и ');
   const what = barOnly ? 'бар (кухня оплачена онлайн)' : who;
-  const body = `${by ? `${by}: ` : ''}${barOnly && !whole ? `${who}, ` : ''}${what} — ${Math.round(amount)} ₽${pay ? `, ${BILL_METHODS[pay]}` : ''}`
-    + `${whole || barOnly ? '' : ` (весь стол ${Math.round(ctx.session.total)} ₽)`}`;
+  const bill = billText({ table: ctx.session.table_number, method: pay, amount, by, scope: whole ? 'table' : 'guests', names });
+  const body = bill.body + (barOnly ? ' · бар (кухня оплачена онлайн)' : '');
   // Повторное нажатие «Попросить счёт» с тем же выбором — официант уже знает, второй раз не зовём
-  if (await recentlyNotified(sessionId, NOTIFY_TYPES.BILL_REQUESTED, body, CALL_COOLDOWN_SEC)) return getSessionView(sessionId);
+  if (await recentlyNotified(sessionId, NOTIFY_TYPES.BILL_REQUESTED, bill.title, body, CALL_COOLDOWN_SEC)) return getSessionView(sessionId);
   await pool.query(
     `UPDATE table_sessions SET workflow_status = $2, bill_requested_at = NOW(), wait_notified_at = NULL,
        bill_requests = COALESCE(bill_requests, '[]'::jsonb) || $3::jsonb,
@@ -737,7 +755,7 @@ export async function requestBill(sessionId, { guest = null, guestIds = null, me
     sessionId,
     tableNumber: ctx.session.table_number,
     type: NOTIFY_TYPES.BILL_REQUESTED,
-    title: `Стол №${ctx.session.table_number} — счёт${pay ? ` ${BILL_METHODS[pay]}` : ''}`,
+    title: bill.title,
     body,
     payload: { sessionId, total: parseFloat(ctx.session.total), amount, guestIds: request.guestIds, method: pay, part: request.part },
   });
@@ -746,11 +764,11 @@ export async function requestBill(sessionId, { guest = null, guestIds = null, me
 
 /** Повтор вызова в пределах паузы: то же уведомление этого стола уже ушло официанту */
 const CALL_COOLDOWN_SEC = 60;
-async function recentlyNotified(sessionId, type, body, seconds) {
+async function recentlyNotified(sessionId, type, title, body, seconds) {
   const { rows } = await pool.query(
     `SELECT 1 FROM waiter_notifications
-     WHERE session_id = $1 AND type = $2 AND body = $3 AND created_at > NOW() - ($4 || ' seconds')::interval LIMIT 1`,
-    [sessionId, type, body, String(seconds)],
+     WHERE session_id = $1 AND type = $2 AND title = $3 AND body = $4 AND created_at > NOW() - ($5 || ' seconds')::interval LIMIT 1`,
+    [sessionId, type, title, body, String(seconds)],
   );
   return rows.length > 0;
 }
@@ -761,8 +779,8 @@ export async function callWaiter(sessionId, reason = 'general', comment = '') {
     return { ok: true, message: 'Официант скоро принесёт счёт', session: await requestBill(sessionId) };
   }
   const text = CALL_REASONS[reason] || CALL_REASONS.general;
-  const body = comment ? `${text}: ${String(comment).slice(0, 200)}` : text;
-  if (await recentlyNotified(sessionId, NOTIFY_TYPES.CALL_WAITER, body, CALL_COOLDOWN_SEC)) {
+  const call = callText({ table: ctx.session.table_number, reasonText: text.charAt(0).toLowerCase() + text.slice(1), comment });
+  if (await recentlyNotified(sessionId, NOTIFY_TYPES.CALL_WAITER, call.title, call.body, CALL_COOLDOWN_SEC)) {
     return { ok: true, message: 'Официант уже вызван — скоро подойдёт', tableNumber: ctx.session.table_number, repeated: true };
   }
   await createWaiterNotification({
@@ -770,8 +788,7 @@ export async function callWaiter(sessionId, reason = 'general', comment = '') {
     sessionId,
     tableNumber: ctx.session.table_number,
     type: NOTIFY_TYPES.CALL_WAITER,
-    title: `Стол №${ctx.session.table_number} — вызов`,
-    body,
+    ...call,
     payload: { sessionId, reason, guestName: ctx.session.guest_name },
   });
   await pool.query('UPDATE table_sessions SET last_guest_activity_at = NOW() WHERE id = $1', [sessionId]);
@@ -842,8 +859,8 @@ export async function payBill(sessionId, { method = 'card', tipAmount = 0 } = {}
     sessionId,
     tableNumber: ctx.session.table_number,
     type: NOTIFY_TYPES.PAYMENT_DONE,
-    title: `Стол №${ctx.session.table_number} — оплачено`,
-    body: `${Math.round(amount)} ₽${tip ? ` + чаевые ${tip} ₽` : ''} (${method})${iikoNote}`,
+    title: `Стол ${ctx.session.table_number} · Оплачено`,
+    body: `${rubText(amount)}${tip ? ` + чаевые ${rubText(tip)}` : ''} · ${method}${iikoNote}`,
     payload: { sessionId, amount, tip, method },
   });
   return getSessionView(sessionId);
@@ -878,6 +895,45 @@ export async function submitFeedback(sessionId, { rating, comment = '' }) {
 }
 
 // ── Фоновые проверки: бездействие гостя и долгое ожидание ───────────────────
+
+/**
+ * «Долго готовится»: позиция готовится в COOK_SLOW_FACTOR раз дольше норматива блюда — одно уведомление на позицию.
+ * Нет норматива (cookingTime в iiko и мало замеров) — не уведомляем.
+ */
+async function checkSlowCooking() {
+  const { rows } = await pool.query(
+    `SELECT i.id, i.session_id, i.iiko_product_id, i.name, i.sent_at, i.cooking_started_at, s.restaurant_id, s.table_number
+     FROM table_order_items i JOIN table_sessions s ON s.id = i.session_id
+     WHERE s.status = 'open' AND i.is_locked AND i.served_at IS NULL AND i.ready_at IS NULL AND i.cook_slow_notified_at IS NULL
+       AND i.kitchen_status IS DISTINCT FROM 'CookingCompleted' AND i.kitchen_status IS DISTINCT FROM 'Served'
+       AND i.sent_at IS NOT NULL AND i.sent_at < NOW() - INTERVAL '3 minutes'`,
+  );
+  const byRestaurant = new Map();
+  for (const r of rows) {
+    if (!byRestaurant.has(r.restaurant_id)) byRestaurant.set(r.restaurant_id, []);
+    byRestaurant.get(r.restaurant_id).push(r);
+  }
+  for (const [restaurantId, list] of byRestaurant) {
+    const { rows: [restaurant] } = await pool.query('SELECT * FROM restaurants WHERE id = $1', [restaurantId]);
+    const norms = await loadCookNorms(restaurant, list.map((r) => r.iiko_product_id));
+    for (const r of list) {
+      const norm = norms.get(String(r.iiko_product_id));
+      if (!norm) continue;
+      const info = cookInfo({ sentAt: r.sent_at, startedAt: r.cooking_started_at }, norm);
+      if (!(info.minutes >= norm.minutes * COOK_SLOW_FACTOR)) continue;
+      const { rowCount } = await pool.query(
+        'UPDATE table_order_items SET cook_slow_notified_at = NOW() WHERE id = $1 AND cook_slow_notified_at IS NULL', [r.id]);
+      if (!rowCount) continue;
+      await createWaiterNotification({
+        restaurantId, sessionId: r.session_id, tableNumber: r.table_number, type: NOTIFY_TYPES.COOK_SLOW,
+        ...cookSlowText({ table: r.table_number, name: r.name, minutes: info.minutes }),
+        payload: { sessionId: r.session_id, itemId: r.id, norm: norm.minutes },
+      });
+    }
+  }
+}
+
+const WAIT_LABELS = { cart_ready: 'Новый заказ', reorder_pending: 'Дозаказ', bill_requested: 'Просит счёт' };
 
 export async function runServiceChecks() {
   // Забытые визиты (12+ часов без активности) закрываем, чтобы новый гость начинал с чистого стола
@@ -915,18 +971,51 @@ export async function runServiceChecks() {
        AND workflow_status IN ('cart_ready', 'reorder_pending', 'bill_requested')
        AND COALESCE(CASE WHEN workflow_status = 'bill_requested' THEN bill_requested_at END, cart_ready_at)
            < NOW() - ($1 || ' milliseconds')::interval
-     RETURNING id, restaurant_id, table_number, workflow_status`,
+     RETURNING id, restaurant_id, table_number, workflow_status,
+       COALESCE(CASE WHEN workflow_status = 'bill_requested' THEN bill_requested_at END, cart_ready_at) AS waiting_since`,
     [String(WAITER_RESPONSE_SLA_MS)],
   );
   for (const s of waiting) {
+    const minutes = Math.max(Math.round(WAITER_RESPONSE_SLA_MS / 60000),
+      Math.floor((Date.now() - new Date(s.waiting_since).getTime()) / 60000));
+    const wait = waitText({ table: s.table_number, minutes, label: WAIT_LABELS[s.workflow_status] || WORKFLOW_GUEST_LABELS[s.workflow_status] });
     await createWaiterNotification({
       restaurantId: s.restaurant_id,
       sessionId: s.id,
       tableNumber: s.table_number,
       type: NOTIFY_TYPES.WAIT_TOO_LONG,
-      title: `Стол №${s.table_number} — долгое ожидание`,
-      body: `Гость ждёт ${Math.round(WAITER_RESPONSE_SLA_MS / 60000)}+ мин: ${WORKFLOW_GUEST_LABELS[s.workflow_status]}`,
+      ...wait,
       payload: { sessionId: s.id, escalate: true },
+    });
+  }
+
+  await checkSlowCooking();
+
+  // Блюда готовы, но не вынесены дольше READY_WAIT_MS: одна тревога на стол (по всем его готовым позициям)
+  const { rows: stale } = await pool.query(
+    `UPDATE table_order_items i SET ready_wait_notified_at = NOW()
+     FROM table_sessions s
+     WHERE s.id = i.session_id AND s.status = 'open' AND i.is_locked AND i.served_at IS NULL
+       AND i.kitchen_status = 'CookingCompleted' AND i.ready_wait_notified_at IS NULL
+       AND i.ready_notified_at < NOW() - ($1 || ' milliseconds')::interval
+     RETURNING i.session_id, i.name, i.quantity, i.ready_notified_at, s.restaurant_id, s.table_number`,
+    [String(READY_WAIT_MS)],
+  );
+  const bySession = new Map();
+  for (const r of stale) {
+    if (!bySession.has(r.session_id)) bySession.set(r.session_id, []);
+    bySession.get(r.session_id).push(r);
+  }
+  for (const [sessionId, rows] of bySession) {
+    const oldest = Math.min(...rows.map((r) => new Date(r.ready_notified_at).getTime()));
+    const minutes = Math.max(1, Math.floor((Date.now() - oldest) / 60000));
+    await createWaiterNotification({
+      restaurantId: rows[0].restaurant_id,
+      sessionId,
+      tableNumber: rows[0].table_number,
+      type: NOTIFY_TYPES.WAIT_TOO_LONG,
+      ...readyWaitText({ table: rows[0].table_number, minutes, lines: rows.map((r) => ({ name: r.name, qty: r.quantity })) }),
+      payload: { sessionId, escalate: true, ready: true },
     });
   }
 }
@@ -1049,10 +1138,11 @@ async function syncRemovedItems(ctx, code, order, orderId) {
     await createWaiterNotification({
       restaurantId: ctx.restaurant.id, sessionId: session.id, tableNumber: session.table_number,
       type: NOTIFY_TYPES.IIKO_ERROR || 'iiko_error',
-      title: `Стол №${session.table_number} — ${orderDeleted ? 'заказ удалён' : 'позиции удалены'} на кассе${where}`,
       // Удалили уже оплаченное онлайн — деньги у нас, гостю нужен возврат
-      body: removed.map((r) => `${r.name} ×${r.quantity}`).join('; ')
-        + (removed.some((r) => r.paidOnline) ? ' · было оплачено онлайн — оформите возврат гостю' : ''),
+      ...removedText({
+        table: session.table_number, lines: removed.map((r) => ({ name: r.name, qty: r.quantity })), orderDeleted, where,
+        refund: removed.some((r) => r.paidOnline),
+      }),
       payload: { sessionId: session.id, source: code, removed },
     }).catch(() => {});
   }
@@ -1110,12 +1200,14 @@ async function refreshFromIikoNow(sessionId) {
     const locked = ctx.items.filter((i) => i.is_locked && !i.served_at);
     let orderStatus = null;
     let statusOf;
+    let cookOf = () => null; // сколько готовилось по данным iiko (мин), если iiko отдаёт время печати и готовности
     if (demo) {
       statusOf = demoKitchenStatus;
       orderStatus = 'New';
     } else {
       // Заказ каждого источника (кухня, бар) — в своём iiko
       const maps = new Map();
+      const cooks = new Map();
       const closedAtTill = [];
       for (const [code, o] of Object.entries(orders)) {
         if (!o?.orderId) continue;
@@ -1148,9 +1240,13 @@ async function refreshFromIikoNow(sessionId) {
         const items = (order.items || []).filter((i) => (i.type || 'Product') === 'Product' && !i.deleted);
         // Для каждого блюда — наименее продвинутый статус среди строк iiko с этим блюдом
         const byProduct = new Map();
+        const cookOfCode = new Map();
+        cooks.set(code, cookOfCode);
         for (const it of items) {
           const pid = String(it.product?.id || it.productId || '');
           if (!pid || !it.status) continue;
+          const cm = iikoCookMinutes(it);
+          if (cm != null) cookOfCode.set(pid, cm);
           const prev = byProduct.get(pid);
           if (!prev || KITCHEN_ORDER.indexOf(it.status) < KITCHEN_ORDER.indexOf(prev)) byProduct.set(pid, it.status);
         }
@@ -1161,6 +1257,7 @@ async function refreshFromIikoNow(sessionId) {
       const gone = new Set((await pool.query('SELECT id FROM table_order_items WHERE session_id = $1', [sessionId])).rows.map((r) => r.id));
       for (let i = locked.length - 1; i >= 0; i--) if (!gone.has(locked[i].id)) locked.splice(i, 1);
       statusOf = (row) => maps.get(row.source || 'main')?.get(String(row.iiko_product_id)) || null;
+      cookOf = (row) => cooks.get(row.source || 'main')?.get(String(row.iiko_product_id)) ?? null;
     }
 
     const ready = [];
@@ -1168,7 +1265,17 @@ async function refreshFromIikoNow(sessionId) {
       const st = statusOf(row);
       if (!st) continue;
       if (st !== row.kitchen_status) {
-        await pool.query('UPDATE table_order_items SET kitchen_status = $2 WHERE id = $1 AND served_at IS NULL', [row.id, st]);
+        // Фиксируем время: начали готовить / стало готово; сколько готовилось — по iiko, иначе от «Готовится» (или отправки) до готовности
+        await pool.query(
+          `UPDATE table_order_items SET kitchen_status = $2,
+             cooking_started_at = CASE WHEN $2 = 'CookingStarted' THEN COALESCE(cooking_started_at, NOW()) ELSE cooking_started_at END,
+             ready_at = CASE WHEN $2 = 'CookingCompleted' THEN COALESCE(ready_at, NOW()) ELSE ready_at END,
+             cook_minutes = CASE WHEN $2 = 'CookingCompleted' AND cook_minutes IS NULL
+               THEN COALESCE($3::numeric, ROUND((EXTRACT(EPOCH FROM (NOW() - COALESCE(cooking_started_at, sent_at::timestamptz, updated_at::timestamptz))) / 60)::numeric, 2))
+               ELSE cook_minutes END
+           WHERE id = $1 AND served_at IS NULL`,
+          [row.id, st, cookOf(row)],
+        );
       }
       if (st === 'CookingCompleted' && !row.ready_notified_at) ready.push(row);
     }
@@ -1180,9 +1287,10 @@ async function refreshFromIikoNow(sessionId) {
         sessionId,
         tableNumber: t,
         type: NOTIFY_TYPES.DISH_READY,
-        title: `Стол №${t} — готово, пора выносить`,
-        body: ready.map((r) => `${r.name} ×${r.quantity}${r.guest_name ? ` — ${r.guest_name}` : ''}${r.seat_number ? `, место ${r.seat_number}` : ''}`).join('; '),
-        payload: { sessionId, itemIds: ready.map((r) => r.id) },
+        // Только блюда, ставшие готовыми сейчас; несколько за минуту склеиваются в одно уведомление
+        ...readyText({ table: t, lines: ready.map((r) => ({ name: r.name, qty: r.quantity })) }),
+        payload: { sessionId, itemIds: ready.map((r) => r.id), lines: ready.map((r) => ({ name: r.name, qty: r.quantity })) },
+        mergeLines: true,
       });
     }
 

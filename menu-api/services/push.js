@@ -67,14 +67,21 @@ export async function unregisterDevice(token) {
 // Звук и важность по типу события: «готово», новый заказ и вызов — громкий канал
 const LOUD = new Set(['dish_ready', 'cart_ready', 'reorder_intent', 'call_waiter', 'bill_requested', 'wait_too_long']);
 
+/**
+ * Чьи телефоны получают push: staffIds = null — все телефоны точки; массив — только эти сотрудники
+ * (стол с официантом — только ему; без его телефона push не уходит никому, уведомление остаётся в ленте).
+ */
+export function filterDevices(devices, staffIds = null) {
+  if (!Array.isArray(staffIds)) return devices;
+  const ids = new Set(staffIds.map(String));
+  return devices.filter((d) => ids.has(String(d.staff_id)));
+}
+
 /** Push всем телефонам официантов ресторана (не блокирует основной поток). */
-export async function pushToRestaurant(restaurantId, { title, body, type, sessionId, tableNumber, staffIds = [] }) {
+export async function pushToRestaurant(restaurantId, { title, body, type, sessionId, tableNumber, staffIds = null }) {
   if (!isPushEnabled() || !restaurantId) return;
   let { rows } = await pool.query('SELECT token, staff_id FROM waiter_devices WHERE restaurant_id = $1', [restaurantId]);
-  // За стол отвечают (ведёт визит или выбрал в «Мои столы») и их телефоны на связи — только им; иначе всем телефонам точки
-  const ids = new Set((staffIds || []).map(String));
-  const own = ids.size ? rows.filter((r) => ids.has(String(r.staff_id))) : [];
-  if (own.length) rows = own;
+  rows = filterDevices(rows, staffIds);
   if (!rows.length) return;
   const a = serviceAccount();
   let token;

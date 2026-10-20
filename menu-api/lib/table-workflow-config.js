@@ -40,4 +40,13 @@ export const NOTIFY_TYPES = {
   NEGATIVE_FEEDBACK: 'negative_feedback',
   IIKO_ERROR: 'iiko_error',
   DISH_READY: 'dish_ready',
+  COOK_SLOW: 'cook_slow',
+  TABLE_ASSIGNED: 'table_assigned',
+  TABLE_UNASSIGNED: 'table_unassigned',
 };
+
+/** Блюдо готово, но не вынесено дольше этого времени — тревога «долго ждёт» всем официантам. */
+export const READY_WAIT_MS = parseInt(process.env.READY_WAIT_MS || '300000', 10); // 5 мин
+/** «Выдача»: подсветка ожидания блюда — жёлтое от AWAIT_WARN_MIN минут, красное от AWAIT_BAD_MIN. */
+export const AWAIT_WARN_MIN = parseInt(process.env.AWAIT_WARN_MIN || '10', 10);
+export const AWAIT_BAD_MIN = parseInt(process.env.AWAIT_BAD_MIN || '20', 10);

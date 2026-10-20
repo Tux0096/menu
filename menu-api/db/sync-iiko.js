@@ -16,6 +16,7 @@ dotenv.config();
 import axios from 'axios';
 import { default as pool } from './pool.js';
 import { autoRoute } from '../lib/alco.js';
+import { parseCookingMinutes } from '../lib/cooking-time.js';
 import { iikoApiLogin, maskIikoKey, requestIikoToken, requestIikoTokenFor } from '../lib/iiko-token.js';
 
 const IIKO_URL = process.env.IIKO_URL || 'https://api-ru.iiko.services';
@@ -696,6 +697,9 @@ async function syncRestaurant(restaurant, token, orgs = [], externalMenu = null,
           p.code ? String(p.code).slice(0, 50) : null,
         ]
       );
+      // Норматив готовки из номенклатуры (cookingTime), если iiko его отдаёт
+      const cook = parseCookingMinutes(p.cookingTime ?? p.cookingMinutes);
+      if (cook) await client.query('UPDATE products SET cooking_minutes = $3 WHERE restaurant_id = $1 AND iiko_id = $2', [restaurantId, p.id, cook]);
       inserted++;
     }
 

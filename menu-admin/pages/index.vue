@@ -267,6 +267,9 @@ const rating = computed(() => {
               <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-blush text-sm font-semibold">{{ t.tableNumber }}</div>
               <div class="min-w-0 flex-1">
                 <div class="truncate text-sm">{{ (t.guests ?? []).map((g) => g.name).join(', ') || t.guest?.name || 'Гость' }}</div>
+                <div class="truncate text-xs" :class="t.waiterId ? 'text-slate-500' : 'font-medium text-amber-700'">
+                  {{ t.waiterId ? `Официант: ${t.waiterName || '—'}` : 'без официанта' }}
+                </div>
                 <div class="text-xs" :class="t.isOverdue ? 'font-medium text-red-600' : 'text-slate-500'">
                   {{ t.waitingMinutes !== null ? `ждёт ${t.waitingMinutes} мин` : 'не ждёт' }}<template v-if="t.readyCount"> · готово блюд: {{ t.readyCount }}</template>
                 </div>

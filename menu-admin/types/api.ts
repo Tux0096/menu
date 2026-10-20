@@ -65,6 +65,7 @@ export interface ActiveSession {
   readyCount?: number;
   pendingCount?: number;
   waiterId?: string | null;
+  waiterName?: string | null;
   createdAt?: string;
 }
 

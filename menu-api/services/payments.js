@@ -359,7 +359,7 @@ async function settleKitchen(sessionId, lastPayment) {
   await createWaiterNotification({
     restaurantId: session.rid, sessionId: session.id, tableNumber: session.table_number,
     type: NOTIFY_TYPES.PAYMENT_DONE,
-    title: `Стол №${session.table_number} — оплачено онлайн`,
+    title: `Стол ${session.table_number} · Оплачено онлайн`,
     body: `Кухня ${paidNow} ₽${tip ? ` + чаевые ${tip} ₽` : ''}${kitchenLeft > 0 ? ` · по кухне осталось ${Math.round(kitchenLeft)} ₽` : ''}`
       + `${iikoNote}${barTotal > 0 ? ` · бар ${Math.round(barTotal)} ₽ — принять картой` : ''}`,
     payload: { sessionId: session.id },

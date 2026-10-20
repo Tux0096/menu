@@ -1,7 +1,20 @@
 import { pushToRestaurant } from './push.js';
 import { uuidOrNull } from '../lib/uuid.js';
 import pool from '../db/pool.js';
+import { NOTIFY_TYPES } from '../lib/table-workflow-config.js';
+import { FEED_FOR_ALL_TYPES, pushAudience, SEES_ALL_ROLES } from '../lib/notification-rules.js';
+import { mergeLines, readyText, reorderText } from '../lib/notification-text.js';
 
+/** Подряд идущие одинаковые события стола склеиваем в одно, если прошлое ещё не прочитано и свежее */
+const MERGE_WINDOW_SEC = 90;
+const MERGE_TEXT = { [NOTIFY_TYPES.DISH_READY]: readyText, [NOTIFY_TYPES.REORDER_INTENT]: reorderText };
+
+/**
+ * Уведомление в ленту + push.
+ *   mergeLines — payload.lines [{name, qty}] склеивается с прошлым таким же уведомлением стола («Готово: А ×1, Б ×2»);
+ *   pushStaffIds — свои получатели push (массив; null — всем), иначе по правилам: официант стола → ему, нет → всем;
+ *   push: false — только в ленту.
+ */
 export async function createWaiterNotification({
   restaurantId,
   sessionId,
@@ -10,95 +23,84 @@ export async function createWaiterNotification({
   title,
   body,
   payload = {},
+  mergeLines: doMerge = false,
+  pushStaffIds,
+  push = true,
 }) {
-  const { rows } = await pool.query(
-    `INSERT INTO waiter_notifications
-       (restaurant_id, session_id, table_number, type, title, body, payload)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     RETURNING *`,
-    [restaurantId, sessionId, String(tableNumber), type, title, body, JSON.stringify(payload)],
-  );
-  // Push: официанту, который ведёт стол, и тем, кто выбрал этот стол в «Мои столы»; «долго ждут» и ошибки iiko — всем
-  // (подстраховка). Никто не отвечает за стол — всем телефонам точки. Не задерживая запрос
-  let staffIds = [];
-  if (!BROADCAST.has(type)) staffIds = await tableRecipients(restaurantId, sessionId, tableNumber).catch(() => []);
-  pushToRestaurant(restaurantId, { title, body, type, sessionId, tableNumber, staffIds }).catch((e) => console.warn('push:', e.message));
-  return rows[0];
-}
-
-/** Кто отвечает за стол: официант визита и закрепившие стол за собой */
-async function tableRecipients(restaurantId, sessionId, tableNumber) {
-  const { rows } = await pool.query(
-    `SELECT waiter_id AS id FROM table_sessions WHERE id = $1 AND waiter_id IS NOT NULL
-     UNION SELECT staff_id FROM waiter_tables WHERE restaurant_id = $2 AND table_number = $3`,
-    [uuidOrNull(sessionId), restaurantId, String(tableNumber ?? '')],
-  );
-  return rows.map((r) => String(r.id));
-}
-
-/** Столы, за которые отвечает официант в ресторане, и кто закрепил остальные (имена для подсказки) */
-export async function getWaiterTables(restaurantId, staffId) {
-  const { rows } = await pool.query(
-    `SELECT t.table_number, t.staff_id, u.name FROM waiter_tables t LEFT JOIN staff_users u ON u.id = t.staff_id
-     WHERE t.restaurant_id = $1`,
-    [restaurantId],
-  );
-  const mine = rows.filter((r) => String(r.staff_id) === String(staffId)).map((r) => r.table_number);
-  const others = {};
-  for (const r of rows) {
-    if (String(r.staff_id) === String(staffId)) continue;
-    (others[r.table_number] ||= []).push(r.name || 'Официант');
-  }
-  return { tables: mine, others };
-}
-
-export async function setWaiterTables(restaurantId, staffId, tables, tablesCount) {
-  const list = [...new Set((Array.isArray(tables) ? tables : []).map((t) => String(t).trim()).filter((t) => /^[0-9A-Za-zА-Яа-я-]{1,10}$/.test(t)))]
-    .map((t) => (/^\d+$/.test(t) ? String(Number(t)) : t))
-    .filter((t) => !tablesCount || !/^\d+$/.test(t) || (Number(t) >= 1 && Number(t) <= tablesCount))
-    .slice(0, 200);
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query('DELETE FROM waiter_tables WHERE restaurant_id = $1 AND staff_id = $2', [restaurantId, staffId]);
-    if (list.length) {
-      await client.query(
-        `INSERT INTO waiter_tables (staff_id, restaurant_id, table_number) SELECT $1, $2, unnest($3::text[]) ON CONFLICT DO NOTHING`,
-        [staffId, restaurantId, list],
+  let row = null;
+  if (doMerge && sessionId && Array.isArray(payload.lines) && MERGE_TEXT[type]) {
+    const { rows: prev } = await pool.query(
+      `SELECT id, payload FROM waiter_notifications
+       WHERE session_id = $1 AND type = $2 AND is_read = FALSE AND created_at > NOW() - ($3 || ' seconds')::interval
+       ORDER BY created_at DESC LIMIT 1`,
+      [uuidOrNull(sessionId), type, String(MERGE_WINDOW_SEC)],
+    );
+    if (prev[0]) {
+      const lines = mergeLines(prev[0].payload?.lines, payload.lines);
+      const text = MERGE_TEXT[type]({ table: tableNumber, lines });
+      const merged = { ...payload, lines, itemIds: [...(prev[0].payload?.itemIds || []), ...(payload.itemIds || [])] };
+      const { rows } = await pool.query(
+        // Склеенное снова «новое» для всех, кто успел его прочитать, и поднимается наверх ленты
+        `WITH u AS (DELETE FROM waiter_notification_reads WHERE notification_id = $1)
+         UPDATE waiter_notifications SET title = $2, body = $3, payload = $4, created_at = NOW() WHERE id = $1 RETURNING *`,
+        [prev[0].id, text.title, text.body, JSON.stringify(merged)],
       );
+      row = rows[0];
+      // Push — только про то, что добавилось сейчас
+      title = text.title; body = readyOrReorderBody(type, tableNumber, payload.lines);
     }
-    await client.query('COMMIT');
-  } catch (e) {
-    await client.query('ROLLBACK');
-    throw e;
-  } finally {
-    client.release();
   }
-  return getWaiterTables(restaurantId, staffId);
+  if (!row) {
+    const { rows } = await pool.query(
+      `INSERT INTO waiter_notifications
+         (restaurant_id, session_id, table_number, type, title, body, payload)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [restaurantId, sessionId, String(tableNumber), type, title, body, JSON.stringify(payload)],
+    );
+    row = rows[0];
+  }
+  if (push) {
+    // Push: у визита есть официант — только ему (тревоги — всем), стол «общий» — всем телефонам точки. Не задерживая запрос
+    (async () => {
+      let staffIds = pushStaffIds;
+      if (staffIds === undefined) {
+        const { rows } = sessionId
+          ? await pool.query('SELECT waiter_id FROM table_sessions WHERE id = $1', [uuidOrNull(sessionId)])
+          : { rows: [] };
+        staffIds = pushAudience({ type, waiterId: rows[0]?.waiter_id });
+      }
+      await pushToRestaurant(restaurantId, { title, body, type, sessionId, tableNumber, staffIds });
+    })().catch((e) => console.warn('push:', e.message));
+  }
+  return row;
 }
 
-const BROADCAST = new Set(['wait_too_long', 'iiko_error']);
+function readyOrReorderBody(type, table, lines) {
+  return MERGE_TEXT[type]({ table, lines }).body;
+}
 
 /**
- * Лента официанта. Выбрал «Мои столы» — только по ним, по столам, которые ведёт сам, по столам без ответственного
- * и общие тревоги; не выбрал — все столы точки.
+ * Лента официанта. Свои столы, столы без официанта и общие тревоги; чужие столы не показываем.
+ * Управляющий и администратор видят всё.
  * is_read — прочитано им самим или закрыто для всех (стол взят в работу, оплачен, закрыт).
  */
-export async function listWaiterNotifications(restaurantId, { unreadOnly = false, limit = 50, staffId = null } = {}) {
+export async function listWaiterNotifications(restaurantId, { unreadOnly = false, limit = 50, staff = null } = {}) {
+  const staffId = staff?.id || null;
+  const seesAll = !staff || SEES_ALL_ROLES.has(staff.role);
   const { rows } = await pool.query(
-    `SELECT n.*, (n.is_read OR r.staff_id IS NOT NULL) AS is_read
+    `SELECT n.*, (n.is_read OR r.staff_id IS NOT NULL) AS is_read,
+            s.waiter_id AS table_waiter_id, w.name AS table_waiter_name
      FROM waiter_notifications n
      LEFT JOIN waiter_notification_reads r ON r.notification_id = n.id AND r.staff_id = $3
+     LEFT JOIN table_sessions s ON s.id = n.session_id
+     LEFT JOIN staff_users w ON w.id = s.waiter_id
      WHERE n.restaurant_id = $1
        ${unreadOnly ? 'AND n.is_read = FALSE AND r.staff_id IS NULL' : ''}
-       ${staffId ? `AND (n.type = ANY($4::text[])
-         OR NOT EXISTS (SELECT 1 FROM waiter_tables w WHERE w.restaurant_id = $1 AND w.staff_id = $3)
-         OR EXISTS (SELECT 1 FROM waiter_tables w WHERE w.restaurant_id = $1 AND w.staff_id = $3 AND w.table_number = n.table_number)
-         OR NOT EXISTS (SELECT 1 FROM waiter_tables w WHERE w.restaurant_id = $1 AND w.table_number = n.table_number)
-         OR EXISTS (SELECT 1 FROM table_sessions s WHERE s.id = n.session_id AND s.waiter_id = $3))` : ''}
+       ${seesAll ? '' : 'AND (n.type = ANY($4::text[]) OR s.waiter_id IS NULL OR s.waiter_id = $3)'}
      ORDER BY n.created_at DESC
      LIMIT $2`,
-    staffId ? [restaurantId, limit, staffId, [...BROADCAST]] : [restaurantId, limit, staffId],
+    seesAll ? [restaurantId, limit, staffId] : [restaurantId, limit, staffId, [...FEED_FOR_ALL_TYPES]],
   );
   return rows;
 }
