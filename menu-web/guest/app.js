@@ -845,6 +845,7 @@
     const stoppedOnServer = (S.session?.items || []).some((i) => !i.isLocked && i.isStopped
       && (String(i.productId) === id || String(i.iikoProductId) === id));
     if (isStopped(p) || stoppedOnServer) return 'Закончился — уберите из заказа';
+    if (p.lunchCombo && S.catalog?.businessLunch && !S.catalog.businessLunch.active) return `Бизнес-ланч доступен ${S.catalog.businessLunch.text} — уберите из заказа`;
     const left = Number(p.stopBalance) || 0;
     if (left && freshQty > left) return `Осталось ${left} шт. — уменьшите количество`;
     return null;
@@ -904,8 +905,12 @@
     const norm = (t) => String(t).toLowerCase().replace(/ё/g, 'е');
     const q = norm(S.menu.search.trim());
     // В поиске блюдо один раз (копия того же блюда в бизнес-ланче — isAlias — не повторяется)
-    const filtered = q ? products.filter((p) => !p.isAlias && norm(`${p.name} ${p.description || ''}`).includes(q)) : products;
+    // Наборы бизнес-ланча выбираются в конструкторе (баннер вверху раздела), в списке их нет; в поиске — есть
+    const lunchGid = q ? null : lunchGroupId();
+    const filtered = q ? products.filter((p) => !p.isAlias && norm(`${p.name} ${p.description || ''}`).includes(q))
+      : lunchGid ? products.filter((p) => !p.lunchCombo) : products;
     const byGroup = new Map();
+    if (lunchGid) byGroup.set(lunchGid, []); // раздел остаётся, даже если в нём одни наборы
     for (const p of filtered) {
       const g = p.parentGroup || 'other';
       if (!byGroup.has(g)) byGroup.set(g, []);
@@ -954,7 +959,7 @@
       ${S.menu.search ? '' : `<div class="cats" id="cats"><button class="cats__all" data-action="all-cats" aria-label="Все разделы меню">
           <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2"><rect x="2" y="2" width="5" height="5" rx="1.5"/><rect x="9" y="2" width="5" height="5" rx="1.5"/><rect x="2" y="9" width="5" height="5" rx="1.5"/><rect x="9" y="9" width="5" height="5" rx="1.5"/></svg>Меню</button>${sections.map((s) => `<button data-cat="${esc(s.id)}" class="${String(S.activeCat) === String(s.id) ? 'is-active' : ''}">${esc(s.name)}</button>`).join('')}</div>`}
       ${S.menu.search ? '' : bannersHtml('menu')}
-      ${sections.length ? sections.map((s, i) => `<h2 class="section-title" id="cat-${esc(s.id)}">${esc(s.name)}</h2>
+      ${sections.length ? sections.map((s, i) => `<h2 class="section-title" id="cat-${esc(s.id)}">${esc(s.name)}</h2>${!S.menu.search && String(s.id) === lunchGroupId() ? lunchBanner() : ''}
         <div class="list ${i === sections.length - 1 && !S.menu.search && !hasBar ? 'list--last' : ''}">${s.items.map((p) => dishCard(p)).join('')}</div>`).join('') + switchCard
     : S.catalog.products?.length
       ? `<div class="empty"><img class="ai-orb ai-orb--md" src="${UI('ai-orb.webp')}" alt="">
@@ -1327,6 +1332,177 @@
       });
     }, { cls: 'sheet--product' });
   }
+
+
+  // ── Конструктор бизнес-ланча («Собери свой ланч») ────────────
+  // Наборы и ассортимент — catalog.businessLunch (сервер: настройки админки, время действия точки).
+  // Заказ — обычная позиция с модификаторами (resolveSel), напиток — отдельная позиция бара.
+  const lunch = () => S.catalog?.businessLunch || null;
+  /** Раздел «Бизнес-ланч» кухни: там лежат наборы (сервер помечает их lunchCombo). */
+  const lunchGroupId = () => {
+    if (!lunch()?.combos?.length) return null;
+    const p = (S.catalog.products || []).find((x) => x.lunchCombo && !x.isAlias) || (S.catalog.products || []).find((x) => x.lunchCombo);
+    return p ? String(p.parentGroup) : null;
+  };
+  const lunchPrice = (c) => (c.fixed ? rub(c.price) : `от ${rub(c.price)}`);
+  const lunchOffText = () => `Доступен ${lunch().text}`;
+  function lunchBanner() {
+    const b = lunch();
+    if (!b?.combos?.length) return '';
+    return `<section class="lunch-banner ${b.active ? '' : 'is-off'}" data-lunch-open role="button" tabindex="0" aria-label="Собери свой ланч">
+      <div class="lunch-banner__top"><span class="lunch-banner__tag">Бизнес-ланч</span>
+        <span class="lunch-banner__time">${b.active ? `Сейчас · ${esc(b.text)}` : esc(lunchOffText())}</span></div>
+      <h3 class="lunch-banner__title">Собери свой ланч</h3>
+      <ul class="lunch-banner__list">${b.combos.map((c) => `<li><span>${esc(c.title)}</span><b>${lunchPrice(c)}</b></li>`).join('')}</ul>
+      <span class="lunch-banner__cta">${b.active ? 'Собрать ланч' : 'Посмотреть состав'}<img src="${UI('chevron-white.svg')}" alt=""></span>
+    </section>`;
+  }
+
+  let LC = null; // состояние конструктора: { combo, product, sel, i (экран), drink }
+  const lunchScreens = () => {
+    const b = lunch();
+    if (!LC.combo) return ['combo'];
+    return [...(b.combos.length > 1 ? ['combo'] : []), ...LC.combo.steps.map((_, k) => k), ...(b.drinks?.length ? ['drink'] : [])];
+  };
+  function lunchPick(c) {
+    const product = findProduct(c.productId);
+    if (!product) { toast('Набор сейчас недоступен', true); return; }
+    LC.combo = c; LC.product = product;
+    LC.sel = { sizeId: c.sizeId || null, mods: new Map() };
+    LC.drink = null;
+    for (const g of groupsFor(product, LC.sel)) fillDefaults(g, LC.sel);
+    LC.i = lunchScreens().findIndex((x) => x !== 'combo');
+  }
+  const lunchMissing = (k) => {
+    const g = groupsFor(LC.product, LC.sel)[k];
+    return g && groupTotal(g, LC.sel) < g.min ? g.name : null;
+  };
+  function lunchTotals() {
+    const r = LC.combo ? resolveSel(LC.product, LC.sel) : null;
+    const drink = LC.drink ? lunch().drinks.find((d) => d.id === LC.drink) : null;
+    return { r, drink, price: r ? r.price : 0 };
+  }
+  function lunchHtml() {
+    const b = lunch();
+    const screens = lunchScreens();
+    const cur = screens[LC.i];
+    const { r, drink, price } = lunchTotals();
+    const labels = screens.map((x) => (x === 'combo' ? 'Набор' : x === 'drink' ? 'Напиток' : LC.combo.steps[x].title));
+    const progress = LC.combo ? `<div class="lunch__progress" role="list">${screens.map((x, n) => `<button class="lunch__seg ${n < LC.i ? 'is-done' : ''} ${n === LC.i ? 'is-cur' : ''}" data-lunch-go="${n}" role="listitem" aria-label="${esc(labels[n])}"><i></i><span>${esc(labels[n])}</span></button>`).join('')}</div>` : '';
+    let body = '';
+    let foot = '';
+    const off = !b.active;
+    if (cur === 'combo') {
+      body = `<h3 class="lunch__h">Выберите набор</h3><div class="lunch__combos">${b.combos.map((c) => `<button class="lunch-combo ${LC.combo?.id === c.id ? 'is-on' : ''} ${c.stopped ? 'is-stopped' : ''}" data-lunch-combo="${esc(c.id)}" ${c.stopped ? 'disabled' : ''}>
+          <span class="lunch-combo__name">${esc(c.title)}</span><span class="lunch-combo__steps">${esc(c.steps.map((s) => s.title).join(' · '))}</span>
+          <b class="lunch-combo__price">${c.stopped ? 'Недоступен' : lunchPrice(c)}</b></button>`).join('')}</div>`;
+      foot = '';
+    } else if (cur === 'drink') {
+      body = `<h3 class="lunch__h">Напиток к ланчу<small>по желанию · отдельная позиция по цене ланча</small></h3><div class="lunch__drinks">${b.drinks.map((d) => `<button class="lunch-drink ${LC.drink === d.id ? 'is-on' : ''} ${d.stopped ? 'is-stopped' : ''}" data-lunch-drink="${esc(d.id)}" ${d.stopped ? 'disabled' : ''}>
+          <span class="lunch-drink__img">${d.image ? `<img src="${esc(imgSrc(d.image, 160))}" alt="" loading="lazy">` : esc(d.name.slice(0, 1))}</span>
+          <span class="lunch-drink__name">${esc(d.name)}${d.weight ? `<small>${esc(d.weight)}</small>` : ''}</span>
+          <b>${d.stopped ? 'Закончился' : rub(d.price)}</b><i class="lunch-check" aria-hidden="true"></i></button>`).join('')}</div>`;
+    } else {
+      const st = LC.combo.steps[cur];
+      const g = groupsFor(LC.product, LC.sel)[cur];
+      body = `<h3 class="lunch__h">${esc(st.title)}<small>${esc(groupHint(g || st))}</small></h3><div class="lunch__grid">${st.items.map((it) => {
+        const on = (LC.sel.mods.get(String(it.id)) || 0) > 0;
+        const img = it.image ? imgSrc(it.image, 320) : null;
+        return `<button class="lunch-item ${on ? 'is-on' : ''}" data-lunch-item="${esc(it.id)}" data-step="${cur}">
+          <span class="lunch-item__photo">${img ? `<img src="${esc(img)}" alt="" loading="lazy">` : `<em>${esc(it.name.slice(0, 1))}</em>`}<i class="lunch-check" aria-hidden="true"></i></span>
+          <span class="lunch-item__name">${esc(it.name)}</span>
+          <span class="lunch-item__meta">${esc(it.weight || '')}${!LC.combo.fixed && it.price > 0 ? `${it.weight ? ' · ' : ''}+${rub(it.price)}` : ''}</span></button>`;
+      }).join('')}</div>`;
+    }
+    // Пока набор не собран — цена набора («390 ₽» или «от 390 ₽»), а не сумма уже выбранных блюд
+    const complete = LC.combo && groupsFor(LC.product, LC.sel).every((g) => groupTotal(g, LC.sel) >= g.min) && price >= LC.combo.price;
+    const total = LC.combo ? `<div class="lunch__total"><span>Набор · <b>${complete ? rub(price) : lunchPrice(LC.combo)}</b></span>${drink ? `<small>+ ${esc(drink.name)} ${rub(drink.price)}</small>` : ''}</div>` : '';
+    const last = LC.i === screens.length - 1;
+    if (LC.combo) {
+      const missing = typeof cur === 'number' ? lunchMissing(cur) : null;
+      const incomplete = r?.missing?.length || (!(price > 0));
+      let btn;
+      if (!last) btn = missing ? `<button class="btn btn--dark btn--center btn--muted" data-lunch-need>Выберите: ${esc(missing)}</button>` : `<button class="btn btn--dark btn--center" data-lunch-next>Далее</button>`;
+      else if (off) btn = `<button class="btn btn--dark btn--center btn--muted" disabled>${esc(lunchOffText())}</button>`;
+      else if (incomplete) btn = `<button class="btn btn--dark btn--center btn--muted" data-lunch-need>Выберите: ${esc((r?.missing || []).join(', ') || 'блюда набора')}</button>`;
+      else btn = `<button class="btn btn--dark btn--center" data-lunch-add>Добавить в заказ • ${rub(price + (drink?.price || 0))}</button>`;
+      foot = `${total}${off && !last ? `<div class="lunch__off">${esc(lunchOffText())} — пока можно посмотреть состав</div>` : ''}${btn}`;
+    }
+    return `<header class="lunch__head"><div><h2>Собери свой ланч</h2><div class="lunch__time ${off ? 'is-off' : ''}">${off ? esc(lunchOffText()) : `Сейчас действует · ${esc(b.text)}`}</div></div>
+        <button class="lunch__close" data-sheet-close aria-label="Закрыть"><img src="${UI('close.svg')}" alt=""></button></header>
+      ${progress}
+      <div class="lunch__body" id="lunch-body">${body}</div>
+      ${foot ? `<footer class="lunch__foot">${foot}</footer>` : ''}`;
+  }
+  function openLunch(comboId = null) {
+    const b = lunch();
+    if (!b?.combos?.length) return;
+    LC = { combo: null, product: null, sel: null, i: 0, drink: null };
+    if (comboId) { const c = b.combos.find((x) => x.id === comboId); if (c) lunchPick(c); }
+    else if (b.combos.length === 1) lunchPick(b.combos[0]);
+    openSheet(`<div id="lunch-sheet" class="lunch">${lunchHtml()}</div>`, (sheet) => {
+      const redraw = ({ top = false } = {}) => {
+        const box = $('#lunch-sheet');
+        if (!box) return;
+        const prev = $('#lunch-body')?.scrollTop || 0;
+        box.innerHTML = lunchHtml();
+        const body = $('#lunch-body');
+        if (body) body.scrollTop = top ? 0 : prev;
+        box.querySelector('.lunch__seg.is-cur')?.scrollIntoView({ inline: 'center', block: 'nearest' });
+      };
+      sheet.addEventListener('click', (e) => {
+        const t = e.target;
+        const combo = t.closest('[data-lunch-combo]'); const item = t.closest('[data-lunch-item]'); const drink = t.closest('[data-lunch-drink]');
+        const go = t.closest('[data-lunch-go]'); const next = t.closest('[data-lunch-next]'); const need = t.closest('[data-lunch-need]'); const add = t.closest('[data-lunch-add]');
+        if (combo) { lunchPick(lunch().combos.find((c) => c.id === combo.dataset.lunchCombo)); redraw({ top: true }); }
+        else if (item) {
+          const k = Number(item.dataset.step);
+          toggleMod(LC.product, LC.sel, item.dataset.lunchItem, k);
+          redraw();
+          // Выбор одного блюда в шаге — сразу к следующему шагу
+          const g = groupsFor(LC.product, LC.sel)[k];
+          if (g?.max === 1 && !lunchMissing(k) && LC.i < lunchScreens().length - 1) {
+            clearTimeout(LC.timer);
+            LC.timer = setTimeout(() => { if (LC && lunchScreens()[LC.i] === k) { LC.i += 1; redraw({ top: true }); } }, 280);
+          }
+        }
+        else if (drink) { LC.drink = LC.drink === drink.dataset.lunchDrink ? null : drink.dataset.lunchDrink; redraw(); }
+        else if (go) {
+          const n = Number(go.dataset.lunchGo);
+          // Вперёд — только через уже выбранные шаги
+          const screens = lunchScreens();
+          if (n <= LC.i || screens.slice(0, n).every((x) => typeof x !== 'number' || !lunchMissing(x))) { clearTimeout(LC.timer); LC.i = n; redraw({ top: true }); }
+        }
+        else if (next) { clearTimeout(LC.timer); LC.i += 1; redraw({ top: true }); }
+        else if (need) {
+          const cur = lunchScreens()[LC.i];
+          const m = typeof cur === 'number' ? lunchMissing(cur) : null;
+          toast(`Выберите: ${m || resolveSel(LC.product, LC.sel).missing.join(', ') || 'блюда набора'}`, true);
+        }
+        else if (add) {
+          const { r, drink: d } = lunchTotals();
+          if (!lunch().active || r.missing.length) return;
+          const dp = d ? findProduct(d.productId) : null;
+          const product = LC.product;
+          const doAdd = () => {
+            changeQty(product, 1, { sel: r });
+            if (dp) changeQty(dp, 1);
+            toast('Набор добавлен в заказ');
+          };
+          closeSheet();
+          if (!S.session) openSeatSheet(doAdd); else doAdd();
+        }
+        else return;
+        e.stopPropagation();
+      });
+    }, { cls: 'sheet--lunch' });
+  }
+  document.addEventListener('click', (e) => {
+    if (e.target.closest('#app [data-lunch-open]')) openLunch();
+  });
+  document.addEventListener('keydown', (e) => {
+    if ((e.key === 'Enter' || e.key === ' ') && e.target.matches?.('[data-lunch-open]')) { e.preventDefault(); openLunch(); }
+  });
 
   // ── Онлайн-оплата CloudPayments ─────────────────────────────
   function loadCpWidget() {

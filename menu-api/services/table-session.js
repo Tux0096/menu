@@ -26,6 +26,7 @@ import {
 import { createWaiterNotification } from './waiter-notifications.js';
 import { getSource, productSourceMap } from './sources.js';
 import { menuIndex, priceLine, priceVariant, rowVariantKey, variantKey } from './menu-pricing.js';
+import { assertLunchRows } from './business-lunch.js';
 import { stopListLoadedAt } from './stoplist.js';
 import { isSessionBusy, withSessionMutex } from '../lib/session-mutex.js';
 import { withIikoCreds } from '../iiko-client.js';
@@ -650,6 +651,8 @@ export async function submitToWaiter(sessionId, cartItems, guestId) {
     const fresh = await getSessionContext(sessionId, client);
     const pending = fresh.items.filter((i) => !i.is_locked);
     if (!pending.length) throw httpError(400, 'Корзина пуста — добавьте блюда из меню');
+    // Бизнес-ланч уже в корзине, а время вышло — официанту его не передаём
+    assertLunchRows(await menuIndex(fresh.restaurant), pending.map((i) => ({ key: i.iiko_product_id || i.product_id })));
 
     const isReorder = fresh.items.some((i) => i.is_locked);
     const status = isReorder ? WORKFLOW.REORDER_PENDING : WORKFLOW.CART_READY;

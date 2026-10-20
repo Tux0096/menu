@@ -4,6 +4,7 @@
  */
 import { httpError } from '../lib/http.js';
 import { getRestaurantCatalog } from './catalog.js';
+import { assertLunchOpen } from '../lib/lunch-schedule.js';
 
 /** Сколько штук одной позиции можно заказать за раз (защита от опечаток и переполнения сумм) */
 export const MAX_LINE_QTY = 50;
@@ -25,6 +26,8 @@ export async function menuIndex(restaurant) {
       sizeId: p.sizeId ?? null, // единственный продаваемый размер из нескольких в iiko
       sizes: p.sizes || [],
       groups: p.modifierGroups || [],
+      needsChoice: Boolean(p.needsChoice), // набор за 0 ₽ — только с платным выбором
+      lunch: p.lunchCombo ? catalog.businessLunch?.schedule || null : null, // набор бизнес-ланча — расписание точки
     };
     if (p.id) index.set(String(p.id), entry);
     if (p.iikoId) index.set(String(p.iikoId), entry);
@@ -43,6 +46,8 @@ export function priceLine(index, key, { qty, prevQty = 0, totalQty = qty, client
   const p = index.get(String(key));
   if (!p) throw httpError(400, `«${label}» больше нет в меню — уберите из корзины`);
   if (!(p.price > 0)) throw httpError(400, `«${p.name.slice(0, 60)}» нельзя заказать через меню — позовите официанта`);
+  // Бизнес-ланч — только в своё время (корзина гостя, сохранение и отправка официантом)
+  if (p.lunch) assertLunchOpen(p.lunch);
   if (qty > MAX_LINE_QTY) throw httpError(400, `«${p.name.slice(0, 60)}»: не больше ${MAX_LINE_QTY} шт. за раз`);
   if (p.isInStopList && totalQty > prevQty) throw httpError(409, `«${p.name.slice(0, 60)}» закончилось — уберите из корзины`);
   if (p.balance && totalQty > p.balance && totalQty > prevQty) {
@@ -154,6 +159,8 @@ export function priceVariant(entry, key, { sizeId = null, modifiers = [], defaul
   if (wanted.size) throw httpError(400, `«${name}»: часть дополнений больше недоступна — выберите заново`);
   const base = size ? size.price : (entry.base ?? entry.price);
   const price = Math.round((base + extra) * 100) / 100;
+  // Набор «Собери свой ланч»: база 0, цена в блюдах — без платного выбора продавать нечего
+  if ((size ? size.needsChoice : entry.needsChoice) && !(extra > 0)) throw httpError(400, `«${name}»: выберите состав набора`);
   const text = [size?.name || null, ...mods.map((m) => (m.amount > 1 ? `${m.name} ×${m.amount}` : m.name))].filter(Boolean).join(', ');
   const sid = size && entry.sizes.length > 1 ? (size.id ? String(size.id) : null) : null;
   return { price, sizeId: sid, sizeName: sid ? size.name : null, mods, text: text.slice(0, 300), key: variantKey(key, sid, mods) };

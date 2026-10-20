@@ -70,6 +70,8 @@ export function orderGroups(groups, barGroupIds = new Set()) {
       order: (bar ? DRINKS : siteRank(g.name)) * 10000 + (Number(g.order) || i),
       // Вкладка «Бар» у гостя: разделы кассы бара и напитки (пиво, вино, коктейли, кофе, лимонады)
       isBar: bar || siteRank(g.name) === DRINKS,
+      // Раздел целиком со второй кассы (бар): его настройки в админке отдельны от одноимённого раздела кухни
+      barSource: bar,
     };
   });
 }

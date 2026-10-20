@@ -22,6 +22,7 @@ import { staffRestaurant } from '../lib/staff-scope.js';
 import {
   getCategoryList, getModifierList, getNetworkMenu, getNetworkMenuPoints, saveCategorySettings, saveModifierTitles, setCategoryImage, setModifierImage,
 } from '../services/network-menu.js';
+import { getLunchAdmin, saveLunchSettings } from '../services/business-lunch.js';
 import { syncIikoMenu } from '../services/background-jobs.js';
 import { getCashdesks, getIikoSetup, setCashdesk, setIikoSetup, setSectionRoute } from '../services/cashdesks.js';
 import { QR_SIGNED_REQUIRED, qrSignedRequired, setQrSignedRequired } from '../lib/qr-config.js';
@@ -34,7 +35,7 @@ export default router;
 const admin = express.Router();
 // Роли админки: администратор — всё (сотрудники и доступы, iiko, QR); маркетинг — только контент меню:
 // карточки блюд, фото, метки, баннеры, подсказки AI; управляющий — статистика (/api/v1/manager/*)
-const CONTENT_ROUTES = [['GET', /^\/menu$/], ['*', /^\/network-menu/], ['GET', /^\/stop-lists$/], ['POST', /^\/upload$/], ['*', /^\/menu\/override/], ['*', /^\/chips/],
+const CONTENT_ROUTES = [['GET', /^\/menu$/], ['*', /^\/network-menu/], ['*', /^\/business-lunch/], ['GET', /^\/stop-lists$/], ['POST', /^\/upload$/], ['*', /^\/menu\/override/], ['*', /^\/chips/],
   ['*', /^\/promos/], ['GET', /^\/restaurants$/]];
 admin.use((req, res, next) => {
   const content = CONTENT_ROUTES.some(([m, re]) => (m === '*' || m === req.method) && re.test(req.path));
@@ -68,9 +69,9 @@ admin.post('/network-menu/categories', h(async (req) => {
   requireBody(req.body, 'name');
   const image = req.body.image ? String(req.body.image) : null;
   if (image && !/^(\/media\/|https:\/\/)/.test(image)) throw httpError(400, 'Картинка — загруженный файл или ссылка https://');
-  const res = await setCategoryImage(String(req.body.name), image);
+  const res = await setCategoryImage(String(req.body.name), image, req.body.bar === true);
   if (!res) throw httpError(400, 'Нет названия раздела');
-  audit(req.staff, 'menu.category.image', 'category', String(req.body.name), { image });
+  audit(req.staff, 'menu.category.image', 'category', String(req.body.name), { image, bar: req.body.bar === true });
   return res;
 }));
 // Разделы меню: порядок, своё название, вкладка «Кухня/Бар», скрытие — одним списком
@@ -97,6 +98,15 @@ admin.post('/network-menu/modifiers/image', h(async (req) => {
   const res = await setModifierImage(String(req.body.name), image);
   if (!res) throw httpError(400, 'Нет названия варианта');
   audit(req.staff, 'menu.modifier.image', 'modifier', String(req.body.name), { image });
+  return res;
+}));
+// Конструктор бизнес-ланча: время действия, наборы, варианты шагов, напитки — общие для сети (расписание можно переопределить для точки)
+admin.get('/business-lunch', h(async (req) => getLunchAdmin(await staffRestaurants(req), (r) => getRestaurantCatalog(r))));
+admin.put('/business-lunch', h(async (req) => {
+  if (req.staff.restaurantId) throw httpError(403, 'Бизнес-ланч общий для сети — его настраивает сотрудник без привязки к точке');
+  const restaurants = await staffRestaurants(req);
+  const res = await saveLunchSettings(req.body || {}, restaurants);
+  audit(req.staff, 'menu.business-lunch', 'settings', '', { schedule: req.body?.schedule || null, overrides: Object.keys(req.body?.overrides || {}) });
   return res;
 }));
 // Отчёт выгрузки iiko: какие разделы и позиции внешнего меню не попали к гостям и почему (скрыты, нет цены для точки)

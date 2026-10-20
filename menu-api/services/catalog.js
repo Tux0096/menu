@@ -5,10 +5,12 @@
  * и стоп-лист iiko + ручной стоп из админки.
  */
 import pool from '../db/pool.js';
-import { cleanMenuName, menuKey } from '../lib/menu-key.js';
+import { categoryKey, cleanMenuName, menuKey } from '../lib/menu-key.js';
+import { assignDishVariants, dishCardKey } from '../lib/dish-key.js';
 import { orderGroups } from './menu-order.js';
 import { getStopIndex } from './stoplist.js';
 import { bumpCatalogVersion, catalogVersion } from '../lib/catalog-version.js';
+import { attachBusinessLunch } from './business-lunch.js';
 
 const TTL_MS = parseInt(process.env.CATALOG_TTL_MS || '300000', 10);
 const rawCache = new Map(); // restaurantId -> { at, source, data }
@@ -91,6 +93,8 @@ async function getCatalogFromDb(restaurantId) {
       // Цена без выбора, если отличается от «от» (вок с платной основой: базовая 0, «от 459»)
       basePrice: Number.isFinite(Number(p.options?.base)) && p.options?.base != null ? Number(p.options.base) : null,
       sizeId: p.options?.sizeId || null,
+      // Набор за 0 ₽ («Собери свой ланч»): цена в выбранных блюдах, без платного выбора не продаётся
+      needsChoice: Boolean(p.options?.needsChoice),
       groupModifiers: [],
       modifiers: [],
       filters: [],
@@ -109,15 +113,17 @@ async function getCatalogFromDb(restaurantId) {
 }
 
 /**
- * Одноимённые разделы (бизнес-ланч и в меню кухни, и в меню бара) — один раздел у гостя.
- * Блюдо, попавшее в раздел дважды, — один раз.
+ * Одноимённые разделы одного источника — один раздел у гостя. Раздел кухни и раздел бара с одним названием
+ * («Бизнес-ланч» и там, и там) не сливаются: во вкладке «Кухня» блюда кухни, во вкладке «Бар» напитки.
+ * Блюдо, попавшее в слитый раздел дважды, — один раз.
  */
-function mergeSameNamedGroups(groups, products) {
+export function mergeSameNamedGroups(groups, products) {
+  const bar = barGroups(products);
   const canon = new Map();
   const remap = new Map();
   const out = [];
   for (const g of groups || []) {
-    const key = menuKey(g.name);
+    const key = categoryKey(g.name, bar.has(g.id));
     const first = key && canon.get(key);
     if (first && !g.parentGroup && !first.parentGroup) { remap.set(String(g.id), first.id); continue; }
     if (key && !canon.has(key)) canon.set(key, g);
@@ -290,6 +296,25 @@ export async function getOverrides(restaurantId) {
   return map;
 }
 
+let variantsCache = null; // { version, at, map }
+/**
+ * Вариант блюда по ID iiko: '' — основное, иначе раздел одноимённого блюда («Карбонара» из «Детского меню»).
+ * Считается по всем блюдам сети: названия сводятся между точками (см. lib/dish-key.js).
+ */
+export async function getDishVariants() {
+  if (variantsCache && variantsCache.version === catalogVersion() && Date.now() - variantsCache.at < 60_000) return variantsCache.map;
+  const version = catalogVersion();
+  const { rows } = await pool.query(
+    `SELECT p.restaurant_id AS point, p.iiko_id::text AS id, p.name, p.source, c.name AS section
+       FROM products p JOIN categories c ON c.id = p.category_id
+      WHERE p.is_published = TRUE AND p.price > 0 AND p.iiko_id IS NOT NULL
+      ORDER BY c.sort_order, p.sort_order`,
+  );
+  const map = assignDishVariants(rows);
+  variantsCache = { version, at: Date.now(), map };
+  return map;
+}
+
 // Поля карточки из админки — общие для блюда, где бы оно ни было (скрытие и стоп — свои у каждой точки)
 const CONTENT_FIELDS = ['name', 'description', 'image_url', 'video_url', 'weight', 'energy', 'proteins', 'fats', 'carbs', 'allergens', 'badge', 'card_size', 'is_recommended', 'priority'];
 
@@ -297,8 +322,9 @@ const CONTENT_FIELDS = ['name', 'description', 'image_url', 'video_url', 'weight
  * Карточки из админки по названию блюда — запасная привязка, когда ID блюда в iiko не совпал:
  * блюдо пересоздали в iiko, бар переехал в другое внешнее меню, подключили новую точку.
  * Контент админки главный: перевыгрузка из iiko его не теряет. Сначала правки этой точки, потом общие, потом других точек.
+ * Ключ — название, а у одноимённого блюда из другого раздела («Детская» карбонара) ещё и раздел.
  */
-export async function getContentByName(restaurantId) {
+export async function getContentByName(restaurantId, variants = new Map()) {
   const { rows } = await pool.query(
     `SELECT o.*, COALESCE(o.product_name, p.name) AS key_name
        FROM menu_overrides o
@@ -308,8 +334,9 @@ export async function getContentByName(restaurantId) {
   );
   const map = new Map();
   for (const o of rows) {
-    const key = menuKey(o.key_name);
-    if (!key) continue;
+    // Одноимённые блюда из разных разделов — разные карточки (вариант по ID блюда, см. lib/dish-key.js)
+    const key = dishCardKey(o.key_name, variants.get(String(o.product_id)) || '');
+    if (!menuKey(o.key_name)) continue;
     const cur = map.get(key) || {};
     for (const f of CONTENT_FIELDS) {
       const v = o[f];
@@ -335,11 +362,11 @@ export async function getCategorySettings() {
  * Применить настройки разделов к меню точки: скрытые разделы убираются вместе с блюдами,
  * заданный порядок идёт первым (остальные — после, в порядке сайта), своё название и вкладка — поверх iiko.
  */
-function applyCategorySettings(groups, products, settings) {
+export function applyCategorySettings(groups, products, settings) {
   const byId = new Map();
   const out = [];
   for (const g of groups) {
-    const s = settings.get(menuKey(g.name));
+    const s = settings.get(categoryKey(g.name, g.barSource));
     if (s?.hidden) { byId.set(String(g.id), null); continue; }
     const next = s ? {
       ...g,
@@ -409,9 +436,10 @@ export async function getRestaurantCatalog(restaurant, { force = false } = {}) {
 
 async function buildRestaurantCatalog(restaurant, { force = false } = {}) {
   const raw = await loadRawCatalog(restaurant, { force });
+  const variants = await getDishVariants().catch(() => new Map());
   const [overrides, byName, iikoStop, catSettings, modContent] = await Promise.all([
     getOverrides(restaurant.id),
-    getContentByName(restaurant.id).catch(() => new Map()),
+    getContentByName(restaurant.id, variants).catch(() => new Map()),
     loadIikoStopList(restaurant),
     getCategorySettings().catch(() => new Map()),
     getModifierContent().catch(() => new Map()),
@@ -427,7 +455,7 @@ async function buildRestaurantCatalog(restaurant, { force = false } = {}) {
   for (const product of merged.products) {
     // Своя карточка по ID блюда, недостающие поля — из карточки этого же блюда по названию
     const own = overrides.get(String(product.id)) || overrides.get(String(product.iikoId));
-    const named = byName.get(menuKey(product.name));
+    const named = byName.get(dishCardKey(product.name, variants.get(String(product.iikoId)) || ''));
     // Скрытие по названию — только когда у блюда нет своей карточки (иначе скрытие решает она)
     const o = own && named
       ? { ...named, is_hidden: false, ...Object.fromEntries(Object.entries(own).filter(([, v]) => v != null && v !== false)) }
@@ -447,11 +475,13 @@ async function buildRestaurantCatalog(restaurant, { force = false } = {}) {
       const hadSizes = (p.sizes || []).length;
       p.sizes = (p.sizes || []).filter((z) => !(z.id && stopped(src, p.iikoId, z.id))).map((z) => ({ ...z, groups: prune(z.groups) }));
       p.modifierGroups = prune(p.modifierGroups);
-      const blocked = (groups) => groups.some((g) => g.min > 0 && !g.items.length);
+      // Набор без платных блюд в наличии продать не за что
+      const blocked = (groups, needsChoice = false) => groups.some((g) => g.min > 0 && !g.items.length)
+        || (needsChoice && !groups.some((g) => g.items.some((m) => Number(m.price) > 0)));
       if (hadSizes && !p.sizes.length) p.isInStopList = true;
       // Из нескольких размеров остался один — его ID нужен iiko в заказе (выбора у гостя уже нет)
       if (hadSizes > 1 && p.sizes.length === 1 && p.sizes[0].id) p.sizeId = String(p.sizes[0].id);
-      else if (p.sizes.length ? p.sizes.every((z) => blocked(z.groups)) : blocked(p.modifierGroups)) p.isInStopList = true;
+      else if (p.sizes.length ? p.sizes.every((z) => blocked(z.groups, z.needsChoice)) : blocked(p.modifierGroups, p.needsChoice)) p.isInStopList = true;
     }
     // Ограниченный остаток в iiko («осталось N») — официант видит, сколько ещё можно предложить
     const left = p.isInStopList ? null : iikoStop.balance(src, p.id) ?? iikoStop.balance(src, p.iikoId);
@@ -470,10 +500,13 @@ async function buildRestaurantCatalog(restaurant, { force = false } = {}) {
   for (const p of sections.products) {
     if (/^\d+$/.test(String(p.weight || ''))) p.weight = `${p.weight} ${barIds.has(String(p.parentGroup)) ? 'мл' : 'г'}`;
   }
+  // Конструктор бизнес-ланча: блок businessLunch (active по времени точки), скрытые в админке варианты шагов
+  const lunch = await attachBusinessLunch(restaurant, sections);
   return {
     ...raw.data,
     groups: sections.groups,
-    products: sections.products,
+    products: lunch.products,
+    businessLunch: lunch.businessLunch,
     stopList: [...stop],
     source: raw.source,
     fetchedAt: raw.fetchedAt || new Date(raw.at).toISOString(),
@@ -481,7 +514,7 @@ async function buildRestaurantCatalog(restaurant, { force = false } = {}) {
 }
 
 /** Разделы, где все блюда из второго iiko (бар). */
-function barGroups(products) {
+export function barGroups(products) {
   const bySource = new Map();
   for (const p of products) {
     const g = p.parentGroup;

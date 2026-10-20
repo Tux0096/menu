@@ -249,18 +249,21 @@
     const pendingQty = pending.reduce((n, i) => n + i.quantity, 0);
     if (S.pickSeat && !seats.includes(S.pickSeat)) S.pickSeat = null;
 
+    // «Набор (Ролл, Суп)» → название и состав отдельной строкой мелким текстом
+    const nameOnly = (it) => (it.options && String(it.name).endsWith(`(${it.options})`) ? String(it.name).slice(0, -it.options.length - 3).trim() : it.name);
+    const optsLine = (it) => (it.options ? `<div class="trow__comp">${esc(it.options)}</div>` : '');
     const row = (it, idx) => {
       const served = it.servedAt || it.kitchenStatus === 'Served';
       const src = ''; // кухня/бар делятся только при отправке в iiko — в интерфейсе одно меню
       if (it.isLocked) {
         return `<div class="trow is-sent ${served ? 'is-served' : ''} ${it.isReady ? 'is-ready' : ''}">
-          <div class="trow__main"><div class="trow__name">${esc(it.name)} <span class="muted">×${it.quantity}</span></div>
+          <div class="trow__main"><div class="trow__name">${esc(nameOnly(it))} <span class="muted">×${it.quantity}</span></div>${optsLine(it)}
             <div class="trow__meta">${src}${stagePill(it)}${it.course ? ` · курс ${it.course}` : ''}</div></div>
           ${it.isReady && !served ? `<button class="btn btn--sm btn--dark" data-served-item="${esc(it.id)}">Вынесено</button>` : `<b class="trow__sum">${rub(it.price * it.quantity)}</b>`}
         </div>`;
       }
       return `<div class="trow is-new">
-        <div class="trow__main"><div class="trow__name">${esc(it.name)}</div>
+        <div class="trow__main"><div class="trow__name">${esc(nameOnly(it))}</div>${optsLine(it)}
           <div class="trow__meta">${src}${rub(it.price)} · <b style="color:var(--ok)">новое</b></div></div>
         <div class="qty"><button class="icon-btn" data-qty="${idx}" data-d="-1" aria-label="Меньше">−</button><b>${it.quantity}</b><button class="icon-btn icon-btn--dark" data-qty="${idx}" data-d="1" aria-label="Больше">+</button></div>
         <div class="trow__opts">
@@ -342,6 +345,8 @@
         <div class="pick-sheet__grip"></div>
         <div class="pick-sheet__head"><div class="h3" style="margin:0">Добавить блюда</div><button class="btn btn--sm btn--dark" data-close-picker-btn>Готово</button></div>
         <div class="seg seg--wide" role="group" aria-label="Кому">${[null, ...seats].map((n) => `<button class="${(S.pickSeat || null) === n ? 'is-on' : ''}" data-pick-seat="${n ?? ''}">${n ? esc(`${n} · ${nameOf(n)}`) : 'Всем'}</button>`).join('')}</div>
+        ${S.catalog?.businessLunch?.combos?.length ? `<button class="lunch-btn ${S.catalog.businessLunch.active ? '' : 'is-off'}" data-open-lunch>
+          <span><b>Бизнес-ланч</b><small>${S.catalog.businessLunch.active ? `Собрать набор · ${esc(S.catalog.businessLunch.text)}` : `Сейчас недоступен · доступен ${esc(S.catalog.businessLunch.text)}`}</small></span><i>›</i></button>` : ''}
         ${products.length ? `<input class="inp" id="prod-search" style="width:100%" placeholder="Поиск: название или артикул" value="${esc(S.productSearch)}" autocomplete="off">
           ${q ? '' : `<div class="picker__cats">${groups.map((g) => `<button class="${g.id === S.pickCat ? 'is-active' : ''}" data-pick-cat="${esc(g.id)}">${esc(g.name)}</button>`).join('')}</div>`}
           <div class="pick-list">${found.map((p) => { const n = inCart(p); return `<button class="pick-item" data-add="${esc(p.id)}" ${p.isInStopList ? 'disabled' : ''}>
@@ -990,7 +995,7 @@
     else {
       S.edit.items.push({
         id: newRowId(), local: true, productId: p.id, iikoProductId: p.iikoId || p.id,
-        name: v?.text ? `${p.name} (${v.text})` : p.name, price: v ? v.price : p.price, quantity: 1, isLocked: false,
+        name: v?.text ? `${p.name} (${v.text})` : p.name, price: v ? v.price : p.price, quantity: 1, isLocked: false, ...(v?.text ? { options: v.text } : {}),
         seatNumber: seat, source: p.source, ...(v?.sizeId ? { sizeId: v.sizeId } : {}), ...(v?.modifiers?.length ? { modifiers: v.modifiers } : {}),
       });
     }
@@ -1059,6 +1064,76 @@
           }
           closeModal();
           addLine(p, seat, { sizeId: st.size?.id ? String(st.size.id) : null, modifiers, price: price(), text: [st.size?.name, ...names].filter(Boolean).join(', ') });
+          return;
+        }
+        draw(root);
+      });
+    });
+  }
+
+
+  /**
+   * Конструктор бизнес-ланча (упрощённо): набор → шаги чипами → напиток → «Добавить».
+   * Набор — обычная строка заказа с модификаторами, напиток — отдельная. Вне времени действия — только просмотр, сервер тоже откажет.
+   */
+  function openLunchForm(seat) {
+    const b = S.catalog?.businessLunch;
+    if (!b?.combos?.length) return;
+    const st = { combo: b.combos.length === 1 ? b.combos[0] : null, mods: new Map(), drink: null };
+    const price = () => {
+      if (!st.combo) return 0;
+      let sum = Number(st.combo.base) || 0;
+      for (const g of st.combo.steps) {
+        const units = g.items.flatMap((m) => Array(st.mods.get(String(m.id)) || 0).fill(Number(m.price) || 0)).sort((a, c) => a - c);
+        sum += units.slice(Math.min(g.free || 0, units.length)).reduce((x, y) => x + y, 0);
+      }
+      return Math.round(sum * 100) / 100;
+    };
+    const total = (g) => g.items.reduce((n, m) => n + (st.mods.get(String(m.id)) || 0), 0);
+    const draw = (root) => {
+      const missing = st.combo ? st.combo.steps.filter((g) => total(g) < g.min).map((g) => g.title) : [];
+      const drink = st.drink ? b.drinks.find((d) => d.id === st.drink) : null;
+      const can = b.active && st.combo && !missing.length && price() > 0;
+      root.querySelector('.modal').innerHTML = `<div class="h3" style="margin:0 0 4px">Собери свой ланч</div>
+        <div class="muted" style="margin-bottom:12px;font-size:12px;${b.active ? '' : 'color:var(--danger)'}">${b.active ? `Сейчас действует · ${esc(b.text)}` : `Сейчас недоступен — доступен ${esc(b.text)}`}</div>
+        <div class="muted" style="margin:8px 0 6px"><b>Набор</b></div>
+        <div class="vchips">${b.combos.map((c, i) => `<button class="vchip ${st.combo === c ? 'is-on' : ''}" data-lc="${i}" ${c.stopped ? 'disabled' : ''}>${esc(c.title)} · ${c.fixed ? '' : 'от '}${rub(c.price)}</button>`).join('')}</div>
+        ${st.combo ? st.combo.steps.map((g, gi) => `<div class="muted" style="margin:12px 0 6px;display:flex;justify-content:space-between;gap:8px"><b>${esc(g.title)}</b><span style="${total(g) < g.min ? 'color:var(--danger)' : ''}">${g.min > 0 && g.max === 1 ? 'выберите 1' : g.min > 0 ? `минимум ${g.min}` : 'по желанию'}</span></div>
+          <div class="vchips">${g.items.map((m) => `<button class="vchip ${st.mods.get(String(m.id)) ? 'is-on' : ''}" data-lm="${gi}:${esc(m.id)}">${esc(m.name)}${!st.combo.fixed && m.price > 0 ? ` +${rub(m.price)}` : ''}</button>`).join('')}</div>`).join('') : ''}
+        ${b.drinks?.length ? `<div class="muted" style="margin:12px 0 6px"><b>Напиток к ланчу</b> (по желанию)</div>
+          <div class="vchips">${b.drinks.map((d) => `<button class="vchip ${st.drink === d.id ? 'is-on' : ''}" data-ld="${esc(d.id)}" ${d.stopped ? 'disabled' : ''}>${esc(d.name)} · ${rub(d.price)}</button>`).join('')}</div>` : ''}
+        <div style="display:flex;gap:8px;margin-top:16px"><button class="btn" data-modal-close>Отмена</button>
+          <button class="btn btn--dark grow" data-lok ${can ? '' : 'disabled'}>${!b.active ? 'Вне времени ланча' : !st.combo ? 'Выберите набор' : missing.length ? `Выберите: ${esc(missing.join(', '))}` : `Добавить · ${rub(price() + (drink?.price || 0))}`}</button></div>`;
+    };
+    modal('', (root) => {
+      draw(root);
+      root.firstElementChild.addEventListener('click', (e) => {
+        const x = e.target.closest('[data-lc],[data-lm],[data-ld],[data-lok]');
+        if (!x) return;
+        if (x.dataset.lc != null) { st.combo = b.combos[Number(x.dataset.lc)]; st.mods = new Map(); }
+        else if (x.dataset.lm) {
+          const [gi, id] = x.dataset.lm.split(':');
+          const g = st.combo.steps[Number(gi)];
+          const on = Boolean(st.mods.get(id));
+          if (g.max === 1) { for (const m of g.items) st.mods.delete(String(m.id)); if (!on || g.min > 0) st.mods.set(id, 1); }
+          else if (on) st.mods.delete(id);
+          else if (!g.max || total(g) < g.max) st.mods.set(id, 1);
+          else toast(`В «${g.title}» можно выбрать не больше ${g.max}`, true);
+        } else if (x.dataset.ld) st.drink = st.drink === x.dataset.ld ? null : x.dataset.ld;
+        else if (x.dataset.lok != null) {
+          const product = S.catalog.products.find((p) => String(p.id) === String(st.combo.productId));
+          if (!product) { toast('Набор сейчас недоступен', true); return; }
+          const modifiers = []; const names = [];
+          for (const g of st.combo.steps) for (const m of g.items) {
+            const n = st.mods.get(String(m.id)) || 0;
+            if (!n) continue;
+            modifiers.push({ id: String(m.id), groupId: g.groupId ?? null, amount: n, name: m.name });
+            names.push(n > 1 ? `${m.name} ×${n}` : m.name);
+          }
+          const dp = st.drink ? S.catalog.products.find((p) => String(p.id) === String(b.drinks.find((d) => d.id === st.drink)?.productId)) : null;
+          closeModal();
+          addLine(product, seat, { sizeId: st.combo.sizeId || null, modifiers, price: price(), text: names.join(', ') });
+          if (dp) addLine(dp, seat, null);
           return;
         }
         draw(root);
@@ -1191,6 +1266,7 @@
         changed(); return;
       }
       if (q('[data-pick-cat]')) { S.pickCat = q('[data-pick-cat]').dataset.pickCat; S.pickScroll = 0; render(); return; }
+      if (q('[data-open-lunch]')) { openLunchForm(S.pickSeat || null); return; }
       if (q('[data-add]')) {
         const p = S.catalog.products.find((x) => String(x.id) === q('[data-add]').dataset.add);
         const seat = S.pickSeat || null;

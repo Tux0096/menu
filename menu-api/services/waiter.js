@@ -11,6 +11,7 @@ import {
 import { createWaiterNotification } from './waiter-notifications.js';
 import { getSource, listSources, MAIN, productSourceMap } from './sources.js';
 import { menuIndex, priceLine, priceVariant, stopProblems } from './menu-pricing.js';
+import { assertLunchRows } from './business-lunch.js';
 import { withSessionMutex } from '../lib/session-mutex.js';
 import {
   getSessionContext,
@@ -227,6 +228,7 @@ async function sendToKitchenNow(sessionId, staff) {
   if (!pending.length) throw httpError(400, 'Нет новых позиций для отправки');
   // Стоп-лист проверяем в момент отправки: блюдо могло закончиться, пока гость собирал корзину
   const index = await menuIndex(restaurant);
+  assertLunchRows(index, pending.map((i) => ({ key: i.iiko_product_id || i.product_id }))); // вне времени ланча — 400
   const problems = stopProblems(index, pending.map((i) => ({
     key: i.iiko_product_id || i.product_id, quantity: i.quantity, name: i.name, sizeId: i.size_id || null, modifiers: i.modifiers || [],
   })));

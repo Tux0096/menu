@@ -271,39 +271,67 @@ export function minRequired(groups) {
 }
 
 /**
- * Варианты позиции, которые можно продать: размер с ценой или с обязательной платной группой.
- * priceOf(prices, itemId, sizeId) — цена организации из внешнего меню, а если там 0 — из прейскуранта кассы.
- * Возвращает [{ z, price, groups, total }]; total — цена с самым дешёвым обязательным выбором («от»).
+ * Самый дешёвый платный выбор среди необязательных групп («Собери свой ланч»: набор за 0, цена — в блюдах-модификаторах).
+ * Бесплатные единицы группы (free) в счёт не идут: платной будет только единица сверх них, если группа её допускает.
+ */
+export function minPaidChoice(groups) {
+  let best = Infinity;
+  for (const g of groups || []) {
+    const free = g.free || 0;
+    if (free > 0 && g.max > 0 && g.max <= free) continue; // всё, что можно выбрать, — бесплатно
+    for (const m of g.items) {
+      const p = Number(m.price) || 0;
+      if (p > 0 && (free === 0 || !(m.max > 0) || m.max > free) && p < best) best = p;
+    }
+  }
+  return Number.isFinite(best) ? best : 0;
+}
+
+/**
+ * Варианты позиции, которые можно продать: размер с ценой, с обязательной платной группой или с платным
+ * выбором в необязательных группах (набор ланча). priceOf(prices, itemId, sizeId) — цена организации
+ * из внешнего меню, а если там 0 — из прейскуранта кассы.
+ * Возвращает [{ z, price, groups, total, needsChoice }]; total — цена с самым дешёвым выбором («от»);
+ * needsChoice — без выбора позиция стоила бы 0, продавать её можно только с платным вариантом.
  */
 export function sellableSizes(item, priceOf) {
   const itemId = item.itemId || item.id;
   return (item.itemSizes || []).filter((z) => !z.isHidden).map((z) => {
     const groups = optionGroups(z, priceOf);
     const price = priceOf(z.prices, itemId, z.sizeId || null);
-    return { z, price, groups, total: price + minRequired(groups) };
+    const total = price + minRequired(groups);
+    if (total > 0) return { z, price, groups, total, needsChoice: false };
+    // Набор за 0 ₽ без обязательных групп: цена целиком в блюдах, которые выбирает гость
+    return { z, price, groups, total: minPaidChoice(groups), needsChoice: true };
   }).filter((x) => x.total > 0);
 }
 
 function optionGroups(size, priceOf) {
   return (size.itemModifierGroups || []).filter((g) => !g.isHidden).map((g) => {
     const r = g.restrictions || {};
+    let itemsMin = 0;
     const items = (g.items || []).filter((m) => !m.isHidden && (m.itemId || m.id)).map((m) => {
       const mr = m.restrictions || {};
+      // Обязательный сам по себе элемент (minQuantity / required у элемента) — как «по умолчанию»: кладётся сам
+      const need = Number(mr.minQuantity) || (m.required === true ? 1 : 0);
+      itemsMin += need;
       return {
         id: String(m.itemId || m.id),
         name: String(m.name || '').slice(0, 120),
         price: priceOf(m.prices, m.itemId || m.id, null) || 0,
         weight: m.portionWeightGrams ? Math.round(m.portionWeightGrams) : null,
         image: m.buttonImageUrl || null,
-        def: Number(mr.byDefault) || 0,
+        def: Math.max(Number(mr.byDefault) || 0, need),
         max: Number(mr.maxQuantity) || 0,
       };
     });
     if (!items.length) return null;
+    // Обязательность группы бывает задана и флагом required, и минимумами её элементов
+    const min = Math.max(Number(r.minQuantity) || 0, g.required === true ? 1 : 0, itemsMin);
     return {
       id: g.itemGroupId ? String(g.itemGroupId) : null,
       name: String(g.name || '').slice(0, 120),
-      min: Number(r.minQuantity) || 0,
+      min,
       max: Number(r.maxQuantity) || 0,
       free: Number(r.freeQuantity) || 0,
       items,
@@ -314,7 +342,7 @@ function optionGroups(size, priceOf) {
 export function itemOptions(sizes, multi = false) {
   if (sizes.length > 1) {
     return {
-      sizes: sizes.map(({ z, price, groups }) => ({
+      sizes: sizes.map(({ z, price, groups, needsChoice }) => ({
         id: z.sizeId ? String(z.sizeId) : null,
         name: String(z.sizeName || z.sizeCode || '').slice(0, 60),
         price,
@@ -322,6 +350,7 @@ export function itemOptions(sizes, multi = false) {
         isDefault: Boolean(z.isDefault),
         image: z.buttonImageUrl || null,
         groups,
+        ...(needsChoice ? { needsChoice: true } : {}),
       })),
     };
   }
@@ -330,8 +359,9 @@ export function itemOptions(sizes, multi = false) {
   // Продаётся один размер из нескольких (у пиццы «по умолчанию» без цены) — его ID нужен iiko в заказе
   const sizeId = multi && one.z.sizeId ? String(one.z.sizeId) : null;
   if (!one.groups.length) return sizeId ? { sizeId } : null;
-  // Цена блюда без выбора (может быть 0 — вок, где платная основа); у гостя — «от» с самым дешёвым выбором
-  return { groups: one.groups, base: one.price, ...(sizeId ? { sizeId } : {}) };
+  // Цена блюда без выбора (может быть 0 — вок, где платная основа); у гостя — «от» с самым дешёвым выбором.
+  // needsChoice — без платного выбора набор стоил бы 0: гость и официант добавляют его только с составом
+  return { groups: one.groups, base: one.price, ...(sizeId ? { sizeId } : {}), ...(one.needsChoice ? { needsChoice: true } : {}) };
 }
 
 /**

@@ -35,6 +35,10 @@ const TAB_OPTIONS = [
   { value: 'bar', label: 'Бар' },
 ];
 
+// Раздел с таким же названием есть и в кухне, и в баре — настраиваются отдельно, строки помечаем
+const twin = (c: MenuCategory) => (list.value ?? []).some((x) => x !== c && x.name.trim().toLowerCase() === c.name.trim().toLowerCase() && Boolean(x.bar) !== Boolean(c.bar));
+const sourceLabel = (c: MenuCategory) => (twin(c) ? (c.bar ? '(бар)' : '(кухня)') : '');
+
 // Порядок: стрелки и перетаскивание
 function move(i: number, d: number) {
   const l = list.value!;
@@ -59,7 +63,7 @@ async function save() {
   try {
     await useAuthFetch('/admin/network-menu/categories', {
       method: 'PUT',
-      body: { items: list.value.map((c) => ({ name: c.name, title: c.title, tab: c.tab || null, hidden: c.hidden })) },
+      body: { items: list.value.map((c) => ({ name: c.name, bar: c.bar, title: c.title, tab: c.tab || null, hidden: c.hidden })) },
     }, { restaurant: false });
     initial.value = snapshot();
     notify.success('Разделы сохранены', 'Гости увидят новый порядок, когда откроют или обновят меню');
@@ -93,7 +97,7 @@ async function pickImage(c: MenuCategory, e: Event) {
 async function setImage(c: MenuCategory, image: string | null) {
   imageSaving.value = c.key;
   try {
-    await useAuthFetch('/admin/network-menu/categories', { method: 'POST', body: { name: c.name, image } }, { restaurant: false });
+    await useAuthFetch('/admin/network-menu/categories', { method: 'POST', body: { name: c.name, bar: c.bar, image } }, { restaurant: false });
     c.image = image;
     notify.success(image ? `Картинка раздела «${c.title || c.name}» сохранена` : `У раздела «${c.title || c.name}» снова стандартная картинка`);
   } catch (e) {
@@ -162,7 +166,11 @@ const missingImages = computed(() => (list.value ?? []).filter((c) => !c.hidden 
             <UIcon v-else name="i-heroicons-photo" class="h-6 w-6 text-amber-500" />
           </div>
           <div class="min-w-[180px] flex-1 space-y-1">
-            <UInput v-model="c.title" size="sm" :placeholder="c.name" maxlength="100" :aria-label="`Название раздела ${c.name}`" />
+            <div class="flex items-center gap-2">
+              <UInput v-model="c.title" size="sm" class="min-w-0 flex-1" :placeholder="c.name" maxlength="100" :aria-label="`Название раздела ${sourceLabel(c)} ${c.name}`" />
+              <!-- Одноимённые разделы кухни и бара — две строки, их отличает пометка -->
+              <UBadge v-if="twin(c)" :color="c.bar ? 'purple' : 'gray'" variant="subtle" size="xs">{{ c.bar ? 'бар' : 'кухня' }}</UBadge>
+            </div>
             <div class="text-xs text-slate-500">
               <template v-if="c.title && c.title !== c.name">в iiko: «{{ c.name }}» · </template>
               {{ c.items }} блюд · точек: {{ c.points }} · {{ imageLabel(c) }}

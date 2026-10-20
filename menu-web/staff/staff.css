@@ -363,3 +363,13 @@ html, body { overflow-x: clip; }
 .vchips { display: flex; flex-wrap: wrap; gap: 8px; }
 .vchip { padding: 9px 14px; border-radius: var(--pill); border: 1px solid var(--line); background: var(--card); font-size: 14px; min-height: 40px; }
 .vchip.is-on { background: var(--ink); border-color: var(--ink); color: #fff; }
+
+/* Бизнес-ланч в пикере и состав набора в строке заказа */
+.lunch-btn { display: flex; align-items: center; justify-content: space-between; gap: 10px; width: 100%; margin: 4px 0 10px; padding: 12px 16px; border-radius: 16px; background: linear-gradient(135deg, #5A52D5, #4339B8); color: #fff; text-align: left; }
+.lunch-btn b { display: block; font-size: 15px; }
+.lunch-btn small { display: block; margin-top: 2px; font-size: 12px; opacity: .85; }
+.lunch-btn i { font-style: normal; font-size: 22px; }
+.lunch-btn.is-off { background: #8A8CA0; }
+.trow__comp { margin-top: 2px; font-size: 12px; line-height: 16px; color: var(--muted); }
+.vchip:disabled { opacity: .45; }
+.pick-sheet > :not(.pick-list) { flex-shrink: 0; }

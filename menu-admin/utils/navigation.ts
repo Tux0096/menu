@@ -36,6 +36,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: '/', label: 'Сводка', icon: 'i-heroicons-home', roles: HALL, group: 'main', hint: 'Зал сейчас и цифры дня' },
 
   { to: '/network-menu', label: 'Меню сети', icon: 'i-heroicons-table-cells', roles: CONTENT, group: 'menu', hint: 'Общие карточки блюд, цены и наличие по точкам, настройки iiko' },
+  { to: '/business-lunch', label: 'Бизнес-ланч', icon: 'i-heroicons-clock', roles: CONTENT, group: 'menu', hint: 'Конструктор «Собери свой ланч»: время действия, наборы, блюда шагов, напитки' },
   // Старый раздел «Меню точки» — переадресация на «Меню сети»
   { to: '/menu', label: 'Меню точки', icon: 'i-heroicons-book-open', roles: CONTENT, group: 'menu', hidden: true },
   { to: '/stop-lists', label: 'Стоп-листы iiko', icon: 'i-heroicons-no-symbol', roles: CONTENT, group: 'menu', badge: 'stopList', hint: 'Что сейчас на стопе в iiko по каждой точке' },

@@ -49,7 +49,8 @@ step(`AI-чип «острое» (${chip.engine}): ${chip.suggestions.slice(0, 3
 r = await api('POST', '/api/v1/table/submit-to-waiter', { sessionId: s.sessionId, items: [] }, G);
 assert.equal(r.status, 400); step('пустую корзину нельзя передать официанту');
 
-const [p1, p2, p3] = catalog.products;
+// Блюда без выбора: наборы бизнес-ланча (с составом) проверяются отдельно ниже
+const [p1, p2, p3] = catalog.products.filter((p) => !p.lunchCombo && !p.sizes?.length && !p.modifierGroups?.length);
 const line = (p, q) => ({ productId: p.id, iikoProductId: p.iikoId || p.id, name: p.name, price: p.price, quantity: q });
 // Безопасность: цену и название ставит сервер по меню, а не клиент
 s = ok(await api('POST', '/api/v1/table-order/cart', {
@@ -196,7 +197,7 @@ step('адрес и время работы точки: сохраняются �
   const cats0 = ok(await api('GET', '/api/v1/admin/network-menu/categories', null, A), 'cats list');
   assert.ok(cats0.length > 2, 'разделы есть');
   const reordered = [cats0[2], cats0[0], ...cats0.slice(1).filter((c) => c.key !== cats0[2].key)]
-    .map((c, i) => ({ name: c.name, title: i === 0 ? 'Первый раздел' : c.title, tab: c.tab, hidden: c.key === cats0[1].key }));
+    .map((c, i) => ({ name: c.name, bar: c.bar, title: i === 0 ? 'Первый раздел' : c.title, tab: c.tab, hidden: c.key === cats0[1].key }));
   ok(await api('PUT', '/api/v1/admin/network-menu/categories', { items: reordered }, A), 'cats save');
   const cat3 = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog sections');
   assert.equal(cat3.groups[0].name, 'Первый раздел', 'свой порядок и название у гостя');
@@ -205,7 +206,7 @@ step('адрес и время работы точки: сохраняются �
   const cats1 = ok(await api('GET', '/api/v1/admin/network-menu/categories', null, A), 'cats list 2');
   assert.ok(cats1.find((c) => c.key === cats0[1].key)?.hidden, 'скрытый раздел виден в админке');
   // вернуть как было (порядок — как до теста, без своих названий/скрытия, если их не было)
-  ok(await api('PUT', '/api/v1/admin/network-menu/categories', { items: cats0.map((c) => ({ name: c.name, title: c.title, tab: c.tab, hidden: c.hidden })) }, A), 'cats restore');
+  ok(await api('PUT', '/api/v1/admin/network-menu/categories', { items: cats0.map((c) => ({ name: c.name, bar: c.bar, title: c.title, tab: c.tab, hidden: c.hidden })) }, A), 'cats restore');
   step('разделы меню: порядок, название и скрытие из админки — у гостя');
 }
 
@@ -306,6 +307,54 @@ step('адрес и время работы точки: сохраняются �
     ok(await api('PUT', '/api/v1/admin/network-menu/modifiers', { groups: [{ iikoName: g.iikoName, title: g.title }], items: [{ iikoName: it.iikoName, title: it.title }] }, A), 'mods restore');
     ok(await api('POST', '/api/v1/admin/network-menu/modifiers/image', { name: it.iikoName, image: it.image }, A), 'mods image restore');
     step('модификаторы в админке: название группы и варианта, картинка — у гостя; официанту нельзя (403)');
+  }
+}
+
+// Конструктор бизнес-ланча: блок в каталоге, время действия, отказ вне времени (корзина, передача официанту, отправка на кухню)
+{
+  const bl = catalog.businessLunch;
+  if (!bl?.combos?.length) console.log('- бизнес-ланч: в меню точки нет наборов (проверка пропущена)');
+  else {
+    const adminLunch = ok(await api('GET', '/api/v1/admin/business-lunch', null, A), 'lunch admin');
+    const origin = adminLunch.schedule;
+    const wdNow = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(new Intl.DateTimeFormat('en-US', { timeZone: origin.tz, weekday: 'short' }).format(new Date())) || 7;
+    async function setSchedule(schedule) { ok(await api('PUT', '/api/v1/admin/business-lunch', { schedule }, A), 'lunch schedule'); }
+    const open = { days: [1, 2, 3, 4, 5, 6, 7], from: '00:00', to: '00:00', tz: origin.tz };
+    const closed = { days: [(wdNow % 7) + 1], from: '00:00', to: '23:59', tz: origin.tz }; // только завтра
+    try {
+      await setSchedule(open);
+      const cat1 = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog open');
+      assert.equal(cat1.businessLunch.active, true);
+      const combo = cat1.businessLunch.combos[0];
+      const mods = combo.steps.map((st) => ({ id: st.items[0].id, groupId: st.groupId, amount: 1 }));
+      const lunchLine = { productId: combo.productId, iikoProductId: combo.productId, name: combo.title, quantity: 1, sizeId: combo.sizeId, modifiers: mods };
+      const lg = ok(await api('POST', '/api/v1/guest/login', { phone: '8 (900) 156-09-09', name: 'Ланч', consent: true }), 'login lunch');
+      const LG = { 'X-Guest-Token': lg.token };
+      const ls = ok(await api('POST', '/api/v1/table/enter', { restaurantSlug: 'novo-sadovaya', tableNumber: `${TABLE}-l` }, LG), 'enter lunch');
+      const saved = ok(await api('POST', '/api/v1/table-order/cart', { sessionId: ls.sessionId, items: [lunchLine] }, LG), 'lunch cart');
+      assert.ok(saved.items[0].price > 0 && saved.items[0].options, 'в корзине состав набора');
+      step(`бизнес-ланч в своё время: набор «${combo.title}» в корзине (${saved.items[0].price} ₽, ${saved.items[0].options})`);
+
+      await setSchedule(closed);
+      const cat2 = ok(await api('GET', '/api/v1/restaurants/novo-sadovaya/catalog'), 'catalog closed');
+      assert.equal(cat2.businessLunch.active, false); assert.ok(cat2.businessLunch.nextStart);
+      r = await api('POST', '/api/v1/table-order/cart', { sessionId: ls.sessionId, items: [lunchLine] }, LG);
+      assert.equal(r.status, 400); assert.match(r.data.error, /^Бизнес-ланч доступен с 00:00 до 23:59/);
+      step(`вне времени корзина не принимает набор: 400 «${r.data.error}»`);
+      r = await api('POST', '/api/v1/table/submit-to-waiter', { sessionId: ls.sessionId }, LG);
+      assert.equal(r.status, 400); assert.match(r.data.error, /Бизнес-ланч доступен/);
+      step('вне времени набор из корзины официанту не передать (400)');
+      r = await api('POST', `/api/v1/waiter/session/${ls.sessionId}/send-to-production`, {}, W);
+      assert.equal(r.status, 400); assert.match(r.data.error, /Бизнес-ланч доступен/);
+      step('вне времени набор не отправить на кухню (400)');
+      r = await api('PUT', '/api/v1/admin/business-lunch', { schedule: { days: [], from: '12:00', to: '16:00' } }, A);
+      assert.equal(r.status, 400); step('расписание без дней не сохраняется (400)');
+      r = await api('PUT', '/api/v1/admin/business-lunch', { schedule: open }, W);
+      assert.equal(r.status, 403); step('официанту настройки бизнес-ланча недоступны (403)');
+      await api('POST', `/api/v1/waiter/session/${ls.sessionId}/close`, { force: true }, W);
+    } finally {
+      await setSchedule(origin);
+    }
   }
 }
 
