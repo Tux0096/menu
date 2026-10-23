@@ -908,7 +908,10 @@ assert.equal(r.status, 401); step('токен персонала в адресе
     step('другие чаевые → новый счёт, старый вытеснен (superseded)');
 
     // Вебхуки: подпись
-    const payBody = { InvoiceId: p1s.invoiceId, TransactionId: 9001, Amount: p1s.amount, Currency: 'RUB', Status: 'Completed' };
+    // Номера транзакций — свои на каждый прогон (в базе транзакция уникальна)
+    const TXR = Date.now() % 1e9;
+    const TX = (n) => String(TXR * 10000 + Number(n));
+    const payBody = { InvoiceId: p1s.invoiceId, TransactionId: TX('9001'), Amount: p1s.amount, Currency: 'RUB', Status: 'Completed' };
     let wr = await hook('pay', payBody, { secret: 'wrong' });
     assert.equal(wr.status, 401); step('вебхук с неверной подписью — 401');
     wr = await hook('pay', payBody, { signed: false });
@@ -919,7 +922,7 @@ assert.equal(r.status, 401); step('токен персонала в адресе
     assert.ok(!view.isPaid, 'после неподписанных вебхуков стол не оплачен');
 
     // Pay (form-urlencoded, как шлёт CloudPayments) — один раз засчитан, повтор ничего не меняет
-    const payFields = { InvoiceId: p1s.invoiceId, TransactionId: '9001', Amount: p1s.amount.toFixed(2), Currency: 'RUB', Status: 'Completed' };
+    const payFields = { InvoiceId: p1s.invoiceId, TransactionId: TX('9001'), Amount: p1s.amount.toFixed(2), Currency: 'RUB', Status: 'Completed' };
     wr = await hook('pay', payFields, { form: true });
     assert.deepEqual(wr.data, { code: 0 });
     wr = await hook('pay', payFields, { form: true });
@@ -931,7 +934,7 @@ assert.equal(r.status, 401); step('токен персонала в адресе
     step('Pay дважды → одна проводка (одно «Оплачено онлайн»), стол оплачен');
 
     // Дубль: вытесненный счёт B оплачен после A — строки уже оплачены → duplicate + уведомление о возврате, без проводки
-    wr = await hook('pay', { InvoiceId: pB.invoiceId, TransactionId: '9002', Amount: pB.amount, Currency: 'RUB', Status: 'Completed' });
+    wr = await hook('pay', { InvoiceId: pB.invoiceId, TransactionId: TX('9002'), Amount: pB.amount, Currency: 'RUB', Status: 'Completed' });
     assert.deepEqual(wr.data, { code: 0 });
     nl = ok(await api('GET', '/api/v1/waiter/notifications?restaurant=novo-sadovaya', null, W), 'notes dup');
     assert.equal(nl.filter((n) => n.session_id === sid && n.type === 'payment_done').length, 1, 'дубль не даёт второй проводки');
@@ -939,16 +942,16 @@ assert.equal(r.status, 401); step('токен персонала в адресе
     step('второй оплаченный счёт на те же строки → duplicate, без повторной проводки, официанту — «оформите возврат»');
 
     // Refund: частичный не открывает стол, полный — открывает; повтор события ничего не меняет
-    wr = await hook('refund', { InvoiceId: p1s.invoiceId, TransactionId: '7001', PaymentTransactionId: '9001', Amount: '100.00', Currency: 'RUB' });
+    wr = await hook('refund', { InvoiceId: p1s.invoiceId, TransactionId: TX('7001'), PaymentTransactionId: TX('9001'), Amount: '100.00', Currency: 'RUB' });
     assert.deepEqual(wr.data, { code: 0 });
     view = ok(await api('GET', `/api/v1/table/session/${sid}`, null, g4), 'view part refund');
     assert.ok(view.isPaid, 'частичный возврат стол не открывает');
     const rest = (p1s.amount - 100).toFixed(2);
-    wr = await hook('refund', { TransactionId: '7002', PaymentTransactionId: '9001', Amount: rest, Currency: 'RUB' }); // без InvoiceId — по номеру транзакции
+    wr = await hook('refund', { TransactionId: TX('7002'), PaymentTransactionId: TX('9001'), Amount: rest, Currency: 'RUB' }); // без InvoiceId — по номеру транзакции
     assert.deepEqual(wr.data, { code: 0 });
     view = ok(await api('GET', `/api/v1/table/session/${sid}`, null, g4), 'view full refund');
     assert.ok(!view.isPaid, 'полный возврат — стол больше не оплачен');
-    await hook('refund', { TransactionId: '7002', PaymentTransactionId: '9001', Amount: rest, Currency: 'RUB' });
+    await hook('refund', { TransactionId: TX('7002'), PaymentTransactionId: TX('9001'), Amount: rest, Currency: 'RUB' });
     nl = ok(await api('GET', '/api/v1/waiter/notifications?restaurant=novo-sadovaya', null, W), 'notes refund');
     assert.equal(nl.filter((n) => n.session_id === sid && /возврат онлайн-оплаты/.test(n.title)).length, 2, 'два возврата — два уведомления, повтор не дублирует');
     step('Refund: частичный — стол оплачен; полный — refunded, стол снова не оплачен; повтор события безопасен');
@@ -957,13 +960,13 @@ assert.equal(r.status, 401); step('токен персонала в адресе
     if (CP_MOCK) {
       const pC = ok(await start(), 'pay start after refund');
       const setMock = (m) => fetch(`${CP_MOCK}/__set`, { method: 'POST', body: JSON.stringify({ InvoiceId: pC.invoiceId, ...m }) });
-      await setMock({ Status: 'Declined', Amount: pC.amount, TransactionId: 5001 });
+      await setMock({ Status: 'Declined', Amount: pC.amount, TransactionId: TX('5001') });
       let c = ok(await api('POST', '/api/v1/table/pay/confirm', { sessionId: sid, invoiceId: pC.invoiceId }, g4), 'confirm declined');
       assert.equal(c.status, 'failed');
-      await setMock({ Status: 'Completed', Amount: pC.amount - 0.01, TransactionId: 5002 });
+      await setMock({ Status: 'Completed', Amount: pC.amount - 0.01, TransactionId: TX('5002') });
       c = ok(await api('POST', '/api/v1/table/pay/confirm', { sessionId: sid, invoiceId: pC.invoiceId }, g4), 'confirm short');
       assert.notEqual(c.status, 'completed', 'сумма меньше счёта хотя бы на копейку не засчитывается');
-      await setMock({ Status: 'Completed', Amount: pC.amount, TransactionId: 5002 });
+      await setMock({ Status: 'Completed', Amount: pC.amount, TransactionId: TX('5002') });
       c = ok(await api('POST', '/api/v1/table/pay/confirm', { sessionId: sid, invoiceId: pC.invoiceId }, g4), 'confirm completed');
       assert.equal(c.status, 'completed'); assert.ok(c.session.isPaid);
       step('Declined, затем Completed по тому же InvoiceId → засчитан (failed не терминален); недоплата на 0,01 ₽ — нет');

@@ -1390,10 +1390,10 @@ async function refreshFromIikoNow(sessionId, prefetched = null) {
       if (st !== row.kitchen_status) {
         // Фиксируем время: начали готовить / стало готово; сколько готовилось — по iiko, иначе от «Готовится» (или отправки) до готовности
         await pool.query(
-          `UPDATE table_order_items SET kitchen_status = $2,
-             cooking_started_at = CASE WHEN $2 = 'CookingStarted' THEN COALESCE(cooking_started_at, NOW()) ELSE cooking_started_at END,
-             ready_at = CASE WHEN $2 = 'CookingCompleted' THEN COALESCE(ready_at, NOW()) ELSE ready_at END,
-             cook_minutes = CASE WHEN $2 = 'CookingCompleted' AND cook_minutes IS NULL
+          `UPDATE table_order_items SET kitchen_status = $2::text,
+             cooking_started_at = CASE WHEN $2::text = 'CookingStarted' THEN COALESCE(cooking_started_at, NOW()) ELSE cooking_started_at END,
+             ready_at = CASE WHEN $2::text = 'CookingCompleted' THEN COALESCE(ready_at, NOW()) ELSE ready_at END,
+             cook_minutes = CASE WHEN $2::text = 'CookingCompleted' AND cook_minutes IS NULL
                THEN COALESCE($3::numeric, ROUND((EXTRACT(EPOCH FROM (NOW() - COALESCE(cooking_started_at, sent_at::timestamptz, updated_at::timestamptz))) / 60)::numeric, 2))
                ELSE cook_minutes END
            WHERE id = $1 AND served_at IS NULL`,
