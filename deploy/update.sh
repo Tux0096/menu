@@ -2,7 +2,7 @@
 # Обновление прода QR-меню на уже настроенном сервере (запускается из GitHub Actions или вручную).
 #   BRANCH=main bash deploy/update.sh
 # Секреты берутся из переменных окружения и дописываются в menu-api/.env (в репозиторий не попадают):
-#   FCM_SERVICE_ACCOUNT, OPENROUTER_API_KEY, IIKO_API_LOGIN, IIKO_CLIENT_SECRET, IIKO_MENU_API_LOGIN, IIKO_MENU_CLIENT_SECRET, IIKO_APP_ID, IIKO_EXTERNAL_MENU_ID, ADMIN_PASSWORD, MANAGER_PASSWORD, WAITER_PASSWORD
+#   FCM_SERVICE_ACCOUNT, ALERT_TELEGRAM_BOT_TOKEN, ALERT_TELEGRAM_CHAT_ID, SENTRY_DSN, OPENROUTER_API_KEY, IIKO_API_LOGIN, IIKO_CLIENT_SECRET, IIKO_MENU_API_LOGIN, IIKO_MENU_CLIENT_SECRET, IIKO_APP_ID, IIKO_EXTERNAL_MENU_ID, ADMIN_PASSWORD, MANAGER_PASSWORD, WAITER_PASSWORD
 set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-/home/ubuntu/menu}"
@@ -28,6 +28,15 @@ git log -1 --oneline
 
 echo "=== 2. Зависимости ==="
 cd "$API_DIR"
+# menu-api требует Node 22 (engines в package.json): на старой версии ставим Node 22 из NodeSource, sharp пересоберётся при npm ci
+NODE_MAJOR=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
+if [ "$NODE_MAJOR" -lt 22 ]; then
+  echo "  Node $NODE_MAJOR < 22 — устанавливаю Node 22 (NodeSource)"
+  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+  sudo apt-get install -y nodejs
+  hash -r
+  echo "  Node: $(node -v)"
+fi
 npm ci --omit=dev --no-audit --no-fund
 
 echo "=== 3. .env ==="
@@ -53,7 +62,7 @@ rand() { openssl rand -hex "${1:-16}"; }
 
 # Секреты из GitHub Secrets перезаписывают значения в .env
 # Какие секреты пришли из GitHub (только факт, без значений)
-for v in OPENROUTER_API_KEY IIKO_API_LOGIN IIKO_CLIENT_SECRET IIKO_MENU_API_LOGIN IIKO_MENU_CLIENT_SECRET IIKO_APP_ID IIKO_EXTERNAL_MENU_ID IIKO_BAR_API_LOGIN IIKO_BAR_APP_ID IIKO_BAR_CLIENT_SECRET IIKO_BAR_ORGANIZATION_ID FCM_SERVICE_ACCOUNT CLOUDPAYMENTS_PUBLIC_ID CLOUDPAYMENTS_API_SECRET IIKO_PAYMENT_TYPE_ID IIKO_BAR_PAYMENT_TYPE_ID; do
+for v in OPENROUTER_API_KEY IIKO_API_LOGIN IIKO_CLIENT_SECRET IIKO_MENU_API_LOGIN IIKO_MENU_CLIENT_SECRET IIKO_APP_ID IIKO_EXTERNAL_MENU_ID IIKO_BAR_API_LOGIN IIKO_BAR_APP_ID IIKO_BAR_CLIENT_SECRET IIKO_BAR_ORGANIZATION_ID FCM_SERVICE_ACCOUNT ALERT_TELEGRAM_BOT_TOKEN ALERT_TELEGRAM_CHAT_ID SENTRY_DSN CLOUDPAYMENTS_PUBLIC_ID CLOUDPAYMENTS_API_SECRET IIKO_PAYMENT_TYPE_ID IIKO_BAR_PAYMENT_TYPE_ID; do
   if [ -n "${!v:-}" ]; then echo "  секрет $v: задан"; else echo "  секрет $v: —"; fi
 done
 [ -n "${OPENROUTER_API_KEY:-}" ] && set_env OPENROUTER_API_KEY "$OPENROUTER_API_KEY"
@@ -83,6 +92,10 @@ fi
 [ -n "${CLOUDPAYMENTS_PUBLIC_ID:-}" ] && set_env CLOUDPAYMENTS_PUBLIC_ID "$CLOUDPAYMENTS_PUBLIC_ID"
 [ -n "${CLOUDPAYMENTS_API_SECRET:-}" ] && set_env CLOUDPAYMENTS_API_SECRET "$CLOUDPAYMENTS_API_SECRET"
 if [ -n "${CLOUDPAYMENTS_PUBLIC_ID:-}" ] && [ -n "${CLOUDPAYMENTS_API_SECRET:-}" ]; then set_env PAYMENTS_ENABLED true; fi
+# Оповещения в Telegram (падения, БД, диск, лимиты) и Sentry — необязательно; нет значений — всё работает как раньше
+[ -n "${ALERT_TELEGRAM_BOT_TOKEN:-}" ] && set_env ALERT_TELEGRAM_BOT_TOKEN "$ALERT_TELEGRAM_BOT_TOKEN"
+[ -n "${ALERT_TELEGRAM_CHAT_ID:-}" ] && set_env ALERT_TELEGRAM_CHAT_ID "$ALERT_TELEGRAM_CHAT_ID"
+[ -n "${SENTRY_DSN:-}" ] && set_env SENTRY_DSN "$SENTRY_DSN"
 [ -n "${IIKO_PAYMENT_TYPE_ID:-}" ] && set_env IIKO_PAYMENT_TYPE_ID "$IIKO_PAYMENT_TYPE_ID"
 [ -n "${IIKO_BAR_PAYMENT_TYPE_ID:-}" ] && set_env IIKO_BAR_PAYMENT_TYPE_ID "$IIKO_BAR_PAYMENT_TYPE_ID"
 [ -n "${IIKO_PAYMENT_FISCALIZED_EXTERNALLY:-}" ] && set_env IIKO_PAYMENT_FISCALIZED_EXTERNALLY "$IIKO_PAYMENT_FISCALIZED_EXTERNALLY"
@@ -114,8 +127,20 @@ ensure_env ADMIN_PASSWORD "${ADMIN_PASSWORD:-$(rand 6)}"
 ensure_env MANAGER_PASSWORD "${MANAGER_PASSWORD:-$(rand 6)}"
 ensure_env WAITER_PASSWORD "${WAITER_PASSWORD:-$(rand 8)}"
 chmod 600 "$ENV_FILE"
+# Sentry подключается, только если задан SENTRY_DSN; пакет ставим отдельно (npm ci его не знает и убирает)
+if [ -n "$(get_env SENTRY_DSN)" ] && [ ! -d node_modules/@sentry/node ]; then
+  npm install --no-save --no-audit --no-fund @sentry/node@^8 >/dev/null 2>&1 && echo "  Sentry: пакет установлен" || echo "  ! @sentry/node не установился — ошибки останутся только в журнале"
+fi
 
 echo "=== 4. База данных ==="
+# Резервная копия БД ПЕРЕД миграцией (pre-deploy-<дата>.dump в /var/backups/menu). Не получилась — деплой останавливаем:
+# откат миграции = восстановление этого дампа (README.md → «Бэкап и восстановление», menu-api/db/rollback/README.md)
+BACKUP_DIR="${BACKUP_DIR:-/var/backups/menu}"
+sudo mkdir -p "$BACKUP_DIR" && sudo chown "$(id -un):$(id -gn)" "$BACKUP_DIR" && sudo chmod 700 "$BACKUP_DIR"
+if ! BACKUP_DIR="$BACKUP_DIR" REPO_DIR="$REPO_DIR" bash "$REPO_DIR/deploy/backup.sh" --pre-deploy; then
+  echo "ДЕПЛОЙ ОСТАНОВЛЕН: резервная копия перед миграцией не сделана. Работает прежняя версия; миграция не запускалась." >&2
+  exit 1
+fi
 node db/migrate.js
 # Пароль администратора задаётся секретом GitHub ADMIN_PASSWORD (вход: логин admin)
 if [ -n "${ADMIN_PASSWORD:-}" ]; then
@@ -149,9 +174,49 @@ fi
 set_env ADMIN_WEB_DIR "$ADMIN_DIST"
 
 echo "=== 5. Сервис ==="
+# Пароль БД: пустой или «postgres» — генерируем новый. Сначала меняем пароль в самом Postgres (docker exec, ALTER USER),
+# и только если получилось и новый пароль подошёл по TCP — записываем в .env. Пароль нигде не печатается.
+# Делаем перед самым перезапуском API: старый процесс держит соединения со старым паролем, новые подключения — уже с новым.
+rotate_pg_password() {
+  local cur user container="menu-postgres" newpw
+  cur=$(get_env PG_PASSWORD); user=$(get_env PG_USER); user=${user:-postgres}
+  if [ -n "$cur" ] && [ "$cur" != "postgres" ]; then echo "  пароль БД: уже свой — не меняю"; return 0; fi
+  if ! sudo docker ps --format '{{.Names}}' 2>/dev/null | grep -qx "$container"; then
+    echo "  пароль БД: контейнер $container не найден (Postgres не в Docker?) — смените пароль вручную"; return 0
+  fi
+  newpw=$(rand 24)   # hex: безопасно для SQL и .env
+  if ! printf "ALTER USER \"%s\" WITH PASSWORD '%s';\n" "$user" "$newpw" \
+      | sudo docker exec -i "$container" psql -X -q -U "$user" -d postgres -v ON_ERROR_STOP=1 >/dev/null 2>&1; then
+    echo "  ! пароль БД не изменён (ALTER USER не выполнился) — .env не тронут"; return 0
+  fi
+  # новый пароль должен работать с хоста по TCP, как у API; иначе возвращаем прежний
+  if PG_PASSWORD="$newpw" WAIT_DB_SECONDS=10 node "$API_DIR/db/wait-db.js" >/dev/null 2>&1; then
+    set_env PG_PASSWORD "$newpw"
+    echo "  пароль БД заменён на сгенерированный (записан в $ENV_FILE)"
+  else
+    printf "ALTER USER \"%s\" WITH PASSWORD '%s';\n" "$user" "${cur:-postgres}" \
+      | sudo docker exec -i "$container" psql -X -q -U "$user" -d postgres -v ON_ERROR_STOP=1 >/dev/null 2>&1 \
+      && echo "  ! новый пароль БД не подошёл по TCP — возвращён прежний, .env не тронут" \
+      || echo "  !!! пароль БД изменён, но проверка не прошла и возврат не удался — проверьте $ENV_FILE и доступ к БД вручную"
+  fi
+  return 0
+}
+rotate_pg_password
+
 sudo cp "$REPO_DIR/deploy/systemd/menu-api.service" /etc/systemd/system/menu-api.service
+# Ежедневная резервная копия: service + timer (cp и enable идемпотентны)
+sudo cp "$REPO_DIR/deploy/systemd/menu-backup.service" /etc/systemd/system/menu-backup.service
+sudo cp "$REPO_DIR/deploy/systemd/menu-backup.timer" /etc/systemd/system/menu-backup.timer
+# Журнал systemd не должен съедать диск: не больше 500 МБ (drop-in, повторный запуск ничего не меняет)
+JOURNALD_DROPIN=/etc/systemd/journald.conf.d/menu.conf
+if ! grep -qs '^SystemMaxUse=500M$' "$JOURNALD_DROPIN"; then
+  sudo mkdir -p /etc/systemd/journald.conf.d
+  printf '[Journal]\nSystemMaxUse=500M\n' | sudo tee "$JOURNALD_DROPIN" >/dev/null
+  sudo systemctl restart systemd-journald || echo "  ! journald не перезапустился — лимит применится после перезагрузки"
+fi
 sudo systemctl daemon-reload
 sudo systemctl enable menu-api >/dev/null
+sudo systemctl enable --now menu-backup.timer >/dev/null
 sudo systemctl restart menu-api
 
 echo "=== 6. nginx ==="
@@ -217,6 +282,7 @@ curl -fsS -m 90 "http://127.0.0.1:3101/api/v1/restaurants/$SLUG/catalog" \
 sudo journalctl -u menu-api --since "3 min ago" --no-pager -o cat | grep -E "^catalog|prod API|iiko|→|вернул|по группам|записано|! |Готово|внешнее меню|разбор меню|пример «" | tail -60 || true
 
 echo ""
+echo "Резервные копии: $BACKUP_DIR (ежедневно в 04:30, systemctl list-timers menu-backup.timer); проверка: bash $REPO_DIR/deploy/restore-check.sh"
 echo "Готово:"
 echo "  Гость:    https://menu.franchise-fuji.ru/?table=5"
 echo "  Админка:  https://adm.menu.franchise-fuji.ru/ (то же — https://menu.franchise-fuji.ru/admin/)"

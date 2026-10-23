@@ -169,9 +169,11 @@ Workflow `.github/workflows/deploy.yml` выкатывает прод на `menu
 
 1. подтягивает код ветки, `npm ci`;
 2. дописывает в `menu-api/.env` недостающие настройки (секрет подписи, ключи из GitHub Secrets, пароли персонала). Уже заданные значения сохраняются;
-3. `db/migrate.js` — идемпотентная миграция, старые данные сохраняются; выгрузка меню из iiko;
-4. перезапускает сервис `menu-api` и обновляет nginx (с бэкапом и откатом, если конфиг не прошёл `nginx -t`);
+3. **дамп БД `pre-deploy-<дата>.dump`** (не получился — деплой останавливается), затем `db/migrate.js` — идемпотентная миграция, старые данные сохраняются; выгрузка меню из iiko;
+4. при необходимости меняет слабый пароль БД на сгенерированный, перезапускает сервис `menu-api`, ставит таймер ежедневных копий и лимит журнала (500 МБ), обновляет nginx (с бэкапом и откатом, если конфиг не прошёл `nginx -t`);
 5. проверяет `/health` и меню.
+
+Если на сервере Node старше 22, `update.sh` сам ставит Node 22 (NodeSource) и пересобирает зависимости (`sharp`).
 
 **Секреты** (Settings → Secrets and variables → Actions → New repository secret):
 
@@ -186,6 +188,35 @@ Workflow `.github/workflows/deploy.yml` выкатывает прод на `menu
 | `IIKO_APP_ID` | для новых ключей | ID приложения (appId): новые ключи iiko выдают токен только по «ключ + ID приложения + секрет клиента» |
 | `FCM_SERVICE_ACCOUNT` | для push | ключ сервисного аккаунта Firebase (JSON целиком) — push в приложение официанта |
 | `IIKO_EXTERNAL_MENU_ID` | нет | ID внешнего меню iiko — брать его напрямую |
+| `ALERT_TELEGRAM_BOT_TOKEN`, `ALERT_TELEGRAM_CHAT_ID` | нет | бот и чат Telegram для оповещений: падение API, БД недоступна, диск > 85%, iiko отвечает 429 дольше 10 минут, лимит запросов к LLM (80% и 100%), сбой резервной копии. Не чаще раза в 10 минут на тип |
+| `SENTRY_DSN` | нет | отправка ошибок сервера в Sentry (пакет `@sentry/node` ставит `update.sh`) |
 | `ADMIN_PASSWORD`, `MANAGER_PASSWORD`, `WAITER_PASSWORD` | нет | пароли персонала при первом деплое. Без них генерируются случайные и хранятся только в `.env` на сервере |
 
 Первичная установка на чистый сервер — `deploy/server-setup.sh`. Nginx проксирует всё на `menu-api`, а `/uploads`, `/_ipx`, `/content` (фото блюд) — на prod API Фуджи.
+
+## Бэкап и восстановление
+
+**Что копируется** (`deploy/backup.sh`, каталог `/var/backups/menu`, права 700, хранится 14 дней, три последних файла каждого вида остаются всегда):
+
+| Файл | Когда | Содержимое |
+|---|---|---|
+| `menu-<дата>.dump` | ежедневно в 04:30 | `pg_dump -Fc` рабочей БД |
+| `menu-config-<дата>.tgz` | ежедневно в 04:30 | `menu-api/.env` (VAPID-ключи push, `QR_SECRET` — без него напечатанные QR перестанут работать, ключи iiko) и `menu-api/media` (загруженные фото и видео) |
+| `pre-deploy-<дата>.dump` | перед каждой миграцией | дамп БД; не получился — деплой останавливается |
+
+Ежедневный запуск — systemd timer `menu-backup.timer` (ставит и включает `deploy/update.sh`, повторный запуск ничего не меняет): `systemctl list-timers menu-backup.timer`, журнал — `journalctl -u menu-backup`. Вручную: `bash deploy/backup.sh`. Postgres в Docker (`menu-postgres`) — `pg_dump` выполняется внутри контейнера, иначе клиентом на хосте (`MENU_PG_MODE=docker|host` — принудительно). Параметры БД берутся из `menu-api/.env` (`PG_*`). Сбой копии отправляет оповещение в Telegram, если он настроен.
+
+> Копии лежат на том же сервере, что и данные: при потере сервера они пропадут. Раз в неделю скачивайте свежие `menu-*.dump` и `menu-config-*.tgz` на другой компьютер или в облако (`scp ubuntu@сервер:/var/backups/menu/menu-config-*.tgz .`).
+> Данные Postgres в контейнере должны лежать на томе (`-v menu-pgdata:/var/lib/postgresql/data`, `deploy/server-setup.sh` делает так для новых серверов). Без тома удаление контейнера `docker rm menu-postgres` уничтожает базу. Проверка: `sudo docker inspect menu-postgres --format '{{ json .Mounts }}'` — пусто значит, тома нет; тогда сделайте дамп, пересоздайте контейнер с томом и залейте дамп.
+
+**Проверка копии** (рабочая БД не меняется): `bash deploy/restore-check.sh` — восстанавливает последний дамп (или указанный: `restore-check.sh /var/backups/menu/pre-deploy-….dump`) во временную БД `menu_restore_check`, сравнивает число строк ключевых таблиц с рабочей БД и удаляет временную БД. Код выхода 1 — копия не восстанавливается или в ней пусто. Делайте раз в месяц и после изменений в схеме.
+
+**Восстановление на новом сервере.**
+1. `deploy/server-setup.sh` — Node, Docker, пустой Postgres, код.
+2. Конфиг и фото: `tar -xzf menu-config-<дата>.tgz -C /home/ubuntu/menu/menu-api` (вернёт `.env` и `media/`).
+3. База: `docker exec menu-postgres psql -U postgres -d postgres -c "CREATE DATABASE menu_db"` (если нет), затем `docker exec -i menu-postgres pg_restore -U postgres -d menu_db --no-owner < menu-<дата>.dump`. Пароль пользователя в Postgres должен совпадать с `PG_PASSWORD` из восстановленного `.env`.
+4. `bash deploy/update.sh` (или Actions → Deploy) — миграция подтянет схему до актуальной, сервис запустится.
+
+**Откат неудачного деплоя** — `menu-api/db/rollback/README.md`: восстановление `pre-deploy-*.dump` командами и SQL отката новых колонок/таблиц/индексов последних релизов.
+
+**Мониторинг.** Необработанные ошибки (`unhandledRejection`, `uncaughtException`) пишутся в журнал и (если заданы) в Telegram/Sentry; `uncaughtException` перезапускает сервис через systemd. Ошибки браузеров (меню гостя, терминал, админка) уходят на `POST /api/v1/client-errors` (лимит по IP, ≤ 4 КБ, без персональных данных) и видны в `journalctl -u menu-api | grep client-error`. `/health` публично отдаёт только `ok` и `db`; режимы iiko/LLM и Ollama — с localhost или по заголовку `X-Health-Token` (`HEALTH_TOKEN` в `.env`).

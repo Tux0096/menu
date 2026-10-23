@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { Feedback } from '~/types/api';
+import type { Feedback, Paged } from '~/types/api';
 import { useRestaurantStore } from '~/stores/restaurant';
 
 useHead({ title: 'Отзывы — Фуджи' });
@@ -7,23 +7,46 @@ useHead({ title: 'Отзывы — Фуджи' });
 const restaurants = useRestaurantStore();
 const route = useRoute();
 
+const PAGE = 100;
 const rows = ref<Feedback[] | null>(null);
+const total = ref<number | null>(null);
+const nextCursor = ref<string | null>(null);
 const loadError = ref('');
 const loading = ref(false);
+const loadingMore = ref(false);
 async function load() {
   loading.value = true;
   loadError.value = '';
   try {
-    rows.value = await useAuthFetch<Feedback[]>('/manager/feedback');
+    const page = await useAuthFetch<Paged<Feedback>>('/manager/feedback', { query: { limit: PAGE } });
+    rows.value = page.items;
+    total.value = page.total;
+    nextCursor.value = page.hasMore ? page.nextCursor : null;
   } catch (e) {
     loadError.value = getErrorMessage(e);
   } finally {
     loading.value = false;
   }
 }
+// «Показать ещё»: следующий лист от последней загруженной записи
+async function loadMore() {
+  if (!nextCursor.value || loadingMore.value) return;
+  loadingMore.value = true;
+  try {
+    const page = await useAuthFetch<Paged<Feedback>>('/manager/feedback', { query: { limit: PAGE, before: nextCursor.value } });
+    rows.value = [...(rows.value ?? []), ...page.items];
+    total.value = page.total;
+    nextCursor.value = page.hasMore ? page.nextCursor : null;
+  } catch (e) {
+    loadError.value = getErrorMessage(e);
+  } finally {
+    loadingMore.value = false;
+  }
+}
 onMounted(load);
 watch(() => restaurants.slug, () => {
   rows.value = null;
+  nextCursor.value = null;
   load();
 });
 
@@ -60,8 +83,8 @@ const columns = [
     </PageHeader>
 
     <div class="mb-4 grid gap-4 sm:grid-cols-3">
-      <StatCard label="Средняя оценка" icon="i-heroicons-star" :tone="avg !== null && avg < 4 ? 'red' : 'green'" :loading="!rows" :value="avg !== null ? `${avg.toFixed(1).replace('.', ',')} из 5` : '—'" />
-      <StatCard label="Отзывов" icon="i-heroicons-chat-bubble-left-right" :loading="!rows" :value="rows?.length ?? '—'" hint="последние 100" />
+      <StatCard label="Средняя оценка" :hint="nextCursor ? 'по загруженным' : undefined" icon="i-heroicons-star" :tone="avg !== null && avg < 4 ? 'red' : 'green'" :loading="!rows" :value="avg !== null ? `${avg.toFixed(1).replace('.', ',')} из 5` : '—'" />
+      <StatCard label="Отзывов" icon="i-heroicons-chat-bubble-left-right" :loading="!rows" :value="total ?? rows?.length ?? '—'" hint="всего" />
       <StatCard label="Низких оценок" icon="i-heroicons-face-frown" :tone="low ? 'red' : 'brand'" :loading="!rows" :value="low" hint="3 и ниже" />
     </div>
 
@@ -94,6 +117,10 @@ const columns = [
         <template #waiter_name-data="{ row }"><span class="text-sm">{{ row.waiter_name || '—' }}</span></template>
         <template #total-data="{ row }"><span class="whitespace-nowrap">{{ formatRub(row.total) }}</span></template>
       </UTable>
+      <div v-if="rows?.length" class="flex flex-wrap items-center justify-between gap-3 border-t border-brand-50 px-4 py-3 text-xs text-slate-500">
+        <span>Показаны {{ rows.length }} из {{ total ?? rows.length }}</span>
+        <UButton v-if="nextCursor" color="white" icon="i-heroicons-arrow-down" :loading="loadingMore" @click="loadMore">Показать ещё</UButton>
+      </div>
     </div>
   </div>
 </template>

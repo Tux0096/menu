@@ -17,17 +17,18 @@ export const toMinutes = (hhmm) => {
 };
 const fmt = (min) => `${String(Math.floor(min / 60)).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
 
-function validTz(tz) {
+export function validTz(tz) {
   try { new Intl.DateTimeFormat('en-US', { timeZone: tz }); return true; } catch { return false; }
 }
 
 /** Приводит расписание из БД/запроса к виду { days, from, to, tz }; пустое или битое — расписание по умолчанию. */
-export function normalizeSchedule(raw) {
+export function normalizeSchedule(raw, fallbackTz = DEFAULT_TZ) {
   const s = raw && typeof raw === 'object' ? raw : {};
   const days = [...new Set((Array.isArray(s.days) ? s.days : DEFAULT_SCHEDULE.days).map(Number).filter((d) => d >= 1 && d <= 7))].sort((a, b) => a - b);
   const from = toMinutes(s.from);
   const to = toMinutes(s.to);
-  const tz = typeof s.tz === 'string' && s.tz && validTz(s.tz) ? s.tz : DEFAULT_TZ;
+  // Своего пояса в расписании нет — берём пояс точки (restaurants.timezone), затем Самару
+  const tz = typeof s.tz === 'string' && s.tz && validTz(s.tz) ? s.tz : (fallbackTz && validTz(fallbackTz) ? fallbackTz : DEFAULT_TZ);
   return {
     days: days.length || Array.isArray(s.days) ? days : DEFAULT_SCHEDULE.days,
     from: fmt(from != null && from < 1440 ? from : toMinutes(DEFAULT_SCHEDULE.from)),
@@ -37,7 +38,7 @@ export function normalizeSchedule(raw) {
 }
 
 /** Проверка расписания из админки: ошибка 400 с понятным текстом вместо молчаливой подмены. */
-export function validateSchedule(raw) {
+export function validateSchedule(raw, fallbackTz = DEFAULT_TZ) {
   if (!raw || typeof raw !== 'object') throw httpError(400, 'Нет расписания бизнес-ланча');
   if (!Array.isArray(raw.days) || !raw.days.length || raw.days.some((d) => !(Number(d) >= 1 && Number(d) <= 7))) {
     throw httpError(400, 'Выберите хотя бы один день недели');
@@ -45,7 +46,7 @@ export function validateSchedule(raw) {
   const f = toMinutes(raw.from);
   if (f == null || f >= 1440 || toMinutes(raw.to) == null) throw httpError(400, 'Время — в формате ЧЧ:ММ, например 12:00');
   if (raw.tz && !validTz(raw.tz)) throw httpError(400, 'Неизвестный часовой пояс');
-  return normalizeSchedule(raw);
+  return normalizeSchedule(raw, fallbackTz);
 }
 
 /** Составляющие времени в часовом поясе: день недели (1–7), минуты от полуночи, дата. */

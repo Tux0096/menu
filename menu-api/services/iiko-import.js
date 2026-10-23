@@ -17,6 +17,7 @@ import {
   matchOrderToSession, normalizeIikoOrder, orderKey, sessionOrders, tableNumbersBySections,
 } from '../lib/iiko-order-sync.js';
 import { withSessionMutex } from '../lib/session-mutex.js';
+import { sessionHasIikoOrderSql, uuidOrNull } from '../lib/uuid.js';
 import { getSource, listSources } from './sources.js';
 import { getSessionContext, syncAddedItems } from './table-session.js';
 import { WORKFLOW } from '../lib/table-workflow-config.js';
@@ -39,13 +40,15 @@ async function tableNumbers(src) {
 }
 
 /** Визит, где этот заказ iiko уже записан (за последние дни): открытый — в приоритете. */
-async function findKnownSession(restaurantId, orderId) {
+async function findKnownSession(restaurantId, orderIdRaw) {
+  const orderId = uuidOrNull(String(orderIdRaw).toLowerCase());
+  if (!orderId) return null;
   const { rows } = await pool.query(
     `SELECT id, status FROM table_sessions
      WHERE restaurant_id = $1 AND created_at > NOW() - INTERVAL '3 days'
-       AND (iiko_order_id::text = $2 OR EXISTS (SELECT 1 FROM jsonb_each(iiko_orders) e WHERE e.value->>'orderId' = $2))
+       AND ${sessionHasIikoOrderSql('$2')}
      ORDER BY (status = 'open') DESC, created_at DESC LIMIT 1`,
-    [restaurantId, String(orderId)],
+    [restaurantId, orderId],
   );
   return rows[0] ? { id: rows[0].id, open: rows[0].status === 'open' } : null;
 }

@@ -37,11 +37,17 @@ export async function loadLunchSettings(restaurantId = null) {
   }
   const net = rows.find((r) => r.scope === NETWORK)?.data || {};
   const own = restaurantId ? rows.find((r) => r.scope === String(restaurantId))?.data || {} : {};
+  // Часовой пояс точки — запасной для расписания без своего пояса
+  let tz = DEFAULT_SCHEDULE.tz;
+  if (restaurantId) {
+    try { tz = (await pool.query('SELECT timezone FROM restaurants WHERE id = $1', [restaurantId])).rows[0]?.timezone || tz; } catch { /* колонки ещё нет */ }
+  }
   return {
     ...emptySettings(), ...net,
-    schedule: normalizeSchedule(own.schedule || net.schedule || DEFAULT_SCHEDULE),
+    schedule: normalizeSchedule(own.schedule || net.schedule || DEFAULT_SCHEDULE, tz),
     networkSchedule: normalizeSchedule(net.schedule || DEFAULT_SCHEDULE),
-    ownSchedule: own.schedule ? normalizeSchedule(own.schedule) : null,
+    ownSchedule: own.schedule ? normalizeSchedule(own.schedule, tz) : null,
+    timezone: tz,
   };
 }
 
@@ -117,7 +123,7 @@ export async function saveLunchSettings(body, restaurants) {
         await pool.query(
           `INSERT INTO business_lunch_settings (scope, data, updated_at) VALUES ($1, $2, NOW())
            ON CONFLICT (scope) DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()`,
-          [r.id, JSON.stringify({ schedule: validateSchedule(sch) })],
+          [r.id, JSON.stringify({ schedule: validateSchedule(sch, r.timezone || DEFAULT_SCHEDULE.tz) })],
         );
       }
     }

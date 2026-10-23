@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AuditRow } from '~/types/api';
+import type { AuditRow, Paged } from '~/types/api';
 
 useHead({ title: 'Журнал изменений — Фуджи' });
 
@@ -51,18 +51,40 @@ const KINDS = [
 ];
 const kind = ref('');
 
+const PAGE = 200;
 const rows = ref<AuditRow[] | null>(null);
+const total = ref<number | null>(null);
+const nextCursor = ref<string | null>(null);
 const loadError = ref('');
 const loading = ref(false);
+const loadingMore = ref(false);
 async function load() {
   loading.value = true;
   loadError.value = '';
   try {
-    rows.value = await useAuthFetch<AuditRow[]>('/admin/audit');
+    const page = await useAuthFetch<Paged<AuditRow>>('/admin/audit', { query: { limit: PAGE } });
+    rows.value = page.items;
+    total.value = page.total;
+    nextCursor.value = page.hasMore ? page.nextCursor : null;
   } catch (e) {
     loadError.value = getErrorMessage(e);
   } finally {
     loading.value = false;
+  }
+}
+// «Показать ещё»: следующий лист от последней загруженной записи
+async function loadMore() {
+  if (!nextCursor.value || loadingMore.value) return;
+  loadingMore.value = true;
+  try {
+    const page = await useAuthFetch<Paged<AuditRow>>('/admin/audit', { query: { limit: PAGE, before: nextCursor.value } });
+    rows.value = [...(rows.value ?? []), ...page.items];
+    total.value = page.total;
+    nextCursor.value = page.hasMore ? page.nextCursor : null;
+  } catch (e) {
+    loadError.value = getErrorMessage(e);
+  } finally {
+    loadingMore.value = false;
   }
 }
 onMounted(load);
@@ -100,7 +122,7 @@ const columns = [
 
 <template>
   <div>
-    <PageHeader title="Журнал изменений" icon="i-heroicons-clipboard-document-list" description="Кто и что менял в меню, баннерах, сотрудниках и оплате. Последние 200 записей.">
+    <PageHeader title="Журнал изменений" icon="i-heroicons-clipboard-document-list" description="Кто и что менял в меню, баннерах, сотрудниках и оплате. Новые записи сверху, старые подгружаются кнопкой «Показать ещё».">
       <UButton icon="i-heroicons-arrow-path" color="white" :loading="loading" aria-label="Обновить" @click="load" />
     </PageHeader>
 
@@ -120,6 +142,10 @@ const columns = [
         <template #action-data="{ row }"><span class="text-sm font-medium">{{ actionLabel(row.action) }}</span></template>
         <template #details-data="{ row }"><span class="block max-w-xl truncate text-xs text-slate-500" :title="JSON.stringify(row.payload ?? {})">{{ details(row) || '—' }}</span></template>
       </UTable>
+      <div v-if="rows?.length" class="flex flex-wrap items-center justify-between gap-3 border-t border-brand-50 px-4 py-3 text-xs text-slate-500">
+        <span>Показаны {{ rows.length }} из {{ total ?? rows.length }}{{ filtered.length !== rows.length ? ` (под фильтр подходит ${filtered.length})` : '' }}</span>
+        <UButton v-if="nextCursor" color="white" icon="i-heroicons-arrow-down" :loading="loadingMore" @click="loadMore">Показать ещё</UButton>
+      </div>
     </div>
   </div>
 </template>

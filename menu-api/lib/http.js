@@ -3,6 +3,7 @@
  * проверка обязательных полей, ограничение частоты запросов и заголовки безопасности.
  */
 import { timingSafeEqual } from 'crypto';
+import { captureError } from './monitor.js';
 
 /** Ошибка с HTTP-статусом: текст уходит клиенту (для статусов < 500). */
 export function httpError(status, message, extra = {}) {
@@ -16,6 +17,7 @@ export function httpError(status, message, extra = {}) {
 export function sendError(res, err, req) {
   const status = err.status && err.status >= 400 && err.status < 600 ? err.status : 500;
   if (status >= 500) console.error(`${req?.method || ''} ${req?.path || ''}:`, err.stack || err.message);
+  if (status >= 500) captureError(err, { path: req?.path });
   // 502 — понятная ошибка iiko для официанта (текст формирует сервер), остальные 5xx — без деталей
   const message = status >= 500 && status !== 502 && status !== 503 ? 'Внутренняя ошибка сервера — попробуйте ещё раз' : err.message;
   if (!res.headersSent) res.status(status).json({ error: message, code: err.code, details: status < 500 ? err.details : undefined });

@@ -37,7 +37,7 @@ import {
   rubText, billText, callText, cookSlowText, newOrderText, readyText, readyWaitText, reorderText, removedText, waitText,
 } from '../lib/notification-text.js';
 import { arriveByQr } from './reservations.js';
-import { RESERVE_TZ, STATE_LABELS, clockText, reserveState } from '../lib/iiko-reserve-sync.js';
+import { STATE_LABELS, clockText, reserveState, reserveTz } from '../lib/iiko-reserve-sync.js';
 import { getSource, productSourceMap } from './sources.js';
 import { alcoholView, assertAgeConfirmed, assertAlcoSale } from '../lib/alco-rules.js';
 import { assertHoursRows, menuIndex, priceLine, priceVariant, rowVariantKey, variantKey } from './menu-pricing.js';
@@ -244,14 +244,14 @@ function minutesSince(ts) {
 }
 
 /** Бронь визита для карточки стола: «Бронь 19:00 · Мария · 4 гостя · пришли / ждём». */
-function reservationOf(session) {
+function reservationOf(session, restaurant) {
   const state = reserveState({
     startsAt: session.rv_starts_at, status: session.rv_status || 'new', arrivedAt: session.rv_arrived_at,
     noShowAt: session.rv_no_show_at, sessionId: session.id,
   });
   return {
     id: session.reservation_id,
-    time: clockText(session.rv_starts_at, RESERVE_TZ),
+    time: clockText(session.rv_starts_at, reserveTz(restaurant)),
     guestName: session.reserve_guest_name || '',
     guests: session.rv_guests || session.guest_count || 1,
     comment: session.rv_comment || '',
@@ -296,7 +296,7 @@ export function mapSession({ session, restaurant, items, guests = [] }, extra = 
       visitsCount: session.guest_visits || 0,
     } : null,
     // Визит создан под бронь из iiko: время, имя и число гостей, пришли ли (телефон — только в списке «Брони»)
-    reservation: session.reservation_id ? reservationOf(session) : null,
+    reservation: session.reservation_id ? reservationOf(session, restaurant) : null,
     guestsAtTable: (session.guest_ids || []).length || (session.guest_id ? 1 : 0),
     guests: tableGuests({ guests }),
     readyCount: mapped.filter((i) => i.isReady).reduce((s, i) => s + i.quantity, 0),
@@ -1003,7 +1003,7 @@ export async function runServiceChecks() {
     `UPDATE table_sessions SET status = 'closed', workflow_status = CASE WHEN payment_status = 'paid' THEN 'paid' ELSE 'closed' END,
        closed_at = NOW(), updated_at = NOW()
      WHERE status = 'open'
-       AND COALESCE(last_guest_activity_at, updated_at::timestamptz, created_at::timestamptz) < NOW() - INTERVAL '12 hours'`,
+       AND COALESCE(last_guest_activity_at, updated_at, created_at) < NOW() - INTERVAL '12 hours'`,
   );
 
   const { rows: idle } = await pool.query(
@@ -1380,7 +1380,7 @@ async function refreshFromIikoNow(sessionId, prefetched = null) {
              cooking_started_at = CASE WHEN $2 = 'CookingStarted' THEN COALESCE(cooking_started_at, NOW()) ELSE cooking_started_at END,
              ready_at = CASE WHEN $2 = 'CookingCompleted' THEN COALESCE(ready_at, NOW()) ELSE ready_at END,
              cook_minutes = CASE WHEN $2 = 'CookingCompleted' AND cook_minutes IS NULL
-               THEN COALESCE($3::numeric, ROUND((EXTRACT(EPOCH FROM (NOW() - COALESCE(cooking_started_at, sent_at::timestamptz, updated_at::timestamptz))) / 60)::numeric, 2))
+               THEN COALESCE($3::numeric, ROUND((EXTRACT(EPOCH FROM (NOW() - COALESCE(cooking_started_at, sent_at, updated_at))) / 60)::numeric, 2))
                ELSE cook_minutes END
            WHERE id = $1 AND served_at IS NULL`,
           [row.id, st, cookOf(row)],

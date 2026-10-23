@@ -15,6 +15,9 @@
 #   IIKO_EXTERNAL_MENU_ID — ID внешнего меню iiko (если не задан — выбирается из меню ключа)
 #   IIKO_KEYS — дополнительные ключи iiko, по строке на ключ: «Название = ключ» (например «Ленинградская бар = 1a2b…»).
 #     Появляются в админке (Меню сети → Настройки iiko → Ключ API iiko) под своим названием.
+#   ALERT_TELEGRAM_BOT_TOKEN / ALERT_TELEGRAM_CHAT_ID — бот и чат Telegram для оповещений (падения API, БД недоступна, диск > 85%,
+#     iiko 429 дольше 10 минут, лимит запросов к LLM, сбой резервной копии). Не заданы — оповещений нет, всё остальное работает.
+#   SENTRY_DSN — необязательно: отправка ошибок сервера в Sentry (пакет @sentry/node ставит deploy/update.sh)
 #   FUJI_TEAM_DATABASE_URL — база сотрудников «Фуджи Тим» (postgres://логин:пароль@хост:порт/база, только чтение):
 #     вход на of. по табельному; запрос сотрудников настраивается в админке → «Фуджи Тим». FUJI_TEAM_SSL=true — по SSL
 
@@ -89,11 +92,14 @@ jobs:
           WAITER_PASSWORD: ${{ secrets.WAITER_PASSWORD }}
           FUJI_TEAM_DATABASE_URL: ${{ secrets.FUJI_TEAM_DATABASE_URL }}
           FUJI_TEAM_SSL: ${{ secrets.FUJI_TEAM_SSL }}
+          ALERT_TELEGRAM_BOT_TOKEN: ${{ secrets.ALERT_TELEGRAM_BOT_TOKEN }}
+          ALERT_TELEGRAM_CHAT_ID: ${{ secrets.ALERT_TELEGRAM_CHAT_ID }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: BRANCH,IIKO_KEYS,OPENROUTER_API_KEY,IIKO_API_LOGIN,IIKO_CLIENT_SECRET,IIKO_MENU_API_LOGIN,IIKO_MENU_CLIENT_SECRET,IIKO_APP_ID,IIKO_EXTERNAL_MENU_ID,IIKO_BAR_API_LOGIN,IIKO_BAR_APP_ID,IIKO_BAR_CLIENT_SECRET,IIKO_BAR_ORGANIZATION_ID,FCM_SERVICE_ACCOUNT,CLOUDPAYMENTS_PUBLIC_ID,CLOUDPAYMENTS_API_SECRET,IIKO_PAYMENT_TYPE_ID,IIKO_BAR_PAYMENT_TYPE_ID,IIKO_PAYMENT_FISCALIZED_EXTERNALLY,ADMIN_PASSWORD,MANAGER_PASSWORD,WAITER_PASSWORD,FUJI_TEAM_DATABASE_URL,FUJI_TEAM_SSL
+          envs: BRANCH,IIKO_KEYS,OPENROUTER_API_KEY,IIKO_API_LOGIN,IIKO_CLIENT_SECRET,IIKO_MENU_API_LOGIN,IIKO_MENU_CLIENT_SECRET,IIKO_APP_ID,IIKO_EXTERNAL_MENU_ID,IIKO_BAR_API_LOGIN,IIKO_BAR_APP_ID,IIKO_BAR_CLIENT_SECRET,IIKO_BAR_ORGANIZATION_ID,FCM_SERVICE_ACCOUNT,CLOUDPAYMENTS_PUBLIC_ID,CLOUDPAYMENTS_API_SECRET,IIKO_PAYMENT_TYPE_ID,IIKO_BAR_PAYMENT_TYPE_ID,IIKO_PAYMENT_FISCALIZED_EXTERNALLY,ADMIN_PASSWORD,MANAGER_PASSWORD,WAITER_PASSWORD,FUJI_TEAM_DATABASE_URL,FUJI_TEAM_SSL,ALERT_TELEGRAM_BOT_TOKEN,ALERT_TELEGRAM_CHAT_ID,SENTRY_DSN
           command_timeout: 20m
           script: |
             set -e

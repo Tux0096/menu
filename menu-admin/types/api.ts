@@ -218,6 +218,14 @@ export interface AlcoholRules {
   preview: { open: boolean; rulesText: string; closedMessage: string | null };
 }
 
+/** Лист списка с курсором (menu-api/lib/paging.js): ?limit=N&before=<nextCursor> */
+export interface Paged<T> {
+  items: T[];
+  hasMore: boolean;
+  nextCursor: string | null;
+  total: number | null;
+}
+
 export interface Feedback {
   id: string;
   rating: number;

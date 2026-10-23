@@ -182,7 +182,7 @@ function touch(file) {
   utimes(file, now, now).catch(() => {});
 }
 
-export async function pruneImageCache(maxAgeDays = 45) {
+export async function pruneImageCache(maxAgeDays = 30) {
   let removed = 0;
   const limit = Date.now() - maxAgeDays * 86_400_000;
   for (const name of await readdir(CACHE_DIR).catch(() => [])) {
@@ -191,6 +191,31 @@ export async function pruneImageCache(maxAgeDays = 45) {
     if (st && st.mtimeMs < limit) { await unlink(f).catch(() => {}); removed += 1; }
   }
   if (removed) console.log(`Кэш картинок: удалено ${removed} старых файлов`);
+  return removed;
+}
+
+const CACHE_MAX_BYTES = parseInt(process.env.IMG_CACHE_MAX_MB || '2048', 10) * 1024 * 1024;
+
+/** Раз в сутки: убрать файлы старше 30 дней, а если кэш всё равно больше лимита (2 ГБ) — самые давние, пока не влезет в 80%. */
+export async function cleanImageCache({ maxAgeDays = 30, maxBytes = CACHE_MAX_BYTES } = {}) {
+  let removed = await pruneImageCache(maxAgeDays);
+  const files = [];
+  let total = 0;
+  for (const name of await readdir(CACHE_DIR).catch(() => [])) {
+    const f = join(CACHE_DIR, name);
+    const st = await stat(f).catch(() => null);
+    if (st?.isFile()) { files.push({ f, size: st.size, at: st.mtimeMs }); total += st.size; }
+  }
+  if (total > maxBytes) {
+    files.sort((x, y) => x.at - y.at);
+    for (const file of files) {
+      if (total <= maxBytes * 0.8) break;
+      await unlink(file.f).catch(() => {});
+      total -= file.size;
+      removed += 1;
+    }
+    console.log(`Кэш картинок: превышен лимит ${Math.round(maxBytes / 1048576)} МБ, удалены самые давние файлы (всего удалено ${removed})`);
+  }
   return removed;
 }
 

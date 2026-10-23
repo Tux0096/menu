@@ -1,7 +1,8 @@
 /** Публичное API: рестораны, меню, конфиг гостевого меню, QR, картинки, проверка здоровья. */
 import { createHash } from 'crypto';
 import express from 'express';
-import { h } from '../lib/http.js';
+import { h, rateLimit, safeEqual } from '../lib/http.js';
+import { captureError } from '../lib/monitor.js';
 import pool from '../db/pool.js';
 import { isIikoDemo, accessibleOrgIds } from '../iiko-client.js';
 import { imageHandler } from '../services/images.js';
@@ -20,13 +21,39 @@ export default router;
 // Картинки меню: уменьшенные WebP из кэша (оригиналы iiko — мегабайты)
 router.get('/img', (req, res, next) => imageHandler(req, res).catch(next));
 
-router.get('/health', h(async () => ({
-  ok: true,
-  db: (await pool.query('SELECT 1 AS ok')).rows[0].ok === 1,
-  iiko: isIikoDemo() ? 'demo' : 'live',
-  llm: isLlmEnabled() ? 'openrouter' : 'off',
-  ollama: process.env.OLLAMA_ENABLED === 'true' ? await checkOllamaHealth() : 'off',
-})));
+// Публично — только «жив» и «база отвечает»; режимы iiko/LLM и модели Ollama — для localhost (проверка при деплое)
+// и по токену HEALTH_TOKEN в заголовке X-Health-Token. «Свой» запрос — напрямую на сокет, без X-Forwarded-For от nginx.
+const isLocalRequest = (req) => /^(::1|127\.0\.0\.1|::ffff:127\.0\.0\.1)$/.test(req.socket.remoteAddress || '') && !req.get('x-forwarded-for');
+router.get('/health', h(async (req) => {
+  const out = { ok: true, db: (await pool.query('SELECT 1 AS ok')).rows[0].ok === 1 };
+  const token = process.env.HEALTH_TOKEN;
+  if (isLocalRequest(req) || (token && safeEqual(req.get('x-health-token'), token))) {
+    out.iiko = isIikoDemo() ? 'demo' : 'live';
+    out.llm = isLlmEnabled() ? 'openrouter' : 'off';
+    out.ollama = process.env.OLLAMA_ENABLED === 'true' ? await checkOllamaHealth() : 'off';
+  }
+  return out;
+}));
+
+// Ошибки из браузеров (гость, терминал персонала, админка): только в журнал и Sentry, без персональных данных.
+// Не больше 10 в минуту с адреса и 4 КБ на запись.
+const clientErrorLimit = rateLimit({ windowMs: 60_000, max: 10, message: 'Слишком много сообщений об ошибках' });
+const scrubText = (v, n) => String(v ?? '')
+  .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g, '<email>')
+  .replace(/\+?\d[\d\s().-]{8,}\d/g, '<num>')
+  .replace(/[?#][^\s:"')]*/g, '') // query и hash в ссылках (токены, номера столов)
+  .slice(0, n);
+router.post('/api/v1/client-errors', clientErrorLimit, (req, res) => {
+  res.status(204).end();
+  try {
+    if (Number(req.get('content-length') || 0) > 4096 || JSON.stringify(req.body || {}).length > 4096) return;
+    const b = req.body || {};
+    const app = ['guest', 'staff', 'admin'].includes(b.app) ? b.app : 'unknown';
+    const rec = { app, message: scrubText(b.message, 300), source: scrubText(b.source, 200), line: Number(b.line) || 0, col: Number(b.col) || 0, stack: scrubText(b.stack, 1500) };
+    console.warn('client-error', JSON.stringify(rec));
+    captureError(new Error(`[${app}] ${rec.message}`), rec);
+  } catch { /* мониторинг не должен падать сам */ }
+});
 
 router.get('/api/v1/restaurants', h(async () => {
   const { rows } = await pool.query(

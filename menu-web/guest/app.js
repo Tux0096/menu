@@ -1,4 +1,17 @@
 /* Фуджи QR-меню: гость за столом. Без сборки, без зависимостей. */
+/* Ошибки браузера → POST /api/v1/client-errors (в журнал сервера; без ПДн, не больше 5 за сеанс) */
+(() => {
+  let sent = 0;
+  const send = (message, source, line, col, stack) => {
+    if (sent++ >= 5) return;
+    try {
+      fetch('/api/v1/client-errors', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ app: 'guest', message: String(message || '').slice(0, 300), source: String(source || '').slice(0, 200), line, col, stack: String(stack || '').slice(0, 1200) }) }).catch(() => {});
+    } catch { /* мониторинг не должен ломать страницу */ }
+  };
+  window.addEventListener('error', (e) => send(e.message, e.filename, e.lineno, e.colno, e.error && e.error.stack));
+  window.addEventListener('unhandledrejection', (e) => send(e.reason && e.reason.message || e.reason, '', 0, 0, e.reason && e.reason.stack));
+})();
 (() => {
   'use strict';
 

@@ -1,5 +1,6 @@
 import { pushToRestaurant } from './push.js';
 import { uuidOrNull } from '../lib/uuid.js';
+import { finishPage, parsePage } from '../lib/paging.js';
 import pool from '../db/pool.js';
 import { NOTIFY_TYPES } from '../lib/table-workflow-config.js';
 import { FEED_FOR_ALL_TYPES, pushAudience, SEES_ALL_ROLES } from '../lib/notification-rules.js';
@@ -85,24 +86,30 @@ function readyOrReorderBody(type, table, lines) {
  * Управляющий и администратор видят всё.
  * is_read — прочитано им самим или закрыто для всех (стол взят в работу, оплачен, закрыт).
  */
-export async function listWaiterNotifications(restaurantId, { unreadOnly = false, limit = 50, staff = null } = {}) {
+export async function listWaiterNotifications(restaurantId, { unreadOnly = false, limit = 50, staff = null, query = {} } = {}) {
   const staffId = staff?.id || null;
   const seesAll = !staff || SEES_ALL_ROLES.has(staff.role);
+  // Без limit/before — прежний ответ (массив, 50 свежих); с ними — { items, hasMore, nextCursor }
+  const page = parsePage(query, { def: limit, max: 100 });
+  const { cursor } = page;
+  const params = [restaurantId, page.limit + 1, staffId, cursor?.at ?? null, cursor ? String(cursor.id) : null];
+  if (!seesAll) params.push([...FEED_FOR_ALL_TYPES]);
   const { rows } = await pool.query(
-    `SELECT n.*, (n.is_read OR r.staff_id IS NOT NULL) AS is_read,
+    `SELECT n.*, n.created_at::text AS cursor_at, (n.is_read OR r.staff_id IS NOT NULL) AS is_read,
             s.waiter_id AS table_waiter_id, w.name AS table_waiter_name
      FROM waiter_notifications n
      LEFT JOIN waiter_notification_reads r ON r.notification_id = n.id AND r.staff_id = $3
      LEFT JOIN table_sessions s ON s.id = n.session_id
      LEFT JOIN staff_users w ON w.id = s.waiter_id
      WHERE n.restaurant_id = $1
+       AND ($4::timestamptz IS NULL OR (n.created_at, n.id::text) < ($4::timestamptz, $5::text))
        ${unreadOnly ? 'AND n.is_read = FALSE AND r.staff_id IS NULL' : ''}
-       ${seesAll ? '' : 'AND (n.type = ANY($4::text[]) OR s.waiter_id IS NULL OR s.waiter_id = $3)'}
-     ORDER BY n.created_at DESC
+       ${seesAll ? '' : 'AND (n.type = ANY($6::text[]) OR s.waiter_id IS NULL OR s.waiter_id = $3)'}
+     ORDER BY n.created_at DESC, n.id::text DESC
      LIMIT $2`,
-    seesAll ? [restaurantId, limit, staffId] : [restaurantId, limit, staffId, [...FEED_FOR_ALL_TYPES]],
+    params,
   );
-  return rows;
+  return finishPage(rows, page);
 }
 
 /** Отметить уведомление прочитанным — у себя, только уведомление своего ресторана */

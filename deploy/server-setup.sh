@@ -10,8 +10,9 @@ echo "=== 1. System packages ==="
 sudo apt-get update -qq
 sudo apt-get install -y -qq git curl nginx
 
-if ! command -v node >/dev/null 2>&1; then
-  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+# menu-api требует Node 22 (engines в package.json)
+if ! command -v node >/dev/null 2>&1 || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 22 ]; then
+  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
   sudo apt-get install -y nodejs
 fi
 
@@ -26,6 +27,7 @@ if ! sudo docker ps -a --format '{{.Names}}' | grep -q '^menu-postgres$'; then
     -e POSTGRES_PASSWORD=postgres \
     -e POSTGRES_USER=postgres \
     -e POSTGRES_DB=menu_db \
+    -v menu-pgdata:/var/lib/postgresql/data \
     -p 127.0.0.1:5432:5432 \
     postgres:17-alpine
   sleep 5
@@ -58,9 +60,13 @@ node db/sync-iiko.js 2>/dev/null || echo "iiko sync skipped (check IIKO_API_LOGI
 echo "=== 6. Фронт ==="
 # Гостевое меню и терминал персонала (menu-web) раздаёт сам menu-api — сборка не нужна.
 
-echo "=== 7. systemd menu-api ==="
+echo "=== 7. systemd menu-api + ежедневная резервная копия ==="
+sudo mkdir -p /var/backups/menu && sudo chown ubuntu:ubuntu /var/backups/menu && sudo chmod 700 /var/backups/menu
 sudo cp "$REPO_DIR/deploy/systemd/menu-api.service" /etc/systemd/system/menu-api.service
+sudo cp "$REPO_DIR/deploy/systemd/menu-backup.service" /etc/systemd/system/menu-backup.service
+sudo cp "$REPO_DIR/deploy/systemd/menu-backup.timer" /etc/systemd/system/menu-backup.timer
 sudo systemctl daemon-reload
+sudo systemctl enable --now menu-backup.timer
 sudo systemctl enable menu-api
 sudo systemctl restart menu-api
 

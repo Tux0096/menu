@@ -282,12 +282,12 @@ admin.put('/fuji-team', h(async (req) => {
 // Гость и официант видят их в карточках позиций и над заказом; сервер отклоняет заказ алкоголя вне правил
 admin.get('/alcohol', h(async (req) => {
   const r = await staffRestaurant(req);
-  const rules = normalizeAlcoRules(r.alcohol_rules);
+  const rules = normalizeAlcoRules(r.alcohol_rules, r.timezone);
   return { ...rules, preview: alcoPublic(rules) };
 }));
 admin.post('/alcohol', h(async (req) => {
   const r = await staffRestaurant(req);
-  const rules = validateAlcoRules(req.body);
+  const rules = validateAlcoRules(req.body, r.timezone);
   // Каталог гостя пересоберётся сам: любая успешная правка админки сбрасывает его версию
   await pool.query('UPDATE restaurants SET alcohol_rules = $2 WHERE id = $1', [r.id, JSON.stringify(rules)]);
   audit(req.staff, 'restaurant.alcohol', 'restaurant', r.slug, {
@@ -437,8 +437,8 @@ for (const [path, table] of [['chips', 'ai_chips'], ['promos', 'promo_blocks']])
     audit(req.staff, `${path}.delete`, table, req.params.id);
   }));
 }
-admin.get('/feedback', h(async (req) => listFeedback((await staffRestaurant(req)).id)));
-admin.get('/audit', h(async (req) => listAudit(200, req.staff.restaurantId || null)));
+admin.get('/feedback', h(async (req) => listFeedback((await staffRestaurant(req)).id, req.query)));
+admin.get('/audit', h(async (req) => listAudit(req.query, req.staff.restaurantId || null)));
 // Вход официантов и управляющих зала через iiko включён — тогда в «Сотрудниках» только учётки админки
 admin.get('/staff/mode', h(async () => ({ iikoLogin: iikoStaffLoginEnabled() || fujiTeamEnabled(), source: fujiTeamEnabled() ? 'team' : 'iiko' })));
 admin.get('/staff', h(async (req) => listStaff(req.staff)));
