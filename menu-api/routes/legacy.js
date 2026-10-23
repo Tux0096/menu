@@ -146,7 +146,7 @@ app.get('/api/v1/setting', async (req, res) => {
     }
   } catch (err) {
     console.error('settings error:', err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 app.get('/api/v1/setting/version', (req, res) => res.json(1));
@@ -172,7 +172,7 @@ app.get('/api/v1/city', async (req, res) => {
     );
     res.json(rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 app.get('/api/v1/city/', async (req, res) => {
@@ -182,7 +182,7 @@ app.get('/api/v1/city/', async (req, res) => {
     );
     res.json(rows);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 

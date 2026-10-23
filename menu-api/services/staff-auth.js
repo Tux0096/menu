@@ -28,12 +28,27 @@ function issueToken(staff) {
   return signToken({ sid: staff.id, role: staff.role, name: staff.name, rid: staff.restaurantId });
 }
 
-// Защита PIN от перебора: неудачные попытки считаются и с одного адреса, и по ресторану целиком
-// (адрес можно менять, ресторан — нет): 5 в минуту с адреса, 20 за 10 минут на ресторан.
+// Защита PIN от перебора. Ключ — адрес клиента (X-Device-Id подставляет сам клиент, на него не опираемся):
+//  • с одного адреса в одном ресторане — 5 неудач в минуту (жёстко);
+//  • с одного адреса вообще — 30 неудач за 15 минут (жёстко);
+//  • по ресторану целиком — мягко: чем больше неудач за 10 минут, тем дольше задержка ответа (до 15 с), но вход не блокируется,
+//    иначе перебор с чужого адреса отключил бы PIN-вход всему залу.
 const pinByClient = createLimiter({ windowMs: 60_000, max: 5, message: 'Слишком много попыток — подождите минуту' });
-const pinByRestaurant = createLimiter({
-  windowMs: 10 * 60_000, max: 30, message: 'Слишком много неверных PIN в этом ресторане — вход по PIN приостановлен на 10 минут',
-});
+const pinByIp = createLimiter({ windowMs: 15 * 60_000, max: 30, message: 'Слишком много неверных PIN с этого адреса — подождите 15 минут' });
+const PIN_SOFT_FREE = 10; // неудач по ресторану за окно без задержки
+const PIN_WINDOW_MS = 10 * 60_000;
+const PIN_MAX_DELAY_MS = 15_000;
+const pinFailsByRestaurant = new Map();
+export function pinDelayMs(failures) {
+  return failures <= PIN_SOFT_FREE ? 0 : Math.min(PIN_MAX_DELAY_MS, 250 * 2 ** (failures - PIN_SOFT_FREE - 1));
+}
+function pinFailures(restaurantId, add = false) {
+  const now = Date.now();
+  const list = (pinFailsByRestaurant.get(restaurantId) || []).filter((t) => now - t < PIN_WINDOW_MS);
+  if (add) list.push(now);
+  if (list.length) pinFailsByRestaurant.set(restaurantId, list); else pinFailsByRestaurant.delete(restaurantId);
+  return list.length;
+}
 // Вход по паролю: 10 неудачных попыток за 15 минут на логин и 30 — с одного адреса
 const loginByName = createLimiter({ windowMs: 15 * 60_000, max: 10, message: 'Слишком много попыток — подождите 15 минут' });
 const loginByClient = createLimiter({ windowMs: 15 * 60_000, max: 30, message: 'Слишком много попыток — подождите 15 минут' });
@@ -44,9 +59,12 @@ const DUMMY_HASH = hashPassword('not-a-real-password');
 export async function pinLogin(restaurantId, pin, clientKey = '') {
   const code = String(pin || '').trim();
   if (!/^\d{4,6}$/.test(code)) throw httpError(400, 'PIN — 4–6 цифр');
-  const clientId = `${clientKey}|${restaurantId}`;
+  const ip = String(clientKey || '').split('|')[0];
+  const clientId = `${ip}|${restaurantId}`;
   pinByClient.assert(clientId);
-  pinByRestaurant.assert(String(restaurantId));
+  pinByIp.assert(ip);
+  const delay = pinDelayMs(pinFailures(String(restaurantId)));
+  if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
   const { rows } = await pool.query(
     // По PIN входят только сотрудники зала: администратор «на всю сеть» по 4 цифрам — слишком лёгкая цель
     `SELECT * FROM staff_users WHERE is_active = TRUE AND pin_hash IS NOT NULL AND role IN ('waiter', 'manager')
@@ -56,7 +74,8 @@ export async function pinLogin(restaurantId, pin, clientKey = '') {
   const user = rows.find((u) => verifyPassword(code, u.pin_hash));
   if (!user) {
     pinByClient.hit(clientId);
-    pinByRestaurant.hit(String(restaurantId));
+    pinByIp.hit(ip);
+    pinFailures(String(restaurantId), true);
     throw httpError(401, 'Неверный PIN');
   }
   const staff = { ...mapStaff(user), restaurantId: user.restaurant_id || restaurantId };

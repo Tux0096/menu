@@ -120,7 +120,7 @@ async function setSigned(on: boolean) {
           <p class="text-xs text-slate-500">
             {{ qr.envForced ? 'Включено в настройках сервера.' : qr.signedRequired
               ? 'Стол открывается только по QR с этой страницы — номер стола в ссылке не подобрать.'
-              : 'Сейчас стол открывается и по ссылке без подписи. Включите, когда новые наклейки будут на столах.' }}
+              : 'Сейчас стол открывается и по ссылке без подписи — номер стола можно подобрать. Печатайте наклейки отсюда (они уже с подписью) и, когда они будут на всех столах, включите этот переключатель.' }}
           </p>
         </div>
       </div>
@@ -130,6 +130,12 @@ async function setSigned(on: boolean) {
     <div v-else-if="!tables" class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
       <USkeleton v-for="i in 10" :key="i" class="h-60 rounded-2xl" />
     </div>
+    <EmptyState
+      v-else-if="!tables.length"
+      icon="i-heroicons-qr-code"
+      title="Столов пока нет"
+      description="Укажите число столов в зале и сохраните — здесь появятся QR-коды для наклеек."
+    />
     <div v-else class="qr-grid grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
       <div v-for="t in tables" :key="t.table" class="qr-card panel-box flex flex-col items-center p-4 text-center">
         <div class="text-xs text-slate-500">{{ restaurants.current?.name }}</div>

@@ -60,8 +60,10 @@ export async function registerDevice(staff, restaurantId, token, platform = '') 
   );
 }
 
-export async function unregisterDevice(token) {
-  await pool.query('DELETE FROM waiter_devices WHERE token = $1', [String(token || '')]);
+/** staffId задан — удаляется только токен этого сотрудника (чужой токен через API не отключить) */
+export async function unregisterDevice(token, staffId = null) {
+  if (staffId) await pool.query('DELETE FROM waiter_devices WHERE token = $1 AND staff_id = $2', [String(token || ''), staffId]);
+  else await pool.query('DELETE FROM waiter_devices WHERE token = $1', [String(token || '')]);
 }
 
 // Звук и важность по типу события: «готово», новый заказ и вызов — громкий канал

@@ -21,15 +21,15 @@ CLOUDKASSIR_API_URL=https://api.cloudkassir.ru
 CLOUDKASSIR_PUBLIC_ID=your_public_id_here
 CLOUDKASSIR_API_SECRET=your_api_secret_here
 
-# Данные организации (уже настроены по умолчанию)
-CLOUDKASSIR_INN=631304455014
-CLOUDKASSIR_CASH_REGISTER_NUMBER=1992320030114065
-CLOUDKASSIR_FISCAL_NUMBER=7384440900696733
-CLOUDKASSIR_REGISTRATION_NUMBER=0009290172048275
+# Данные организации (значений по умолчанию в коде нет — задаются только в .env)
+CLOUDKASSIR_INN=your_inn_here
+CLOUDKASSIR_CASH_REGISTER_NUMBER=your_cash_register_number
+CLOUDKASSIR_FISCAL_NUMBER=your_fiscal_number
+CLOUDKASSIR_REGISTRATION_NUMBER=your_registration_number
 CLOUDKASSIR_OFD=taxcom
 CLOUDKASSIR_TAX_SYSTEM=1
-CLOUDKASSIR_EMAIL=buh-st-zagora@mail.ru
-CLOUDKASSIR_PHONE=+79879825326
+CLOUDKASSIR_EMAIL=buh@example.ru
+CLOUDKASSIR_PHONE=+7XXXXXXXXXX
 CLOUDKASSIR_BSO=false
 ```
 
@@ -39,16 +39,16 @@ CLOUDKASSIR_BSO=false
 2. **API Secret** - получить в личном кабинете CloudKassir (используется как пароль для Basic Auth)
 3. **ИНН** - ИНН вашей организации (10 или 12 цифр)
 
-### Данные организации (уже настроены)
+### Данные организации
 
-- **ИНН**: 631304455014
-- **Заводской номер кассы**: 1992320030114065
-- **Номер ФН**: 7384440900696733
-- **Регистрационный номер кассы**: 0009290172048275
+- **ИНН**: your_inn_here
+- **Заводской номер кассы**: your_cash_register_number
+- **Номер ФН**: your_fiscal_number
+- **Регистрационный номер кассы**: your_registration_number
 - **ОФД**: Такском (taxcom)
 - **Система налогообложения**: ОСНО (1)
-- **Email**: buh-st-zagora@mail.ru
-- **Телефон**: +79879825326
+- **Email**: buh@example.ru
+- **Телефон**: +7XXXXXXXXXX
 - **БСО**: false
 
 ## API эндпоинты

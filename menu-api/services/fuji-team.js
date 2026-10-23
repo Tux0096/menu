@@ -11,7 +11,7 @@
  *       position   — должность: официант → waiter, администратор/менеджер → manager (lib/iiko-roles.js)
  *       restaurant — точка (название или slug; пусто — сотрудник выбирает точку при входе)
  *       active     — работает ли (false — уволен; колонки нет — считаем, что работает)
- *   FUJI_TEAM_SSL=true — подключение по SSL (без проверки сертификата)
+ *   FUJI_TEAM_SSL=true — подключение по SSL с проверкой сертификата; FUJI_TEAM_SSL=insecure — по SSL без проверки (самоподписанный)
  */
 import pg from 'pg';
 import { randomUUID } from 'crypto';
@@ -39,6 +39,28 @@ export async function loadTeamSettings() {
 export const teamQuery = () => savedQuery || String(process.env.FUJI_TEAM_STAFF_QUERY || '').trim() || '';
 export const fujiTeamEnabled = () => Boolean(teamDatabaseUrl() && teamQuery());
 
+export function teamSsl(value = process.env.FUJI_TEAM_SSL) {
+  const v = String(value || '').trim().toLowerCase();
+  if (v === 'true') return { rejectUnauthorized: true };
+  if (v === 'insecure') return { rejectUnauthorized: false };
+  return undefined;
+}
+
+/** Фамилия И. — полное ФИО из базы сотрудников в админке не показываем */
+export function maskName(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '';
+  return parts.length === 1 ? parts[0] : `${parts[0]} ${parts[1][0].toUpperCase()}.`;
+}
+
+/** Причина сбоя подключения без текста ошибки базы (в нём бывают хосты и логины) */
+export function teamErrorKind(e) {
+  const m = `${e?.code || ''} ${e?.message || ''}`.toLowerCase();
+  if (e?.code === '28P01' || e?.code === '28000' || /password|authentication/.test(m)) return 'неверный пароль';
+  if (/ssl|tls|certificate|self[- ]signed|cert_|unable to verify/.test(m)) return 'ошибка SSL';
+  return 'нет связи';
+}
+
 let teamDb = null;
 function db() {
   if (!teamDatabaseUrl()) throw httpError(503, 'База «Фуджи Тим» не подключена: нет FUJI_TEAM_DATABASE_URL на сервере');
@@ -48,7 +70,7 @@ function db() {
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 5_000,
     statement_timeout: 10_000,
-    ssl: process.env.FUJI_TEAM_SSL === 'true' ? { rejectUnauthorized: false } : undefined,
+    ssl: teamSsl(),
   });
   teamDb.on('error', (e) => console.warn('«Фуджи Тим»: соединение —', e.message));
   return teamDb;
@@ -139,7 +161,7 @@ export async function testStaffQuery(sql) {
     points: [...points.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count),
     sample: active.slice(0, 5).map((r) => ({
       code: r.code.length > 2 ? `${r.code.slice(0, -2).replace(/./g, '•')}${r.code.slice(-2)}` : '••',
-      name: r.name, position: r.position, restaurant: r.restaurant,
+      name: maskName(r.name), position: r.position, restaurant: r.restaurant,
     })),
   };
 }
@@ -161,7 +183,7 @@ export async function teamStatus() {
   const url = teamDatabaseUrl();
   let connected = false; let error = null;
   if (url) {
-    try { await db().query('SELECT 1'); connected = true; } catch (e) { error = e.message; }
+    try { await db().query('SELECT 1'); connected = true; } catch (e) { error = teamErrorKind(e); console.warn('«Фуджи Тим»: проверка подключения —', e.message); }
   }
   let host = '';
   try { host = url ? new URL(url).host : ''; } catch { /* неверная строка подключения */ }

@@ -1,3 +1,12 @@
+/* Inter — свои файлы (латиница и кириллица), без Google Fonts */
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 400; font-display: swap; src: url('/staff/fonts/inter-cyrillic-400.woff2') format('woff2'); unicode-range: U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 400; font-display: swap; src: url('/staff/fonts/inter-latin-400.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 500; font-display: swap; src: url('/staff/fonts/inter-cyrillic-500.woff2') format('woff2'); unicode-range: U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 500; font-display: swap; src: url('/staff/fonts/inter-latin-500.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 600; font-display: swap; src: url('/staff/fonts/inter-cyrillic-600.woff2') format('woff2'); unicode-range: U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 600; font-display: swap; src: url('/staff/fonts/inter-latin-600.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 700; font-display: swap; src: url('/staff/fonts/inter-cyrillic-700.woff2') format('woff2'); unicode-range: U+0301,U+0400-045F,U+0490-0491,U+04B0-04B1,U+2116; }
+@font-face { font-family: 'Inter'; font-style: normal; font-weight: 700; font-display: swap; src: url('/staff/fonts/inter-latin-700.woff2') format('woff2'); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 :root {
   --bg: #F5F4F9; --card: #fff; --ink: #091027; --muted: #7E7F83; --line: #ECEBF2;
   --ok: #1E9E6A; --warn: #E08A00; --danger: #D8374B; --violet: #5A52D5;
@@ -96,6 +105,15 @@ input.inp:focus, textarea.inp:focus, select.sel:focus { box-shadow: 0 0 0 2px va
   .row__opts .sel { flex: 1; }
 }
 .error-box { background: #FDECEE; color: var(--danger); border-radius: 14px; padding: 12px 14px; margin-bottom: 12px; font-size: 14px; }
+.error-box--retry { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 16px; }
+.error-box__title { font-weight: 600; font-size: 16px; }
+.error-box__text { color: var(--ink); opacity: .75; margin-bottom: 8px; }
+.skel { display: flex; flex-direction: column; gap: 12px; }
+.skel__row { height: 76px; border-radius: var(--r); background: linear-gradient(90deg, #ECEBF2 25%, #F6F5FA 50%, #ECEBF2 75%); background-size: 200% 100%; animation: skel 1.2s linear infinite; }
+.skel__row--short { height: 44px; width: 60%; }
+@keyframes skel { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .skel__row { animation: none; } }
+.net-banner { position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 60; background: var(--ink); color: #fff; border-radius: 14px; padding: 10px 14px; font-size: 13px; text-align: center; box-shadow: 0 6px 20px rgba(0,0,0,.2); }
 .note-box { background: #EEEDFF; color: var(--violet); border-radius: 14px; padding: 10px 14px; margin-bottom: 12px; font-size: 13px; }
 .note-box--warn { background: #FFF4E0; color: #A35F00; }
 .search-results { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; max-height: 280px; overflow-y: auto; }
