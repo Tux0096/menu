@@ -864,4 +864,94 @@ ok(await api('POST', `/api/v1/waiter/session/${s.sessionId}/close`, { force: tru
 r = await api('POST', '/api/v1/table-order/cart', { sessionId: s.sessionId, items: [line(p1, 4)] }, G);
 assert.equal(r.status, 409); step('стол закрыт — гость не может дозаказать в закрытый визит (409)');
 
+// 17. Персональные данные (152-ФЗ): согласие, санитизация, выгрузка, удаление
+{
+  const NUL = String.fromCharCode(0);
+  const tail4 = String(Math.floor(Math.random() * 9000) + 1000);
+  const PH = `8 (900) 177-${tail4.slice(0, 2)}-${tail4.slice(2)}`; // новый номер на каждый прогон: имя уже вошедшего гостя вход не меняет
+  for (const bad of [undefined, false, 'true', 1]) {
+    r = await api('POST', '/api/v1/guest/login', { phone: PH, name: 'Без согласия', consent: bad });
+    assert.equal(r.status, 400, `consent=${String(bad)} → 400`);
+  }
+  r = await api('POST', '/api/v1/guest/fuji', { token: 'x.y.z' });
+  assert.equal(r.status, 400); // сначала согласие, потом проверка токена
+  step('вход без consent === true → 400 (login и fuji)');
+
+  r = await api('POST', '/api/v1/guest/login', { phone: PH, name: { a: 1 }, consent: true });
+  assert.equal(r.status, 400); step('имя не строкой → 400');
+  const pl = ok(await api('POST', '/api/v1/guest/login', { phone: PH, name: `При${NUL}ват\u0007ность`, consent: true }), 'login privacy');
+  assert.equal(pl.guest.name, 'Приватность'); step('NUL и управляющие символы в имени вырезаны (не 500)');
+  const PG = { 'X-Guest-Token': pl.token };
+  assert.equal(pl.guest.aiConsent, false); step('согласие на ИИ по умолчанию выключено');
+
+  const PT = `${TABLE}p`;
+  let ps = ok(await api('POST', '/api/v1/table/enter', { restaurantSlug: 'novo-sadovaya', tableNumber: PT, name: `Имя${NUL}😀`.repeat(30) }, PG), 'enter privacy');
+  assert.ok(ps.guest.name.length <= 100 * 2 && !ps.guest.name.includes(NUL));
+  assert.equal(Array.from(ps.guest.name).length, 100); step('имя при входе за стол: NUL убран, обрезка по кодовым точкам (100)');
+  r = await api('POST', '/api/v1/table/enter', { restaurantSlug: 'novo-sadovaya', tableNumber: `1${NUL}2` }, PG);
+  assert.ok(r.status < 500, `NUL в номере стола: ${r.status}`);
+  r = await api('POST', '/api/v1/table/call-waiter', { sessionId: ps.sessionId, reason: 'general', comment: `Нужен${NUL} соус` }, PG);
+  assert.equal(r.status, 200);
+  r = await api('POST', '/api/v1/table/call-waiter', { sessionId: ps.sessionId, reason: 'question', comment: { x: 1 } }, PG);
+  assert.equal(r.status, 400); step('комментарий вызова: NUL вырезан, не строка → 400');
+  r = await api('PATCH', '/api/v1/guest/me', { allergens: 'орехи' }, PG);
+  assert.equal(r.status, 400);
+  r = await api('POST', '/api/v1/ai/suggest', { restaurantSlug: 'novo-sadovaya', query: `остр${NUL}ое` }, PG);
+  assert.equal(r.status, 200); step('аллергены не списком → 400; NUL в запросе к ИИ → не 500');
+
+  ok(await api('PATCH', '/api/v1/guest/me', { aiConsent: true, allergens: ['орехи'] }, PG), 'ai consent on');
+  const me2 = ok(await api('GET', '/api/v1/guest/me', null, PG), 'me');
+  assert.equal(me2.aiConsent, true); assert.deepEqual(me2.allergens, ['орехи']);
+  ok(await api('PATCH', '/api/v1/guest/me', { aiConsent: false }, PG), 'ai consent off');
+  step('переключатель согласия на ИИ в профиле');
+
+  // Заказ → в работу → отзыв: попадёт в выгрузку
+  ps = ok(await api('POST', '/api/v1/table-order/cart', { sessionId: ps.sessionId, items: [line(p1, 2)] }, PG), 'cart privacy');
+  ok(await api('POST', '/api/v1/table/submit-to-waiter', { sessionId: ps.sessionId, items: [line(p1, 2)] }, PG), 'submit privacy');
+  ok(await api('POST', `/api/v1/waiter/session/${ps.sessionId}/assign`, {}, W), 'assign privacy');
+  ok(await api('POST', `/api/v1/waiter/session/${ps.sessionId}/send-to-production`, {}, W), 'send privacy');
+  ok(await api('POST', '/api/v1/table/feedback', { sessionId: ps.sessionId, rating: 4, comment: `Вкусно${NUL}!` }, PG), 'feedback privacy');
+
+  r = await api('GET', '/api/v1/guest/me/export');
+  assert.equal(r.status, 401); step('выгрузка без входа → 401');
+  const ex = ok(await api('GET', '/api/v1/guest/me/export', null, PG), 'export');
+  assert.equal(ex.profile.name, ps.guest.name); assert.deepEqual(ex.profile.allergens, ['орехи']);
+  assert.equal(ex.consents.personalData.policyVersion, '2026-10-23'); assert.ok(ex.consents.personalData.givenAt);
+  const visit = ex.visits.find((v) => v.id === ps.sessionId);
+  assert.ok(visit, 'визит в выгрузке');
+  assert.equal(visit.orders.length, 1); assert.equal(visit.orders[0].quantity, 2); assert.ok(visit.orders[0].sum > 0);
+  assert.equal(visit.feedback[0].comment, 'Вкусно!'); assert.equal(visit.feedback[0].rating, 4);
+  assert.ok(!JSON.stringify(ex).includes(pl.token), 'токен не попадает в выгрузку');
+  step(`выгрузка: профиль, согласие (consent_at + версия), визит с заказом (${visit.orders[0].sum} ₽), отзыв`);
+
+  // Имя в терминале официанта до удаления
+  let list = ok(await api('GET', '/api/v1/waiter/sessions?restaurant=novo-sadovaya', null, W), 'sessions before');
+  const before = JSON.stringify(list.find((x) => x.sessionId === ps.sessionId) || {});
+  assert.ok(before.includes('Имя'), 'до удаления имя гостя видно');
+
+  r = await api('DELETE', '/api/v1/guest/me');
+  assert.equal(r.status, 401);
+  ok(await api('DELETE', '/api/v1/guest/me', null, PG), 'erase');
+  r = await api('GET', '/api/v1/guest/me', null, PG);
+  assert.equal(r.status, 401); step('удаление: токен недействителен (401)');
+  r = await api('GET', '/api/v1/guest/me/export', null, PG);
+  assert.equal(r.status, 401);
+  list = ok(await api('GET', '/api/v1/waiter/sessions?restaurant=novo-sadovaya', null, W), 'sessions after');
+  const after = JSON.stringify(list.find((x) => x.sessionId === ps.sessionId) || {});
+  assert.ok(after.length > 2 && !after.includes('Имя') && !after.includes('Приватность') && !after.includes(`177-${tail4.slice(0, 2)}-${tail4.slice(2)}`), 'в визите нет имени и телефона');
+  step('удаление: имя гостя в визите стёрто, заказ остался');
+  // Повторный вход по тому же номеру — новый пустой профиль
+  const again = ok(await api('POST', '/api/v1/guest/login', { phone: PH, consent: true }), 'login again');
+  assert.equal(again.guest.name, null); assert.equal(again.guest.visitsCount, 0);
+  ok(await api('DELETE', '/api/v1/guest/me', null, { 'X-Guest-Token': again.token }), 'erase again');
+  await api('POST', `/api/v1/waiter/session/${ps.sessionId}/close`, { force: true }, W);
+  step('повторный вход — чистый профиль; страницы политики и условий открываются');
+  for (const path of ['/privacy', '/terms']) {
+    const res = await fetch(`${BASE}${path}`);
+    const html = await res.text();
+    assert.equal(res.status, 200); assert.match(res.headers.get('content-type') || '', /text\/html/);
+    assert.ok(html.includes('2026-10-23') && !html.includes('id="app"'), `${path}: статическая страница, не SPA`);
+  }
+}
+
 console.log('\nВсе проверки пройдены');

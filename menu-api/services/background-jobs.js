@@ -10,6 +10,7 @@ import { importOpenOrders } from './iiko-import.js';
 import { syncReserves, tickReserves } from './iiko-reserves.js';
 import { cleanupGuestPush, initGuestPush } from './guest-push.js';
 import { loadTeamSettings } from './fuji-team.js';
+import { runPrivacyCleanup } from './guest-privacy.js';
 import { refreshKitchenStatuses, runServiceChecks } from './table-session.js';
 
 // ── Меню и стоп-листы iiko ──────────────────────────────────────────────────
@@ -115,6 +116,12 @@ export function startBackgroundJobs() {
   loadTeamSettings(); // запрос сотрудников «Фуджи Тим» из админки
   setInterval(cleanupExpired, 6 * 60 * 60 * 1000);
   setTimeout(cleanupExpired, 60_000).unref?.();
+  // Сроки хранения персональных данных (политика, п. «Сроки хранения»): раз в сутки
+  const privacyTick = () => runPrivacyCleanup().then((r) => {
+    if (r.aiQueries || r.guests || r.reservations) console.log(`уборка ПДн: запросов ИИ — ${r.aiQueries}, гостей — ${r.guests}, броней — ${r.reservations}`);
+  }).catch((e) => console.warn('уборка ПДн:', e.message));
+  setInterval(privacyTick, 24 * 60 * 60 * 1000);
+  setTimeout(privacyTick, 5 * 60_000).unref?.();
 }
 
 /** Просроченные входы гостей не нужны: токен с истёкшим сроком всё равно не принимается */

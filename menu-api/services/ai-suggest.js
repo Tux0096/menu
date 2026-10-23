@@ -127,10 +127,11 @@ export async function suggestForQuery(restaurant, query, limit = 6, guest = null
 
   if (useLlm && isLlmEnabled()) {
     const available = await getAvailableProducts(restaurant);
-    const favNames = available.filter((p) => favorites.has(String(p.iikoId || p.id))).map((p) => p.name).slice(0, 8);
+    // История заказов — личные данные: в модель только с согласия гостя на ИИ (см. llmSuggest)
+    const favNames = guest?.aiConsent ? available.filter((p) => favorites.has(String(p.iikoId || p.id))).map((p) => p.name).slice(0, 8) : [];
     const llm = await llmSuggest(query, available, {
       limit: Math.min(limit, 5),
-      guest: { ...guest, favorites: favNames, cart: cartNames.slice(0, 20) },
+      guest: { name: guest?.name, allergens: guest?.allergens, aiConsent: guest?.aiConsent === true, favorites: favNames, cart: cartNames.slice(0, 20) },
     });
     if (llm) {
       const allowed = new Set(excludeAllergens(llm.picks.map((x) => x.product), guest?.allergens).map((p) => p.id));

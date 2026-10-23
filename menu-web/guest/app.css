@@ -264,9 +264,13 @@ html { scroll-behavior: smooth; }
 .input:focus { border-color: var(--purple); }
 .input::placeholder { color: var(--muted-2); }
 .field__note { font-size: 14px; line-height: 18px; margin: -4px 0 12px; }
+.field__note a { color: var(--purple); }
 .pill-input { display: flex; align-items: center; gap: 8px; width: 100%; background: #fff; border: 1px solid var(--line); border-radius: 16px; padding: 4px 12px; min-height: 52px; }
 .pill-input input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; font-size: 16px; }
-.consent { display: flex; align-items: center; gap: 8px; margin: 4px 0 0 8px; font-size: 12px; cursor: pointer; }
+.consent { display: flex; align-items: flex-start; gap: 8px; margin: 4px 0 8px 8px; font-size: 12px; line-height: 16px; cursor: pointer; }
+.consent a { color: var(--purple); text-decoration: underline; }
+.consent input:focus-visible + .consent__box { outline: 2px solid var(--purple); outline-offset: 2px; }
+.btn--danger { color: var(--danger); border-color: var(--danger); }
 .consent input { position: absolute; opacity: 0; }
 .consent__box { width: 20px; height: 20px; border-radius: 6px; border: 1px solid var(--ink); display: grid; place-items: center; flex-shrink: 0; }
 .consent__box svg { width: 11px; height: 11px; opacity: 0; }

@@ -620,6 +620,16 @@ const SCHEMA = `
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
   CREATE INDEX IF NOT EXISTS idx_guest_push_session ON guest_push_subscriptions(session_id);
+
+  -- Персональные данные (152-ФЗ): согласие на обработку (когда и на какую версию политики) и отдельное согласие
+  -- на передачу имени/аллергенов ИИ-помощнику (OpenRouter, трансграничная передача); по умолчанию — не дано
+  ALTER TABLE guests
+    ADD COLUMN IF NOT EXISTS consent_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS consent_version VARCHAR(20),
+    ADD COLUMN IF NOT EXISTS ai_consent BOOLEAN NOT NULL DEFAULT FALSE,
+    ADD COLUMN IF NOT EXISTS ai_consent_at TIMESTAMPTZ;
+  -- Чей отзыв (для выгрузки и удаления данных гостя); у старых отзывов NULL — гость определяется по визиту
+  ALTER TABLE visit_feedback ADD COLUMN IF NOT EXISTS guest_id UUID;
 `;
 
 const DEFAULT_CHIPS = [

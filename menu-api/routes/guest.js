@@ -1,9 +1,12 @@
 /** Гость QR-меню: вход, стол, корзина, счёт и оплата, AI-помощник. */
 import express from 'express';
-import { h, rateLimit, requireBody, sendError } from '../lib/http.js';
+import { h, httpError, rateLimit, requireBody, sendError } from '../lib/http.js';
+import { cleanText } from '../lib/sanitize.js';
+import { stripNulMiddleware } from '../lib/sanitize.js';
 import { confirmOnlinePayment, startOnlinePayment } from '../services/payments.js';
 import { getWelcomeSuggestions, suggestForQuery } from '../services/ai-suggest.js';
 import { logAiQuery, recordAiFeedback } from '../services/ai-learning.js';
+import { eraseGuest, exportGuestData } from '../services/guest-privacy.js';
 import {
   getGuestByToken, guestAuth, guestTokenFromRequest, loginByFujiToken, loginByPhone, publicGuest, updateGuestProfile,
 } from '../services/guest-auth.js';
@@ -25,18 +28,17 @@ const aiFeedbackLimit = rateLimit({ windowMs: 60_000, max: 120 });
 
 // ── Гость: вход ─────────────────────────────────────────────────────────────
 
+// NUL в любой строке запроса PostgreSQL не принимает (22021) — убираем до обработчиков
+router.use('/api/v1', stripNulMiddleware);
+
+// Согласие на обработку ПДн обязательно (consent === true), по умолчанию в форме не отмечено
 router.post('/api/v1/guest/login', guestLoginLimit, h(async (req) => {
   requireBody(req.body, 'phone');
-  if (req.body.consent === false) {
-    const err = new Error('Нужно согласие на обработку персональных данных');
-    err.status = 400;
-    throw err;
-  }
   return loginByPhone(req.body);
 }));
 router.post('/api/v1/guest/fuji', guestLoginLimit, h(async (req) => {
   requireBody(req.body, 'token');
-  return loginByFujiToken(req.body.token);
+  return loginByFujiToken(req.body.token, { consent: req.body.consent });
 }));
 router.get('/api/v1/guest/me', h(async (req) => {
   const guest = await getGuestByToken(guestTokenFromRequest(req));
@@ -49,6 +51,17 @@ router.get('/api/v1/guest/me', h(async (req) => {
   return publicGuest(guest);
 }));
 router.patch('/api/v1/guest/me', guestAuth(), h(async (req) => updateGuestProfile(req.guest.id, req.body || {})));
+// Права субъекта ПДн: выгрузка своих данных и удаление аккаунта
+router.get('/api/v1/guest/me/export', guestAuth(), h(async (req, res) => {
+  const data = await exportGuestData(req.guest.id);
+  if (!data) throw httpError(404, 'Гость не найден');
+  res.set({ 'Cache-Control': 'no-store', 'Content-Disposition': 'attachment; filename="fuji-my-data.json"' });
+  return data;
+}));
+router.delete('/api/v1/guest/me', guestAuth(), h(async (req) => {
+  await eraseGuest(req.guest.id, { reason: 'self' });
+  return { ok: true };
+}));
 
 // ── Гость: стол ─────────────────────────────────────────────────────────────
 
@@ -61,7 +74,7 @@ router.post('/api/v1/table/enter', guestAuth(), h(async (req) => {
     previousSessionId: req.body.previousSessionId,
     join: req.body.join === true,
     name: req.body.name,
-    qrKey: req.body.qrKey ? String(req.body.qrKey).slice(0, 64) : null,
+    qrKey: cleanText(req.body.qrKey, 64, { label: 'Подпись QR' }) || null,
   });
 }));
 
@@ -131,7 +144,7 @@ router.post('/api/v1/table/guest-pay', guestAuth(), bySessionBody, h(async (req)
 }));
 router.post('/api/v1/table/feedback', guestAuth(), bySessionBody, h(async (req) => {
   requireBody(req.body, 'sessionId', 'rating');
-  return submitFeedback(req.body.sessionId, req.body);
+  return submitFeedback(req.body.sessionId, { ...req.body, guestId: req.guest?.id || null });
 }));
 
 // ── Web Push гостю ──────────────────────────────────────────────────────────
@@ -151,8 +164,9 @@ router.post('/api/v1/table-order/push-unsubscribe', pushSubscribeLimit, guestAut
 router.post('/api/v1/ai/suggest', aiLimit, guestAuth({ required: false }), h(async (req) => {
   requireBody(req.body, 'query');
   const restaurant = await resolveRestaurant(req.body.restaurantSlug);
-  const query = String(req.body.query).slice(0, 300);
-  const cartNames = Array.isArray(req.body.cart) ? req.body.cart.map((c) => String(c).slice(0, 100)) : [];
+  const query = cleanText(req.body.query, 300, { label: 'Запрос' });
+  if (!query) throw httpError(400, 'Не заполнено: query');
+  const cartNames = Array.isArray(req.body.cart) ? req.body.cart.map((c) => cleanText(c, 100, { label: 'Корзина' })).filter(Boolean) : [];
   const { suggestions, engine, answer } = await suggestForQuery(restaurant, query, 6, req.guest, { cartNames });
   logAiQuery(restaurant.slug, query, suggestions).catch(() => {});
   return { query, suggestions, engine, answer };

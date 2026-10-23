@@ -119,10 +119,13 @@ export async function llmSuggest(query, products, { limit = 5, guest = null } = 
   if (!takeBudget()) return null;
   const { list, text } = buildMenu(products);
 
+  // Имя, аллергены и история заказов уходят в OpenRouter (за рубеж) только с отдельного согласия гостя (guests.ai_consent);
+  // без него — анонимно: запрос и блюда в корзине (аллергены при этом учитываются у нас до и после ответа модели)
+  const personal = guest?.aiConsent === true ? guest : null;
   const guestCtx = [
-    guest?.name ? `Гостя зовут ${guest.name}.` : '',
-    guest?.allergens?.length ? `Гость НЕ ест / аллергия: ${guest.allergens.join(', ')}.` : '',
-    guest?.favorites?.length ? `Раньше гость заказывал: ${guest.favorites.join(', ')}.` : '',
+    personal?.name ? `Гостя зовут ${personal.name}.` : '',
+    personal?.allergens?.length ? `Гость НЕ ест / аллергия: ${personal.allergens.join(', ')}.` : '',
+    personal?.favorites?.length ? `Раньше гость заказывал: ${personal.favorites.join(', ')}.` : '',
     guest?.cart?.length ? `Уже в заказе: ${guest.cart.join(', ')} — не повторяй их, можно дополнить.` : '',
   ].filter(Boolean).join(' ');
 
