@@ -547,6 +547,15 @@ const SCHEMA = `
   );
   ALTER TABLE restaurant_payment_settings ADD COLUMN IF NOT EXISTS iiko_cash_type_id VARCHAR(64);
   ALTER TABLE restaurant_payment_settings ADD COLUMN IF NOT EXISTS iiko_card_type_id VARCHAR(64);
+  -- Повторный «Оплатить» на те же строки возвращает тот же счёт: ключ набора строк (отсортированные ID) для уникального индекса
+  ALTER TABLE table_payments ADD COLUMN IF NOT EXISTS lines_key TEXT;
+  -- Возврат по вебхуку CloudPayments: сумма, время и список обработанных возвратов (повтор события ничего не меняет)
+  ALTER TABLE table_payments ADD COLUMN IF NOT EXISTS refund_amount NUMERIC(12,2) NOT NULL DEFAULT 0;
+  ALTER TABLE table_payments ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ;
+  ALTER TABLE table_payments ADD COLUMN IF NOT EXISTS refunds JSONB NOT NULL DEFAULT '[]';
+  -- Чек 54-ФЗ (CloudKassir, включается env CLOUDPAYMENTS_RECEIPT=on): система налогообложения 0–5 и ставка НДС (NULL — без НДС)
+  ALTER TABLE restaurant_payment_settings ADD COLUMN IF NOT EXISTS receipt_taxation SMALLINT;
+  ALTER TABLE restaurant_payment_settings ADD COLUMN IF NOT EXISTS receipt_vat SMALLINT;
   -- Телефоны официантов для push-уведомлений (Firebase Cloud Messaging)
   CREATE TABLE IF NOT EXISTS waiter_devices (
     token TEXT PRIMARY KEY,
@@ -658,6 +667,18 @@ const SOFT_INDEXES = [
        AND i.paid_payment_id IS NULL AND i.is_locked AND COALESCE(i.source, 'main') = 'main' AND i.sent_at <= p.created_at
        AND (p.guest_ids IS NULL OR i.guest_id::text IN (SELECT jsonb_array_elements_text(p.guest_ids)))
        AND NOT EXISTS (SELECT 1 FROM table_payments q WHERE q.item_ids IS NOT NULL AND q.session_id = p.session_id)`,
+  // Вебхуки CloudPayments: одна транзакция — один платёж. Старые дубли (и пустые строки) не мешают индексу:
+  // пустое → NULL, у повторов номер получает суффикс «#dup-…» (след в базе остаётся)
+  `UPDATE table_payments SET transaction_id = NULL WHERE transaction_id = ''`,
+  `UPDATE table_payments a SET transaction_id = LEFT(a.transaction_id, 50) || '#dup-' || LEFT(a.id::text, 8)
+     FROM table_payments b
+     WHERE a.transaction_id IS NOT NULL AND a.transaction_id = b.transaction_id
+       AND (a.created_at, a.id::text) > (b.created_at, b.id::text)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_table_payments_transaction
+     ON table_payments(transaction_id) WHERE transaction_id IS NOT NULL`,
+  // Не больше одного свежего счёта на один набор строк визита (вторая линия защиты от дублей счетов)
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_table_payments_pending_lines
+     ON table_payments(session_id, lines_key) WHERE status = 'pending' AND lines_key IS NOT NULL`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_table_payments_one_waiter
      ON table_payments(session_id) WHERE status = 'completed' AND method <> 'cloudpayments'`,
 ];

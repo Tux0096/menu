@@ -9,7 +9,7 @@ import pool from '../db/pool.js';
 import { isIikoDemo, accessibleOrgs, iikoRequest, withIikoCreds } from '../iiko-client.js';
 import { iikoCredsList, iikoCredsLabel, iikoApiLogin, maskIikoKey } from '../lib/iiko-token.js';
 import { listSources } from '../services/sources.js';
-import { paySettingsForAdmin, savePaySettings } from '../services/payments.js';
+import { paySettingsForAdmin, resetPayKeys, savePaySettings } from '../services/payments.js';
 import { listStopLists, refreshStopLists } from '../services/stoplist.js';
 import { getRestaurantCatalog, invalidateCatalogCache } from '../services/catalog.js';
 import { bumpCatalogVersion } from '../lib/catalog-version.js';
@@ -335,6 +335,13 @@ admin.post('/payments', h(async (req) => {
   audit(req.staff, 'payments.save', 'restaurant', r.slug, {
     onlineEnabled: res.onlineEnabled, publicId: res.publicId, secretChanged: Boolean(req.body?.apiSecret || req.body?.clearSecret),
   });
+  return res;
+}));
+// Сбросить ключи точки: дальше она платит по общим ключам сервера (тестовые ключи точки перекрывали рабочие общие)
+admin.post('/payments/reset-keys', h(async (req) => {
+  const r = await staffRestaurant(req);
+  const res = await resetPayKeys(r.id);
+  audit(req.staff, 'payments.reset-keys', 'restaurant', r.slug, { publicIdSource: res.publicIdSource });
   return res;
 }));
 admin.get('/sources', h(async (req) => {

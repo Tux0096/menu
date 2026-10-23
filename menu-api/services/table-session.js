@@ -47,6 +47,7 @@ import { isSessionBusy, withSessionMutex } from '../lib/session-mutex.js';
 import { withIikoCreds } from '../iiko-client.js';
 
 import { httpError } from '../lib/http.js';
+import { fromKop, sumKop } from '../lib/money.js';
 
 export { httpError };
 
@@ -346,7 +347,7 @@ export async function getSessionView(sessionId) {
   const onlinePaid = {
     wholeTable: paid.some((p) => !p.guest_ids),
     guestIds: [...new Set(paid.flatMap((p) => (p.guest_ids || []).map(String)))],
-    amount: paid.reduce((n, p) => n + parseFloat(p.amount || 0), 0),
+    amount: fromKop(sumKop(paid, (p) => p.amount)),
   };
   const view = mapSession(ctx, { feedbackLeft: Boolean(rows[0]), feedbackRating: rows[0]?.rating || null, onlinePaid });
   // Стоп-лист по неотправленным позициям: официант видит до отправки на кухню, что заказать нельзя
@@ -715,6 +716,9 @@ export async function saveGuestCart(sessionId, cartItems, guestId, { ageConfirme
   return getSessionView(sessionId);
 }
 
+/** Окно дедупликации уведомления «Новый заказ» при параллельных отправках корзины, с */
+const SUBMIT_DEDUP_SEC = 10;
+
 /** «Передать официанту» / «Передать дозаказ» (кейсы 6, 9). */
 export async function submitToWaiter(sessionId, cartItems, guestId, { ageConfirmed = false } = {}) {
   let notify = null;
@@ -735,13 +739,20 @@ export async function submitToWaiter(sessionId, cartItems, guestId, { ageConfirm
 
     const isReorder = fresh.items.some((i) => i.is_locked);
     const status = isReorder ? WORKFLOW.REORDER_PENDING : WORKFLOW.CART_READY;
+    // Параллельные «Передать официанту» (двойной тап, две вкладки, повтор запроса): то же состояние за последние
+    // ~10 с — официант уже уведомлён, второе и третье «Новый заказ» не шлём
+    const { rows: dup } = await client.query(
+      `SELECT 1 FROM table_sessions WHERE id = $1 AND workflow_status = $2 AND cart_ready_at > NOW() - INTERVAL '${SUBMIT_DEDUP_SEC} seconds'`,
+      [sessionId, status],
+    );
     await client.query(
       `UPDATE table_sessions SET workflow_status = $2, cart_ready_at = NOW(), wait_notified_at = NULL,
          last_guest_activity_at = NOW(), updated_at = NOW()
        WHERE id = $1`,
       [sessionId, status],
     );
-    const sum = pending.reduce((s, i) => s + Number(i.line_total), 0);
+    if (dup.length) return;
+    const sum = fromKop(sumKop(pending, (i) => i.line_total));
     notify = {
       restaurantId: fresh.restaurant.id,
       sessionId,
@@ -755,7 +766,7 @@ export async function submitToWaiter(sessionId, cartItems, guestId, { ageConfirm
       mergeLines: isReorder,
     };
   }));
-  await createWaiterNotification(notify);
+  if (notify) await createWaiterNotification(notify);
   return getSessionView(sessionId);
 }
 
@@ -792,7 +803,7 @@ export async function requestBill(sessionId, { guest = null, guestIds = null, me
   const barOnly = part === 'bar';
   const pay = BILL_METHODS[method] ? method : null;
   const lines = sent.filter((i) => (!barOnly || (i.source || 'main') !== 'main') && (whole || ids.includes(String(i.guest_id))));
-  const amount = lines.reduce((n, i) => n + parseFloat(i.line_total || 0), 0);
+  const amount = fromKop(sumKop(lines, (i) => i.line_total));
   const names = whole ? [] : ids.map((id) => guests.find((g) => String(g.id) === id)?.name || 'Гость');
   const by = guest ? (guests.find((g) => String(g.id) === String(guest.id))?.name || guest.name || 'Гость') : null;
   const request = {

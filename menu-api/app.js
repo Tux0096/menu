@@ -10,6 +10,7 @@ import { guestPage } from './lib/guest-page.js';
 import { isIikoDemo } from './iiko-client.js';
 import { isLlmEnabled } from './services/ai-llm.js';
 import { startBackgroundJobs } from './services/background-jobs.js';
+import cloudPaymentsWebhook from './routes/cloudpayments-webhook.js';
 import publicRoutes from './routes/public.js';
 import iikoWebhookRoutes from './routes/iiko-webhook.js';
 import guestRoutes from './routes/guest.js';
@@ -36,6 +37,8 @@ app.use(cors({
   origin: (origin, cb) => cb(null, corsAllowed(origin)),
   exposedHeaders: ['X-Staff-Token'], // новый токен персонала (скользящий вход) читает приложение официанта
 }));
+// Вебхуки CloudPayments подписаны по сырому телу — подключаем до express.json (он съел бы тело и подпись не сошлась бы)
+app.use(cloudPaymentsWebhook);
 app.use(express.json({ limit: '1mb' }));
 
 // Маршруты API по областям: публичное, вебхуки iiko, гость, персонал, админка

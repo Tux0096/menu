@@ -204,6 +204,19 @@ export interface PaySettings {
   iikoPaymentTypeId: string | null;
   iikoCashTypeId: string | null;
   iikoCardTypeId: string | null;
+  /** Собственные ключи точки (перекрывают общие ключи сервера) */
+  ownPublicId?: string;
+  hasOwnSecret?: boolean;
+  /** Общие ключи сервера (env): Public ID не секрет, пароль — только «задан» */
+  sharedPublicId?: string;
+  hasSharedSecret?: boolean;
+  publicIdSource?: 'restaurant' | 'shared' | 'none';
+  secretSource?: 'restaurant' | 'shared' | 'none';
+  /** Ключи тестовые (test_ / pk_test) или сервер в тестовом режиме */
+  testKeys?: boolean;
+  warnings?: string[];
+  /** Чек 54-ФЗ (CloudKassir) */
+  receipt?: { available: boolean; taxation: number | null; vat: number | null; vatRates: number[] };
 }
 
 /** Правила продажи алкоголя точки (GET/POST /admin/alcohol) */

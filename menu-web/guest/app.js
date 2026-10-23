@@ -1797,23 +1797,29 @@
       document.head.append(sc);
     });
   }
-  /** Виджет CloudPayments → проверка оплаты на сервере по номеру счёта (колбэка нет). */
+  /** Виджет CloudPayments → проверка оплаты на сервере по номеру счёта (вебхуки CloudPayments — дополнительно). */
   async function runOnlinePay(tip, guestIds = null) {
     const p = await api('POST', '/api/v1/table/pay/start', { sessionId: S.sessionId, tipAmount: tip, guestIds });
     await loadCpWidget();
     const outcome = await new Promise((resolve) => {
       const widget = new window.cp.CloudPayments({ language: 'ru-RU' });
-      widget.pay('charge', {
+      const opts = {
         publicId: p.publicId, description: p.description, amount: p.amount, currency: 'RUB',
         invoiceId: p.invoiceId, accountId: p.accountId, skin: 'mini',
-      }, { onSuccess: () => resolve({ ok: true }), onFail: (reason) => resolve({ ok: false, reason }), onComplete: () => {} });
+      };
+      // Чек 54-ФЗ (CloudKassir): сервер отдаёт p.receipt, только если включён CLOUDPAYMENTS_RECEIPT=on и в админке задана система налогообложения
+      if (p.receipt) {
+        opts.data = { CloudPayments: { CustomerReceipt: p.receipt } };
+        if (!p.receipt.phone) opts.requireEmail = true; // чеку нужен email или телефон покупателя
+      }
+      widget.pay('charge', opts, { onSuccess: () => resolve({ ok: true }), onFail: (reason) => resolve({ ok: false, reason }), onComplete: () => {} });
     });
     // Гость закрыл окно или банк отказал: один раз сверяемся с сервером и не ждём зря
     const tries = outcome.ok ? 8 : 1;
     for (let i = 0; i < tries; i++) {
       const r = await api('POST', '/api/v1/table/pay/confirm', { sessionId: S.sessionId, invoiceId: p.invoiceId });
       if (r.session) applySession(r.session);
-      if (r.status === 'completed') return 'ok';
+      if (r.status === 'completed' || r.status === 'duplicate') return 'ok'; // duplicate — строки уже оплачены, официант вернёт лишнее
       if (r.status === 'failed') throw new Error(r.reason ? `Оплата не прошла: ${r.reason}` : 'Оплата не прошла');
       if (i < tries - 1) await new Promise((res) => setTimeout(res, 2000));
     }
