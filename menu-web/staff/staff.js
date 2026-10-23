@@ -408,8 +408,8 @@
     return `<section class="tscreen" id="editor">
       <div class="tscreen__head">
         <button class="back-btn" data-hide-editor aria-label="К списку столов"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
-        <div class="tscreen__title"><div class="h2" style="margin:0">Стол №${esc(s.tableNumber)}</div>
-          <div class="muted" style="font-size:12px">Открыт ${time(s.createdAt)}${s.waitingMinutes != null ? ` · ждёт ${s.waitingMinutes} мин` : ''}${s.guest?.visitsCount ? ` · визитов: ${s.guest.visitsCount}` : ''}${s.waiterId ? ` · ${mineTable ? 'мой стол' : esc(s.waiterName || 'официант')}` : ' · общий'}</div></div>
+        <div class="tscreen__title"><div class="h2 u-m0">Стол №${esc(s.tableNumber)}</div>
+          <div class="muted u-fs-xs">Открыт ${time(s.createdAt)}${s.waitingMinutes != null ? ` · ждёт ${s.waitingMinutes} мин` : ''}${s.guest?.visitsCount ? ` · визитов: ${s.guest.visitsCount}` : ''}${s.waiterId ? ` · ${mineTable ? 'мой стол' : esc(s.waiterName || 'официант')}` : ' · общий'}</div></div>
         ${statusPill(s)}
         ${canGive ? `<div class="tmenu-wrap"><button class="icon-btn tmenu-btn" data-tmenu aria-label="Меню стола" aria-expanded="${Boolean(S.tmenu)}">⋯</button>
           ${S.tmenu ? '<div class="tmenu"><button class="tmenu__item" data-unassign>Отдать в общие</button></div>' : ''}</div>` : ''}
@@ -454,13 +454,13 @@
     const ask = [...(s.billRequests || [])].reverse().find((r) => r.method);
     return `<div class="pay-box">
       <div><b>К оплате ${rub(due)}</b>${online ? ` <span class="muted">· онлайн оплачено ${rub(online)}</span>` : ''}
-        ${ask ? `<div class="muted" style="font-size:12px">Гость хочет ${ask.method === 'cash' ? 'наличными' : 'картой'}</div>` : ''}</div>
+        ${ask ? `<div class="muted u-fs-xs">Гость хочет ${ask.method === 'cash' ? 'наличными' : 'картой'}</div>` : ''}</div>
       <div class="pay-box__btns">
         <button class="btn btn--sm ${ask?.method === 'cash' ? 'btn--dark' : ''}" data-accept-pay="cash" ${pending.length ? 'disabled' : ''}>Наличными</button>
         <button class="btn btn--sm ${ask?.method !== 'cash' ? 'btn--dark' : ''}" data-accept-pay="card" ${pending.length ? 'disabled' : ''}>Картой</button>
         <button class="btn btn--sm" data-close-table title="Счёт закрыт на кассе — просто закрыть стол">Закрыть стол</button>
       </div>
-      ${pending.length ? '<div class="muted" style="font-size:12px">Сначала отправьте новые блюда в работу</div>' : ''}
+      ${pending.length ? '<div class="muted u-fs-xs">Сначала отправьте новые блюда в работу</div>' : ''}
     </div>`;
   }
 
@@ -498,7 +498,7 @@
     return `<div class="pick-backdrop" data-close-picker>
       <div class="pick-sheet" role="dialog" aria-label="Добавить блюда">
         <div class="pick-sheet__grip"></div>
-        <div class="pick-sheet__head"><div class="h3" style="margin:0">Добавить блюда</div><button class="btn btn--sm btn--dark" data-close-picker-btn>Готово</button></div>
+        <div class="pick-sheet__head"><div class="h3 u-m0">Добавить блюда</div><button class="btn btn--sm btn--dark" data-close-picker-btn>Готово</button></div>
         <div class="seg seg--wide" role="group" aria-label="Кому">${[null, ...seats].map((n) => `<button class="${(S.pickSeat || null) === n ? 'is-on' : ''}" data-pick-seat="${n ?? ''}">${n ? esc(`${n} · ${nameOf(n)}`) : 'Всем'}</button>`).join('')}</div>
         ${S.catalog?.businessLunch?.combos?.length ? `<button class="lunch-btn ${S.catalog.businessLunch.active ? '' : 'is-off'}" data-open-lunch>
           <span><b>Бизнес-ланч</b><small>${S.catalog.businessLunch.active ? `Собрать набор · ${esc(S.catalog.businessLunch.text)}` : `Сейчас недоступен · доступен ${esc(S.catalog.businessLunch.text)}`}</small></span><i>›</i></button>` : ''}
@@ -667,9 +667,9 @@
           if (b.ends_at && new Date(b.ends_at) <= now) return ['завершён', ''];
           return ['показывается', 'ok'];
         };
-        return `<div class="card"><div class="toolbar"><div class="h2 grow" style="margin:0">Баннеры и акции</div>
+        return `<div class="card"><div class="toolbar"><div class="h2 grow u-m0">Баннеры и акции</div>
             <button class="btn btn--dark btn--sm" data-banner-new>Добавить баннер</button></div>
-          <p class="muted" style="margin-top:0">Баннеры видят гости в QR-меню: карусель над меню, на экране AI или в заказе.
+          <p class="muted u-mt0">Баннеры видят гости в QR-меню: карусель над меню, на экране AI или в заказе.
             По нажатию открывается блюдо, раздел меню или ссылка. Картинка — 2:1, например 1200×600.</p>
           ${rows.length ? `<div class="banner-grid">${rows.map((b) => {
             const [label, tone] = state(b);
@@ -677,7 +677,7 @@
               <div class="banner-card__img">${b.image_url ? `<img src="${esc(b.image_url)}" alt="" loading="lazy">` : `<span>${esc(b.title)}</span>`}</div>
               <div class="banner-card__body">
                 <b>${esc(b.title)}</b>
-                <div class="muted" style="font-size:12px">${esc(PLACEMENTS[b.placement] || PLACEMENTS.menu)} · ${esc(rest(b.restaurant_id))}${b.ends_at ? ` · до ${dateTime(b.ends_at)}` : ''}</div>
+                <div class="muted u-fs-xs">${esc(PLACEMENTS[b.placement] || PLACEMENTS.menu)} · ${esc(rest(b.restaurant_id))}${b.ends_at ? ` · до ${dateTime(b.ends_at)}` : ''}</div>
                 <div style="display:flex;gap:6px;align-items:center;margin-top:8px"><span class="pill" data-tone="${tone}">${label}</span>
                   <span class="grow"></span>
                   <button class="btn btn--sm" data-banner-edit='${esc(JSON.stringify(b))}'>Изменить</button>
@@ -692,13 +692,13 @@
       async render() {
         const [tables, rests] = await Promise.all([api('GET', '/api/v1/admin/tables'), api('GET', '/api/v1/admin/restaurants')]);
         const r = rests.find((x) => x.slug === S.restaurant) || rests[0];
-        return `<div class="toolbar no-print"><div class="h2 grow" style="margin:0">QR-коды столов — ${esc(r.name)}</div>
+        return `<div class="toolbar no-print"><div class="h2 grow u-m0">QR-коды столов — ${esc(r.name)}</div>
           <label class="muted">Столов:</label><input class="inp" type="number" min="1" max="200" id="tables-count" value="${r.tables_count}" style="width:90px">
           <button class="btn btn--sm" data-save-tables="${esc(r.id)}">Сохранить</button>
           <button class="btn btn--dark btn--sm" onclick="window.print()">Печать</button></div>
           <div class="qr-grid">${tables.map((t) => `<div class="qr-card"><b>Стол №${esc(t.table)}</b>
             <img src="${esc(t.qr)}" alt="QR стол ${esc(t.table)}" loading="lazy">
-            <div style="font-size:12px">Отсканируйте, чтобы открыть меню</div>
+            <div class="u-fs-xs">Отсканируйте, чтобы открыть меню</div>
             <small><a href="${esc(t.url)}" target="_blank">${esc(t.url)}</a></small></div>`).join('')}</div>`;
       },
     },
@@ -709,7 +709,7 @@
         const p = await api('GET', '/api/v1/admin/payments');
         const r = S.restaurants.find((x) => x.slug === S.restaurant) || S.restaurants[0] || {};
         return `<div class="card" style="max-width:720px"><div class="h2">Оплата — ${esc(r.name || '')}</div>
-          <p class="muted" style="margin-top:0">Гость выбирает в меню: <b>онлайн</b>, <b>картой официанту</b> или <b>наличными</b>, и за кого платит
+          <p class="muted u-mt0">Гость выбирает в меню: <b>онлайн</b>, <b>картой официанту</b> или <b>наличными</b>, и за кого платит
             (весь стол, свой заказ или отмеченные гости). Онлайн оплачивается только кухня; бар — картой официанту.
             После онлайн-оплаты заказ кухни в iiko закрывается сам, официанту приходит «бар — принять картой».</p>
           <div style="margin:0 0 14px"><span class="pill" data-tone="${p.ready ? 'ok' : ''}">${p.ready ? 'Онлайн-оплата работает' : p.onlineEnabled ? 'Не хватает ключей' : 'Онлайн-оплата выключена'}</span></div>
@@ -724,7 +724,7 @@
               Типы оплат находятся в iiko автоматически («Наличные», «Банковские карты»); ID нужен, только если выбирается не тот.</p>
             <div class="field"><label>Тип оплаты «Наличные» в iiko (ID, необязательно)</label><input class="inp" name="iikoCashTypeId" value="${esc(p.iikoCashTypeId || '')}" autocomplete="off" placeholder="авто"></div>
             <div class="field"><label>Тип оплаты «Карта» в iiko (ID, необязательно)</label><input class="inp" name="iikoCardTypeId" value="${esc(p.iikoCardTypeId || '')}" autocomplete="off" placeholder="авто"></div>
-            <p class="muted" style="font-size:12px">Пароль API хранится только на сервере и в браузер не возвращается. Уведомления (колбэк) CloudPayments не нужны — статус оплаты сервер проверяет сам.</p>
+            <p class="muted u-fs-xs">Пароль API хранится только на сервере и в браузер не возвращается. Уведомления (колбэк) CloudPayments не нужны — статус оплаты сервер проверяет сам.</p>
             <div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить</button></div>
           </form></div>`;
       },
@@ -763,7 +763,7 @@
         const [rows, rests] = await Promise.all([api('GET', '/api/v1/admin/staff'), api('GET', '/api/v1/admin/restaurants')]);
         S.staffRests = rests;
         const roleName = { admin: 'Администратор', manager: 'Управляющий', waiter: 'Официант', marketing: 'Маркетинг' };
-        return `<div class="card"><div class="toolbar"><div class="h2 grow" style="margin:0">Сотрудники</div><button class="btn btn--dark btn--sm" data-staff-new>Добавить</button></div>
+        return `<div class="card"><div class="toolbar"><div class="h2 grow u-m0">Сотрудники</div><button class="btn btn--dark btn--sm" data-staff-new>Добавить</button></div>
           <div class="tbl-wrap"><table class="tbl tbl--cards"><tr><th>Имя</th><th>Логин</th><th>Роль</th><th>PIN</th><th>Ресторан</th><th>Статус</th><th></th></tr>
           ${rows.map((u) => `<tr><td class="td-title">${esc(u.name)}</td><td data-label="Логин">${esc(u.login)}</td><td data-label="Роль">${roleName[u.role]}</td><td data-label="PIN">${u.hasPin ? '●●●●' : '—'}</td>
             <td data-label="Ресторан">${esc(rests.find((r) => r.id === u.restaurantId)?.name || 'Все')}</td><td data-label="Статус">${u.isActive ? '<span class="pill" data-tone="ok">активен</span>' : '<span class="pill">отключён</span>'}</td>
@@ -792,9 +792,9 @@
     if (!d) return '';
     const credsLabel = (c) => d.creds.find((x) => x.code === c)?.label || (c ? `Ключ ${c} — не задан на сервере` : 'Основной ключ');
     return `<div class="card" style="margin-bottom:16px">
-      <div class="toolbar"><div class="h2 grow" style="margin:0">Источники iiko</div>
+      <div class="toolbar"><div class="h2 grow u-m0">Источники iiko</div>
         <button class="btn btn--sm btn--dark" data-src-add>Добавить бар / другой iiko</button></div>
-      <p class="muted" style="margin-top:0">Меню собирается из всех источников в одно — гость и официант видят один список.
+      <p class="muted u-mt0">Меню собирается из всех источников в одно — гость и официант видят один список.
         При «В работу» заказ делится: каждая часть уходит в свой iiko на тот же стол.</p>
       <div class="tbl-wrap"><table class="tbl tbl--cards"><tr><th>Источник</th><th>Организация iiko</th><th>Ключ</th><th>Внешнее меню</th><th></th></tr>
         ${d.sources.map((x) => `<tr>
@@ -811,7 +811,7 @@
   function openSourceForm(x = {}) {
     const d = S.adminSources;
     modal(`<div class="h2">${x.code ? 'Источник iiko' : 'Новый источник iiko'}</div>
-      <p class="muted" style="margin-top:0">Например, бар: алкоголь продаётся через другую организацию iiko. Если она в другом аккаунте iiko —
+      <p class="muted u-mt0">Например, бар: алкоголь продаётся через другую организацию iiko. Если она в другом аккаунте iiko —
         добавьте на сервер секреты IIKO_BAR_API_LOGIN, IIKO_BAR_CLIENT_SECRET (и IIKO_BAR_APP_ID, если отличается) и выберите «Ключ BAR».</p>
       <form id="src-form"><div class="form-grid">
         <div class="field"><label>Название</label><input class="inp" name="name" value="${esc(x.name || 'Бар')}" required></div>
@@ -819,7 +819,7 @@
         <div class="field"><label>Ключ iiko</label><select class="sel" name="creds" id="src-creds">${d.creds.map((c) => `<option value="${esc(c.code)}" ${(x.creds || '') === c.code ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}</select></div>
         <div class="field"><label>Организация iiko</label><select class="sel" name="organizationId" id="src-org" required><option value="">Загрузка…</option></select></div>
         <div class="field"><label>Внешнее меню</label><select class="sel" name="externalMenuId" id="src-menu"><option value="">Авто</option></select></div>
-        <label style="display:flex;gap:10px;align-items:center;margin-top:20px"><input type="checkbox" name="isEnabled" ${x.is_enabled !== false ? 'checked' : ''}> Включён</label>
+        <label class="u-actions"><input type="checkbox" name="isEnabled" ${x.is_enabled !== false ? 'checked' : ''}> Включён</label>
       </div>
       <div class="error-box hidden" id="src-err"></div>
       <div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить и выгрузить меню</button><button class="btn" type="button" data-modal-close>Отмена</button></div></form>`, (root) => {
@@ -865,7 +865,7 @@
     const sw = (on, attr, red = false) => `<button class="switch ${on ? 'is-on' : ''} ${red ? 'is-red' : ''}" ${attr}></button>`;
     return `<div class="card">
       <div class="toolbar">
-        <div class="h2 grow" style="margin:0">Меню <span class="muted" style="font-weight:400;font-size:14px">источник: ${esc(m.source)} · обновлено ${dateTime(m.fetchedAt)}</span></div>
+        <div class="h2 grow u-m0">Меню <span class="muted" style="font-weight:400;font-size:14px">источник: ${esc(m.source)} · обновлено ${dateTime(m.fetchedAt)}</span></div>
         ${S.staff.role === 'admin' ? '<button class="btn btn--sm" data-menu-refresh>Перевыгрузить из iiko</button>' : ''}
       </div>
       <div class="toolbar">
@@ -878,7 +878,7 @@
         <tr><th></th><th>Блюдо</th><th>Категория</th><th>Цена</th><th>Метка</th><th title="Больше — выше в разделе; 0 — как в iiko">Приоритет</th>${canStop ? '<th>Стоп-лист</th>' : ''}<th>Скрыть</th><th>Рекомендуем</th><th></th></tr>
         ${rows.map((p) => `<tr>
           <td>${p.image ? `<img class="thumb" src="${esc(p.image)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">` : '<div class="thumb">🍽</div>'}</td>
-          <td><b>${esc(p.name)}</b>${p.badge ? ` <span class="pill" data-tone="ok">${esc(badgeText(p.badge))}</span>` : ''}${p.video ? ' <span class="pill" data-tone="work">▶ видео</span>' : ''}<div class="muted" style="font-size:12px">${p.sku ? `арт. ${esc(p.sku)} · ` : ''}${esc(p.weight || '')}${p.energy ? ` · ${Math.round(p.energy)} ккал` : ''}${p.allergens?.length ? ` · аллергены: ${esc(p.allergens.join(', '))}` : ''}</div></td>
+          <td><b>${esc(p.name)}</b>${p.badge ? ` <span class="pill" data-tone="ok">${esc(badgeText(p.badge))}</span>` : ''}${p.video ? ' <span class="pill" data-tone="work">▶ видео</span>' : ''}<div class="muted u-fs-xs">${p.sku ? `арт. ${esc(p.sku)} · ` : ''}${esc(p.weight || '')}${p.energy ? ` · ${Math.round(p.energy)} ккал` : ''}${p.allergens?.length ? ` · аллергены: ${esc(p.allergens.join(', '))}` : ''}</div></td>
           <td class="muted" data-label="Категория">${esc(p.group)}</td><td data-label="Цена">${p.price ? rub(p.price) : ''}</td>
           <td data-label="Метка">${p.isHidden ? '' : badgeList(p.badge).length > 1 ? `<span class="muted" title="Несколько меток — меняются в «Меню сети»">${esc(badgeText(p.badge))}</span>` : `<select class="sel sel--sm sel--badge" data-badge-set="${esc(p.id)}" aria-label="Метка блюда"><option value="">—</option>${Object.entries(BADGES).map(([k, l]) => `<option value="${k}" ${p.badge === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`}</td>
           <td data-label="Приоритет">${p.isHidden ? '' : `<input class="inp inp--prio" type="number" inputmode="numeric" min="-999" max="999" step="1" value="${Number(p.priority) || 0}" data-prio="${esc(p.id)}" aria-label="Приоритет показа">`}</td>
@@ -919,15 +919,15 @@
         </div>
         <input type="hidden" name="video_url" value="${esc(p.video || '')}">
         <p class="muted" style="font-size:12px;margin:6px 4px 0">«Живое» меню: короткое видео без звука (3–6 с, до 25 МБ, лучше MP4 квадрат 720 px) играет вместо фото по кругу. Анимированный WebP/GIF — тоже можно. Фото остаётся обложкой, пока видео грузится.</p>
-        ${badgeList(p.badge).length > 1 ? `<div class="field" style="margin-top:10px"><label>Метки в меню</label><div class="muted">${esc(badgeText(p.badge))} — несколько меток меняются в «Меню сети»</div></div>`
-    : `<div class="field" style="margin-top:10px"><label>Метка в меню</label><select class="sel" name="badge"><option value="">Без метки</option>${Object.entries(BADGES).map(([k, l]) => `<option value="${k}" ${p.badge === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`}
-        <div class="field" style="margin-top:10px"><label>Описание</label><textarea class="inp" name="description">${esc(p.description || '')}</textarea></div>
-        <div class="form-grid" style="margin-top:10px">
+        ${badgeList(p.badge).length > 1 ? `<div class="field u-mt-10"><label>Метки в меню</label><div class="muted">${esc(badgeText(p.badge))} — несколько меток меняются в «Меню сети»</div></div>`
+    : `<div class="field u-mt-10"><label>Метка в меню</label><select class="sel" name="badge"><option value="">Без метки</option>${Object.entries(BADGES).map(([k, l]) => `<option value="${k}" ${p.badge === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`}
+        <div class="field u-mt-10"><label>Описание</label><textarea class="inp" name="description">${esc(p.description || '')}</textarea></div>
+        <div class="form-grid u-mt-10">
           ${f('weight', 'Вес / объём', p.weight)}${f('energy', 'Ккал', p.energy, 'number')}${f('proteins', 'Белки', p.proteins, 'number')}
           ${f('fats', 'Жиры', p.fats, 'number')}${f('carbs', 'Углеводы', p.carbs, 'number')}
         </div>
         ${f('allergens', 'Аллергены (через запятую)', (p.allergens || []).join(', '))}
-        <div class="field" style="margin-top:10px"><label>Где применить</label><select class="sel" name="scope"><option value="restaurant">Только в этом ресторане</option><option value="global">Во всех ресторанах</option></select></div>
+        <div class="field u-mt-10"><label>Где применить</label><select class="sel" name="scope"><option value="restaurant">Только в этом ресторане</option><option value="global">Во всех ресторанах</option></select></div>
         <p class="muted" style="font-size:12px;margin:12px 4px 0">Данные карточки приходят из iiko. Правки хранятся только в меню и накладываются по UUID блюда (${esc(p.id)}); в iiko ничего не меняется.</p>
         <div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить</button>
           ${ownOverrides.length ? '<button class="btn btn--danger" type="button" data-reset-iiko>Вернуть как в iiko</button>' : ''}
@@ -1015,7 +1015,7 @@
         <div class="field"><label>Показывать с</label><input class="inp" name="starts_at" type="datetime-local" value="${dt(b.starts_at)}"></div>
         <div class="field"><label>Показывать до</label><input class="inp" name="ends_at" type="datetime-local" value="${dt(b.ends_at)}"></div>
         <div class="field"><label>Порядок</label><input class="inp" name="sort_order" type="number" value="${esc(b.sort_order ?? 0)}"></div>
-        <label style="display:flex;gap:10px;align-items:center;margin-top:20px"><input type="checkbox" name="is_active" ${b.is_active !== false ? 'checked' : ''}> Показывать</label>
+        <label class="u-actions"><input type="checkbox" name="is_active" ${b.is_active !== false ? 'checked' : ''}> Показывать</label>
       </div>
       <div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить</button><button class="btn" type="button" data-modal-close>Отмена</button></div></form>`, (root) => {
       const form = $('#banner-form', root);
@@ -1056,8 +1056,8 @@
     return {
       async render() {
         const rows = await api('GET', path);
-        return `<div class="card"><div class="toolbar"><div class="h2 grow" style="margin:0">${title}</div><button class="btn btn--dark btn--sm" data-crud-new="${path}">Добавить</button></div>
-          <p class="muted" style="margin-top:0">${hint}</p>
+        return `<div class="card"><div class="toolbar"><div class="h2 grow u-m0">${title}</div><button class="btn btn--dark btn--sm" data-crud-new="${path}">Добавить</button></div>
+          <p class="muted u-mt0">${hint}</p>
           <div class="tbl-wrap"><table class="tbl tbl--cards"><tr>${fields.map(([, l]) => `<th>${l}</th>`).join('')}<th></th></tr>
           ${rows.map((r) => `<tr>${fields.map(([k, l, t]) => `<td data-label="${esc(l)}">${t === 'bool' ? (r[k] ? '✓' : '—') : esc(r[k] ?? '')}</td>`).join('')}
             <td class="td-actions" style="white-space:nowrap"><button class="btn btn--sm" data-crud-edit='${esc(JSON.stringify({ path, row: r }))}'>Изменить</button>
@@ -1113,8 +1113,8 @@
       <div class="field"><label>Ресторан</label><select class="sel" name="restaurantId"><option value="">Все</option>${(S.staffRests || []).map((r) => `<option value="${r.id}" ${u.restaurantId === r.id ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select></div>
       <div class="field"><label>${u.id ? 'Новый пароль (пусто — не менять)' : 'Пароль'}</label><input class="inp" name="password" type="password" ${u.id ? '' : 'required'}></div>
       <div class="field"><label>PIN для входа официанта (4–6 цифр${u.hasPin ? ', пусто — не менять' : ''})</label><input class="inp" name="pin" inputmode="numeric" pattern="\\d{4,6}" maxlength="6" autocomplete="off" placeholder="${u.hasPin ? 'PIN задан' : 'например, 482915'}"></div>
-      ${u.hasPin ? '<label style="display:flex;gap:10px;align-items:center;margin-top:20px"><input type="checkbox" name="clearPin"> Сбросить PIN</label>' : ''}
-      <label style="display:flex;gap:10px;align-items:center;margin-top:20px"><input type="checkbox" name="isActive" ${u.isActive !== false ? 'checked' : ''}> Активен</label>
+      ${u.hasPin ? '<label class="u-actions"><input type="checkbox" name="clearPin"> Сбросить PIN</label>' : ''}
+      <label class="u-actions"><input type="checkbox" name="isActive" ${u.isActive !== false ? 'checked' : ''}> Активен</label>
       </div><div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить</button><button class="btn" type="button" data-modal-close>Отмена</button></div></form>`, (root) => {
       $('#staff-role', root).addEventListener('change', (e) => { $('#role-info', root).textContent = ROLE_INFO[e.target.value][1]; });
       $('#staff-form', root).addEventListener('submit', async (e) => {
@@ -1578,7 +1578,7 @@
       if (q('[data-open-table-pick]')) {
         let hall;
         try { hall = await api('GET', '/api/v1/waiter/hall'); } catch (err) { toast(err.message, true); return; }
-        modal(`<div class="h3" style="margin-top:0">Открыть стол</div>
+        modal(`<div class="h3 u-mt0">Открыть стол</div>
           <p class="muted" style="margin:0 0 10px;font-size:13px">Выберите стол гостя. Занятый — откроется его заказ.</p>
           <div class="mt-grid">${hall.tables.map((t) => `<button class="mt-cell ${t.sessionId ? 'is-busy' : ''}" data-hall-table="${esc(t.number)}" data-session="${esc(t.sessionId || '')}">
             <b>${esc(t.number)}</b><small>${t.sessionId ? esc(t.statusLabel) : 'свободен'}</small></button>`).join('')}</div>

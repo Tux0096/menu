@@ -332,7 +332,7 @@ const shortName = (n: string) => n.replace(/^Фуджи\s+/i, '');
             </div>
             <div class="min-w-[220px] flex-1">
               <UInput v-model="c.custom" :placeholder="c.auto" maxlength="120" :aria-label="`Название набора ${c.iikoName}`" />
-              <div class="mt-0.5 text-[11px] text-slate-500">в iiko: «{{ c.iikoName }}» · на точках: {{ c.points.length }}</div>
+              <div class="mt-0.5 text-2xs text-slate-500">в iiko: «{{ c.iikoName }}» · на точках: {{ c.points.length }}</div>
             </div>
             <div class="w-24 text-right text-sm tabular-nums text-slate-700">{{ c.price ? `${c.price} ₽` : '—' }}</div>
             <UButton size="xs" color="white" icon="i-heroicons-pencil-square" :aria-expanded="openRows.has(c.key)" @click="toggleRow(c.key)">Фото и описание</UButton>
@@ -358,7 +358,7 @@ const shortName = (n: string) => n.replace(/^Фуджи\s+/i, '');
                 <label class="block text-xs text-slate-500">Вес
                   <UInput v-model="c.weight" maxlength="30" :placeholder="c.iikoWeight || 'например, 650 г'" class="w-48" :aria-label="`Вес набора ${c.auto}`" />
                 </label>
-                <p class="text-[11px] text-slate-500">Пусто — как в iiko. Название набора меняется в поле слева. Свои правки главнее iiko: выгрузка их не затирает.</p>
+                <p class="text-2xs text-slate-500">Пусто — как в iiko. Название набора меняется в поле слева. Свои правки главнее iiko: выгрузка их не затирает.</p>
               </div>
             </div>
           </li>
@@ -384,7 +384,7 @@ const shortName = (n: string) => n.replace(/^Фуджи\s+/i, '');
               </div>
               <div class="min-w-0 flex-1">
                 <div class="truncate text-sm text-slate-800">{{ it.custom || it.name }}</div>
-                <div class="text-[11px] text-slate-500">{{ it.price ? `${it.price} ₽` : 'без доплаты' }}<template v-if="it.weight || it.iikoWeight"> · {{ it.weight || it.iikoWeight }}</template><template v-if="!it.image"> · нет фото</template><template v-if="it.description"> · есть описание</template></div>
+                <div class="text-2xs text-slate-500">{{ it.price ? `${it.price} ₽` : 'без доплаты' }}<template v-if="it.weight || it.iikoWeight"> · {{ it.weight || it.iikoWeight }}</template><template v-if="!it.image"> · нет фото</template><template v-if="it.description"> · есть описание</template></div>
               </div>
               <UButton size="2xs" color="gray" variant="ghost" icon="i-heroicons-pencil-square" :aria-expanded="openRows.has(it.key)" :aria-label="`Изменить ${it.name}`" @click="toggleRow(it.key)" />
               <label
@@ -398,7 +398,7 @@ const shortName = (n: string) => n.replace(/^Фуджи\s+/i, '');
               <div v-if="openRows.has(it.key)" class="grid basis-full gap-2 rounded-xl bg-cream/60 p-3 sm:grid-cols-2">
                 <label class="block text-xs text-slate-500 sm:col-span-2">Название для гостя
                   <UInput v-model="it.custom" maxlength="120" :placeholder="it.auto" :aria-label="`Название блюда ${it.iikoName}`" />
-                  <span class="mt-0.5 block text-[11px]">в iiko: «{{ it.iikoName }}»</span>
+                  <span class="mt-0.5 block text-2xs">в iiko: «{{ it.iikoName }}»</span>
                 </label>
                 <label class="block text-xs text-slate-500 sm:col-span-2">Описание или состав
                   <UTextarea v-model="it.description" :rows="2" maxlength="500" placeholder="Например: курица, огурец, сыр, соус цезарь" :aria-label="`Описание блюда ${it.name}`" />
@@ -406,7 +406,7 @@ const shortName = (n: string) => n.replace(/^Фуджи\s+/i, '');
                 <label class="block text-xs text-slate-500">Вес
                   <UInput v-model="it.weight" maxlength="30" :placeholder="it.iikoWeight || 'например, 250 г'" :aria-label="`Вес блюда ${it.name}`" />
                 </label>
-                <div class="flex flex-wrap items-end gap-2 text-[11px] text-slate-500">
+                <div class="flex flex-wrap items-end gap-2 text-2xs text-slate-500">
                   Фото — кнопка «{{ it.image ? 'Заменить' : 'Фото' }}» в строке. Название, описание, вес и фото общие для сети (как во вкладке «Модификаторы») и не затираются выгрузкой из iiko.
                 </div>
               </div>
@@ -432,7 +432,7 @@ const shortName = (n: string) => n.replace(/^Фуджи\s+/i, '');
             </div>
             <div class="min-w-0 flex-1">
               <div class="truncate text-sm text-slate-800">{{ x.name }}</div>
-              <div class="text-[11px] text-slate-500">{{ x.price }} ₽</div>
+              <div class="text-2xs text-slate-500">{{ x.price }} ₽</div>
             </div>
             <UToggle v-model="x.enabled" :aria-label="`Показывать ${x.name}`" />
           </li>
