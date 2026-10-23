@@ -8,6 +8,7 @@
 import { notifyOrderReady } from './guest-push.js';
 import { uuidOrNull } from '../lib/uuid.js';
 import pool from '../db/pool.js';
+import { cleanText, cleanTextLoose } from '../lib/sanitize.js';
 import { isValidQrKey, QR_RESTAURANT_SLUG, qrSignedRequired } from '../lib/qr-config.js';
 import {
   IDLE_REMINDER_MS,
@@ -452,7 +453,7 @@ export async function enterTable({
         };
       }
     }
-    const cleanName = String(name || '').trim().slice(0, 100);
+    const cleanName = cleanText(name, 100, { label: 'Имя' });
     if (cleanName && cleanName !== guest.name) {
       await pool.query('UPDATE guests SET name = $2 WHERE id = $1', [guest.id, cleanName]);
       guest.name = cleanName;
@@ -553,7 +554,7 @@ function aggregateCart(cartItems) {
         sizeId,
         modifiers,
         // название — только для текста ошибки; цену и название в заказ ставит сервер по меню (priceLine)
-        name: String(item.name || 'Позиция').slice(0, 300),
+        name: cleanTextLoose(item.name, 300) || 'Позиция',
         quantity: qty,
         // Курс подачи 1–3 (гость выбирает в корзине); undefined — не менять
         course: item.course === undefined ? undefined : (Number(item.course) >= 1 && Number(item.course) <= 3 ? Number(item.course) : null),
@@ -851,8 +852,9 @@ export async function callWaiter(sessionId, reason = 'general', comment = '') {
   if (reason === 'bill' && ctx.items.length && ctx.session.payment_status !== 'paid') {
     return { ok: true, message: 'Официант скоро принесёт счёт', session: await requestBill(sessionId) };
   }
-  const text = CALL_REASONS[reason] || CALL_REASONS.general;
-  const call = callText({ table: ctx.session.table_number, reasonText: text.charAt(0).toLowerCase() + text.slice(1), comment });
+  const text = CALL_REASONS[typeof reason === 'string' ? reason : 'general'] || CALL_REASONS.general;
+  const cleanComment = cleanText(comment, 200, { multiline: true, label: 'Комментарий' });
+  const call = callText({ table: ctx.session.table_number, reasonText: text.charAt(0).toLowerCase() + text.slice(1), comment: cleanComment });
   if (await recentlyNotified(sessionId, NOTIFY_TYPES.CALL_WAITER, call.title, call.body, CALL_COOLDOWN_SEC)) {
     return { ok: true, message: 'Официант уже вызван — скоро подойдёт', tableNumber: ctx.session.table_number, repeated: true };
   }
@@ -941,16 +943,17 @@ export async function payBill(sessionId, { method = 'card', tipAmount = 0 } = {}
 
 // ── Отзыв (кейс 11) ─────────────────────────────────────────────────────────
 
-export async function submitFeedback(sessionId, { rating, comment = '' }) {
+export async function submitFeedback(sessionId, { rating, comment = '', guestId = null }) {
+  const cleanComment = cleanText(comment, 2000, { multiline: true, label: 'Отзыв' });
   const ctx = await requireContext(sessionId);
   // Отзыв — о визите: оставить его можно только после того, как заказ ушёл на кухню
   if (!ctx.items.some((i) => i.is_locked)) throw httpError(400, 'Отзыв можно оставить после заказа');
   const r = Math.round(Number(rating));
   if (!(r >= 1 && r <= 5)) throw httpError(400, 'Оценка от 1 до 5');
   const { rowCount } = await pool.query(
-    `INSERT INTO visit_feedback (session_id, rating, comment) VALUES ($1, $2, $3)
+    `INSERT INTO visit_feedback (session_id, rating, comment, guest_id) VALUES ($1, $2, $3, $4)
      ON CONFLICT (session_id) DO NOTHING`,
-    [sessionId, r, String(comment || '').slice(0, 2000)],
+    [sessionId, r, cleanComment, guestId],
   );
   if (!rowCount) return { ok: true, alreadySent: true };
   if (r <= 3) {
@@ -960,8 +963,8 @@ export async function submitFeedback(sessionId, { rating, comment = '' }) {
       tableNumber: ctx.session.table_number,
       type: NOTIFY_TYPES.NEGATIVE_FEEDBACK,
       title: `Стол №${ctx.session.table_number} — низкая оценка ${r}/5`,
-      body: comment || `Гость ${ctx.session.guest_name || ''} поставил ${r}/5`.trim(),
-      payload: { sessionId, rating: r, comment },
+      body: cleanComment || `Гость ${ctx.session.guest_name || ''} поставил ${r}/5`.trim(),
+      payload: { sessionId, rating: r, comment: cleanComment },
     });
   }
   return { ok: true };

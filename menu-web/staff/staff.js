@@ -356,7 +356,7 @@
   const RSV_TONE = { arrived: 'ok', waiting: 'wait', upcoming: 'wait', no_show: 'bad', cancelled: 'bad', closed: '' };
   function reserveBadge(r) {
     const who = [`Бронь ${r.time}`, r.guestName, guestsWord(r.guests)].filter(Boolean).map(esc).join(' · ');
-    return `<span class="rsv-badge" data-tone="${RSV_TONE[r.state] || ''}">${who} · <b>${esc(r.stateLabel || '')}</b></span>`;
+    return `<span class="rsv-badge" dir="auto" data-tone="${RSV_TONE[r.state] || ''}">${who} · <b>${esc(r.stateLabel || '')}</b></span>`;
   }
 
   // ── Экран стола (официант): отдельный экран, блюда по гостям, панель действий снизу ──
@@ -468,14 +468,14 @@
         ${canGive ? `<div class="tmenu-wrap"><button class="icon-btn tmenu-btn" data-tmenu aria-label="Меню стола" aria-expanded="${Boolean(S.tmenu)}">⋯</button>
           ${S.tmenu ? '<div class="tmenu"><button class="tmenu__item" data-unassign>Отдать в общие</button></div>' : ''}</div>` : ''}
       </div>
-      ${s.reservation ? `<div class="rsv-box">${reserveBadge(s.reservation)}${s.reservation.comment ? `<div class="muted" style="font-size:12px;margin-top:4px">${esc(s.reservation.comment)}</div>` : ''}
+      ${s.reservation ? `<div class="rsv-box">${reserveBadge(s.reservation)}${s.reservation.comment ? `<div class="muted" dir="auto" style="font-size:12px;margin-top:4px">${esc(s.reservation.comment)}</div>` : ''}
         ${!s.reservation.arrived ? '<button class="btn btn--sm btn--dark" data-rsv-arrived-session>Гости пришли</button>' : ''}</div>` : ''}
       ${s.openedInIiko ? `<div class="note-box">Открыт на кассе${s.iikoWaiterName ? ` · официант ${esc(s.iikoWaiterName)}` : ''}. Блюда удаляйте и отменяйте на кассе iiko — здесь они обновятся сами.</div>` : ''}
       ${(s.removedItems || []).filter((r) => Date.now() - new Date(r.at).getTime() < 30 * 60_000).length ? `<div class="note-box note-box--warn"><b>На кассе удалено:</b> ${s.removedItems.filter((r) => Date.now() - new Date(r.at).getTime() < 30 * 60_000).slice(-5).reverse().map((r) => `${esc(r.name)} ×${r.quantity}`).join('; ')}</div>` : ''}
       ${assignBoxHtml(s)}
       ${lockedByOther ? '<div class="error-box">Стол сейчас редактирует другой официант</div>' : ''}
       ${alcoBoxHtml(e.items)}
-      ${s.readyCount ? `<div class="ready-box"><span>🔔 Готово на кухне: ${s.items.filter((i) => i.isReady).map((i) => `${esc(i.name)} ×${i.quantity}${i.guestName ? ` — ${esc(i.guestName)}` : ''}`).join(', ')}</span>
+      ${s.readyCount ? `<div class="ready-box"><span dir="auto">🔔 Готово на кухне: ${s.items.filter((i) => i.isReady).map((i) => `${esc(i.name)} ×${i.quantity}${i.guestName ? ` — ${esc(i.guestName)}` : ''}`).join(', ')}</span>
         <button class="btn btn--sm btn--dark" data-served>Вынесено всё</button></div>` : ''}
       ${(s.billRequests || []).length ? `<div class="bill-box"><b>Счёт запрошен</b>${s.billRequests.map((r) => `<div>${esc(r.by ? `${r.by}: ` : '')}${r.part === 'bar' ? 'бар (кухня оплачена онлайн), ' : ''}${r.scope === 'table' ? 'за весь стол' : esc((r.names || []).join(' и '))} — <b>${rub(r.amount)}</b>${r.method ? ` <span class="pill" data-tone="wait">${r.method === 'cash' ? 'наличными' : 'картой'}</span>` : ''} <span class="muted">${dateTime(r.at)}</span></div>`).join('')}</div>` : ''}
       ${s.iikoLastError ? `<div class="error-box"><b>Ошибка iiko:</b> ${esc(s.iikoLastError)}<br>Не отправленное сохранено — нажмите «В работу» ещё раз.</div>` : ''}
@@ -483,8 +483,8 @@
         <span class="muted">Гостей</span>
         <div class="qty"><button class="icon-btn" data-guests="-1" aria-label="Меньше гостей">−</button><b>${e.guestCount}</b><button class="icon-btn" data-guests="1" aria-label="Больше гостей">+</button></div>
         <div class="gbar__names">${seats.map((n) => (guests.some((g) => g.seat === n)
-    ? `<span class="gchip"><b>${n}</b> ${esc(nameOf(n))}</span>`
-    : `<button class="gchip gchip--edit" data-seat-name="${n}" title="Назвать гостя"><b>${n}</b> ${esc(nameOf(n))} <span class="muted">✎</span></button>`)).join('')}</div>
+    ? `<span class="gchip" dir="auto"><b>${n}</b> ${esc(nameOf(n))}</span>`
+    : `<button class="gchip gchip--edit" dir="auto" data-seat-name="${n}" title="Назвать гостя"><b>${n}</b> ${esc(nameOf(n))} <span class="muted">✎</span></button>`)).join('')}</div>
       </div>
       <div class="tscreen__items">${blocks || '<div class="empty-note">Заказа пока нет. Нажмите «+ Блюдо», чтобы добавить из меню.</div>'}</div>
       <div class="tscreen__total"><span class="muted">Итого по столу</span><b>${rub(total)}</b></div>
@@ -588,7 +588,7 @@
             <div class="tcard__body">
               <div class="tcard__pills">${statusPill(x)}${x.openedInIiko ? ' <span class="pill" data-tone="work" title="Заказ открыт на кассе iiko">открыт на кассе</span>' : ''}${x.readyCount ? ` <span class="pill" data-tone="bad">🔔 Готово ${x.readyCount}</span>` : ''}${x.isOverdue ? ` <span class="overdue">⏱ ${x.waitingMinutes} мин</span>` : ''}</div>
               ${x.reservation ? `<div class="tcard__rsv">${reserveBadge(x.reservation)}</div>` : ''}
-              <div class="tcard__guest">${esc((x.guests || []).length ? x.guests.map((g) => g.name).join(', ') : (x.guest?.name || x.reservation?.guestName || (x.openedInIiko ? `Заказ на кассе${x.iikoWaiterName ? ` · ${x.iikoWaiterName}` : ''}` : 'Гость')))}${x.pendingCount ? ` · новых: ${x.pendingCount}` : ''}${x.waiterId && x.waiterId !== me ? ` · ${esc(x.waiterName || 'официант')}` : ''}</div>
+              <div class="tcard__guest" dir="auto">${esc((x.guests || []).length ? x.guests.map((g) => g.name).join(', ') : (x.guest?.name || x.reservation?.guestName || (x.openedInIiko ? `Заказ на кассе${x.iikoWaiterName ? ` · ${x.iikoWaiterName}` : ''}` : 'Гость')))}${x.pendingCount ? ` · новых: ${x.pendingCount}` : ''}${x.waiterId && x.waiterId !== me ? ` · ${esc(x.waiterName || 'официант')}` : ''}</div>
             </div>
             <div class="tcard__sum">${rub(x.total)}</div>
           </button>
@@ -611,7 +611,7 @@
             ${unread.length ? '<button class="btn btn--sm" data-read-all>Прочитать все</button>' : ''}</div>
           <div class="feed">${S.notes.length ? S.notes.map((n) => `<button class="note ${n.is_read ? '' : 'is-unread'}" data-type="${esc(n.type)}" data-note="${esc(n.id)}" data-session="${esc(n.session_id || '')}">
             <div class="note__head"><span>${esc(n.title)}</span><span class="note__time">${time(n.created_at)}</span></div>
-            <div class="note__body">${esc(n.body)}${isMgr && n.table_waiter_name ? ` <span class="muted">· ${esc(n.table_waiter_name)}</span>` : ''}</div></button>`).join('') : '<div class="muted">Пока тихо</div>'}</div>`;
+            <div class="note__body" dir="auto">${esc(n.body)}${isMgr && n.table_waiter_name ? ` <span class="muted">· ${esc(n.table_waiter_name)}</span>` : ''}</div></button>`).join('') : '<div class="muted">Пока тихо</div>'}</div>`;
         const view = ['common', 'mine', 'notes', 'serve', 'reserves'].includes(S.wview) ? S.wview : 'common';
         // «Брони»: сегодняшние брони из iiko по времени, поиск по имени (ё = е); телефон — маска, полный по нажатию «показать»
         if (view === 'reserves') await loadReserves();
@@ -622,8 +622,8 @@
             <button class="rcard__main" data-rsv-open="${esc(r.id)}" ${dim ? 'disabled' : ''}>
               <div class="rcard__time">${esc(r.time)}</div>
               <div class="rcard__body">
-                <div class="rcard__name">${esc(r.guestName || 'Без имени')}${r.sameName ? ' <span class="pill" data-tone="wait">тёзки</span>' : ''}</div>
-                <div class="rcard__meta">${r.table ? `Стол ${esc(r.table)}` : 'стол не назначен'}${(r.tables || []).length > 1 ? ` (+${r.tables.length - 1})` : ''} · ${esc(guestsWord(r.guests))}${r.comment ? ` · ${esc(r.comment)}` : ''}</div>
+                <div class="rcard__name" dir="auto">${esc(r.guestName || 'Без имени')}${r.sameName ? ' <span class="pill" data-tone="wait">тёзки</span>' : ''}</div>
+                <div class="rcard__meta" dir="auto">${r.table ? `Стол ${esc(r.table)}` : 'стол не назначен'}${(r.tables || []).length > 1 ? ` (+${r.tables.length - 1})` : ''} · ${esc(guestsWord(r.guests))}${r.comment ? ` · ${esc(r.comment)}` : ''}</div>
               </div>
               <span class="pill" data-tone="${RSV_TONE[r.state] || ''}">${esc(r.stateLabel)}</span>
             </button>
@@ -806,8 +806,8 @@
           <tr><th>Когда</th><th>Стол</th><th>Оценка</th><th>Комментарий</th><th>Гость</th><th>Официант</th><th>Сумма</th></tr>
           ${rows.map((f) => `<tr><td data-label="Когда">${dateTime(f.created_at)}</td><td data-label="Стол">№${esc(f.table_number)}</td>
             <td data-label="Оценка"><span class="stars">${'★'.repeat(f.rating)}</span><span class="muted">${'★'.repeat(5 - f.rating)}</span></td>
-            <td data-label="Комментарий">${f.rating <= 3 ? '<span class="pill" data-tone="bad">эскалация</span> ' : ''}${esc(f.comment || '')}</td>
-            <td data-label="Гость">${esc(f.guest_name || '—')}</td><td data-label="Официант">${esc(f.waiter_name || '—')}</td><td data-label="Сумма">${rub(f.total)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Отзывов пока нет</td></tr>'}
+            <td data-label="Комментарий" dir="auto">${f.rating <= 3 ? '<span class="pill" data-tone="bad">эскалация</span> ' : ''}${esc(f.comment || '')}</td>
+            <td data-label="Гость" dir="auto">${esc(f.guest_name || '—')}</td><td data-label="Официант">${esc(f.waiter_name || '—')}</td><td data-label="Сумма">${rub(f.total)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Отзывов пока нет</td></tr>'}
         </table></div></div>`;
       },
     },
@@ -1246,7 +1246,7 @@
     const chips = d.dishes.filter((x) => !needle || x.name.toLowerCase().replace(/ё/g, 'е').includes(needle)).slice(0, 14);
     const row = (i) => `<div class="srow is-${i.level} ${i.state === 'ready' ? 'is-ready' : ''}">
         <button class="srow__main" data-open="${esc(i.sessionId)}">
-          <div class="srow__title">Стол <b>${esc(i.tableNumber)}</b>${i.guestName ? ` — ${esc(i.guestName)}` : ''}, ×${i.quantity}</div>
+          <div class="srow__title" dir="auto">Стол <b>${esc(i.tableNumber)}</b>${i.guestName ? ` — ${esc(i.guestName)}` : ''}, ×${i.quantity}</div>
           <div class="srow__name">${esc(i.name)}</div>
           <div class="srow__meta"><span class="cook is-${i.level}">${esc(i.cook?.text || `${i.state === 'ready' ? 'ждут' : 'на кухне'} ${waitText(i.waitingMinutes)}`)}</span>${i.waiterName ? ` · ${esc(i.waiterName)}` : ''}</div>
         </button>

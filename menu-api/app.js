@@ -84,6 +84,11 @@ app.get('/sw.js', (req, res, next) => {
   res.type('application/javascript').sendFile(join(WEB_DIR, 'guest', 'sw.js'), (err) => err && next(err));
 });
 app.use(express.static(join(WEB_DIR, 'guest'), { index: false }));
+// Политика обработки ПДн и пользовательские условия: статические страницы (не SPA), открываются по ссылке из формы входа
+app.get(['/privacy', '/terms'], (req, res, next) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('html').sendFile(join(WEB_DIR, 'guest', `${req.path.slice(1)}.html`), (err) => err && next(err));
+});
 app.get('*', guest.page);
 
 // Последний обработчик ошибок: битый JSON, слишком большой файл и т. п. — JSON без стека и путей сервера
