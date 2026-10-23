@@ -1,4 +1,17 @@
 /* Фуджи QR-меню: гость за столом. Без сборки, без зависимостей. */
+/* Ошибки браузера → POST /api/v1/client-errors (в журнал сервера; без ПДн, не больше 5 за сеанс) */
+(() => {
+  let sent = 0;
+  const send = (message, source, line, col, stack) => {
+    if (sent++ >= 5) return;
+    try {
+      fetch('/api/v1/client-errors', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ app: 'guest', message: String(message || '').slice(0, 300), source: String(source || '').slice(0, 200), line, col, stack: String(stack || '').slice(0, 1200) }) }).catch(() => {});
+    } catch { /* мониторинг не должен ломать страницу */ }
+  };
+  window.addEventListener('error', (e) => send(e.message, e.filename, e.lineno, e.colno, e.error && e.error.stack));
+  window.addEventListener('unhandledrejection', (e) => send(e.reason && e.reason.message || e.reason, '', 0, 0, e.reason && e.reason.stack));
+})();
 (() => {
   'use strict';
 
@@ -586,9 +599,9 @@
     const who = (info.guests || []).join(', ');
     openSheet(`<form id="join-form">
       <h2>Стол №${esc(info.tableNumber)} уже занят</h2>
-      <p class="sheet__hint" style="margin-top:0">${who ? `За столом: <b>${esc(who)}</b>` : 'За столом уже делают заказ'}${info.itemsCount ? ` · в заказе ${info.itemsCount} поз.` : ''}.<br>
+      <p class="sheet__hint" style="margin-top:0">${who ? `За столом: <b dir="auto">${esc(who)}</b>` : 'За столом уже делают заказ'}${info.itemsCount ? ` · в заказе ${info.itemsCount} поз.` : ''}.<br>
         Присоединитесь к столу — ваши блюда будут отмечены вашим именем, официант принесёт их вам.</p>
-      <label class="field"><span class="field__label">Ваше имя</span><input id="join-name" class="input" type="text" maxlength="40" autocomplete="given-name" placeholder="Как к вам обращаться" value="${esc(info.guestName || S.guest?.name || '')}"></label>
+      <label class="field"><span class="field__label">Ваше имя</span><input id="join-name" class="input" type="text" maxlength="40" dir="auto" autocomplete="given-name" placeholder="Как к вам обращаться" value="${esc(info.guestName || S.guest?.name || '')}"></label>
       <div class="auth__error" id="join-error"></div>
       <button class="btn btn--dark" type="submit"><span>Присоединиться к столу</span><span class="round-btn">${ICONS.arrowRight}</span></button>
       <button class="btn btn--outline" type="button" data-other-table><span>Это не мой стол</span></button>
@@ -793,6 +806,89 @@
     </article>`;
   }
   // ── Экран: вход ────────────────────────────────────────────
+  const CONSENT_REQUIRED = 'Нужно согласие на обработку персональных данных';
+  /** Согласие на обработку ПДн: галочка не отмечена заранее, со ссылками на политику и условия (версия документа — на сервере) */
+  const consentHtml = () => `<label class="consent"><input type="checkbox" id="consent"><span class="consent__box">${ICONS.check}</span>
+    <span>Даю согласие на обработку персональных данных на условиях <a href="/privacy" target="_blank" rel="noopener">Политики</a> и принимаю <a href="/terms" target="_blank" rel="noopener">Условия использования</a></span></label>`;
+
+  /** Вход через приложение Фуджи: согласие тоже нужно явно — спрашиваем до обращения к серверу */
+  function openFujiConsentSheet(fujiToken) {
+    openSheet(`<form id="fuji-consent-form">
+      <h2>Вход через приложение Фуджи</h2>
+      <p class="sheet__hint">Чтобы продолжить, подтвердите согласие на обработку персональных данных</p>
+      ${consentHtml()}
+      <div class="auth__error" id="fuji-consent-error"></div>
+      <button class="btn btn--dark" type="submit"><span>Продолжить</span><span class="round-btn">${ICONS.arrowRight}</span></button>
+    </form>`, (sheet) => {
+      $('#fuji-consent-form', sheet).addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const err = $('#fuji-consent-error', sheet);
+        if (!$('#consent', sheet).checked) { err.textContent = CONSENT_REQUIRED; return; }
+        const btn = e.submitter || $('button[type=submit]', sheet);
+        btn.disabled = true;
+        try {
+          const res = await api('POST', '/api/v1/guest/fuji', { token: fujiToken, consent: true });
+          closeSheet();
+          await onLoggedIn(res);
+        } catch (e2) { btn.disabled = false; err.textContent = e2.message; }
+      });
+    });
+  }
+
+  /** «Мои данные»: имя и аллергены, согласие на ИИ, выгрузка и удаление данных (152-ФЗ) */
+  function openProfileSheet() {
+    const g = S.guest || {};
+    openSheet(`<form id="profile-form">
+      <h2>Мои данные</h2>
+      <p class="sheet__hint">${esc(g.phoneMasked || '')}</p>
+      <label class="field"><span class="field__label">Имя</span><input id="pf-name" class="input" type="text" maxlength="40" dir="auto" autocomplete="given-name" value="${esc(g.name || '')}"></label>
+      <label class="field"><span class="field__label">Аллергены (через запятую)</span><input id="pf-allergens" class="input" type="text" maxlength="200" dir="auto" placeholder="например, орехи, лактоза" value="${esc((g.allergens || []).join(', '))}"></label>
+      <label class="consent"><input type="checkbox" id="pf-ai"${g.aiConsent ? ' checked' : ''}><span class="consent__box">${ICONS.check}</span>
+        <span>Подсказки ИИ с моими данными: имя, аллергены и прошлые заказы передаются в сервис OpenRouter за пределы РФ. Без галочки помощник работает анонимно</span></label>
+      <div class="auth__error" id="pf-error"></div>
+      <button class="btn btn--dark" type="submit"><span>Сохранить</span><span class="round-btn">${ICONS.arrowRight}</span></button>
+      <button class="btn btn--outline" type="button" data-export><span>Скачать мои данные</span></button>
+      <button class="btn btn--outline btn--danger" type="button" data-erase><span>Удалить мои данные</span></button>
+      <p class="field__note" style="margin-top:16px"><a href="/privacy" target="_blank" rel="noopener">Политика</a> · <a href="/terms" target="_blank" rel="noopener">Условия</a>${g.consentVersion ? ` · согласие от версии ${esc(g.consentVersion)}` : ''}</p>
+    </form>`, (sheet) => {
+      const err = $('#pf-error', sheet);
+      $('#profile-form', sheet).addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const btn = e.submitter || $('button[type=submit]', sheet);
+        btn.disabled = true;
+        try {
+          const allergens = $('#pf-allergens', sheet).value.split(',').map((x) => x.trim()).filter(Boolean);
+          S.guest = await api('PATCH', '/api/v1/guest/me', { name: $('#pf-name', sheet).value, allergens, aiConsent: $('#pf-ai', sheet).checked });
+          store.set('guest', S.guest);
+          closeSheet(); toast('Сохранено'); render();
+        } catch (e2) { btn.disabled = false; err.textContent = e2.message; }
+      });
+      $('[data-export]', sheet).addEventListener('click', async (e) => {
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        try {
+          const data = await api('GET', '/api/v1/guest/me/export', null, { timeout: 30000 });
+          const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+          const a = Object.assign(document.createElement('a'), { href: url, download: 'fuji-my-data.json' });
+          document.body.appendChild(a); a.click(); a.remove();
+          setTimeout(() => URL.revokeObjectURL(url), 10000);
+        } catch (e2) { err.textContent = e2.message; } finally { btn.disabled = false; }
+      });
+      $('[data-erase]', sheet).addEventListener('click', async (e) => {
+        if (!confirm('Удалить ваш профиль и данные? Имя, телефон и связь с заказами, платежами, бронями и отзывами будут стёрты. Это нельзя отменить.')) return;
+        const btn = e.currentTarget;
+        btn.disabled = true;
+        try {
+          await api('DELETE', '/api/v1/guest/me');
+          try { Object.keys(localStorage).filter((k) => k.startsWith('fm:') && k !== 'fm:restaurant').forEach((k) => localStorage.removeItem(k)); } catch { /* noop */ }
+          closeSheet();
+          alert('Ваши данные удалены.');
+          location.href = location.pathname;
+        } catch (e2) { btn.disabled = false; err.textContent = e2.message; }
+      });
+    }, { cls: 'sheet--gray' });
+  }
+
   /** Шторка «Сделать заказ»: номер стола (если не из QR) и телефон (если гость ещё не входил). */
   function openSeatSheet(then = null, error = '') {
     const fujiUrl = S.config?.fujiAppLoginUrl;
@@ -804,9 +900,9 @@
       <h2>${needLogin ? 'Авторизация' : 'Выбор стола'}</h2>
       <p class="sheet__hint">${esc(S.config?.restaurant?.name || '')}${S.config?.restaurant?.address ? `, ${esc(S.config.restaurant.address)}` : ''}${needTable ? '' : `. Стол №${esc(S.table)} <button type="button" class="link-btn" data-change-table>Другой стол</button>`}</p>
       ${needTable ? field('Номер стола', `<input id="seat-table" class="input" type="text" inputmode="numeric" maxlength="10" placeholder="Номер стола на табличке" value="${esc(S.table || '')}">`) : ''}
-      ${needName ? field('Ваше имя', '<input id="seat-name" class="input" type="text" maxlength="40" autocomplete="given-name" placeholder="Ваше имя">') : ''}
+      ${needName ? field('Ваше имя', '<input id="seat-name" class="input" type="text" maxlength="40" dir="auto" autocomplete="given-name" placeholder="Ваше имя">') : ''}
       ${needLogin ? `${field('Телефон', '<input id="phone" class="input" type="tel" inputmode="tel" autocomplete="tel" placeholder="+7" value="+7 " aria-label="Номер телефона">')}
-        <label class="consent"><input type="checkbox" id="consent" checked><span class="consent__box">${ICONS.check}</span><span>Согласие на обработку персональных данных</span></label>` : ''}
+        ${consentHtml()}` : ''}
       <div class="auth__error" id="seat-error">${esc(error)}</div>
       <button class="btn btn--dark" type="submit"><span>Продолжить</span><span class="round-btn">${ICONS.arrowRight}</span></button>
       ${needLogin && fujiUrl ? `<a class="fuji-btn" id="fuji-login" href="${fujiUrl ? esc(`${fujiUrl}${fujiUrl.includes('?') ? '&' : '?'}return=${encodeURIComponent(`${location.origin}${location.pathname}?restaurant=${S.restaurant || ''}&table=${S.table || ''}`)}`) : '#'}">
@@ -831,7 +927,7 @@
           table = ($('#seat-table', sheet).value || '').trim();
           if (!table) { err.textContent = 'Введите номер стола'; return; }
         }
-        if (needLogin && !$('#consent', sheet).checked) { err.textContent = 'Нужно согласие на обработку персональных данных'; return; }
+        if (needLogin && !$('#consent', sheet).checked) { err.textContent = CONSENT_REQUIRED; return; }
         const name = needName ? ($('#seat-name', sheet).value || '').trim() : '';
         if (needName && !name) { err.textContent = 'Введите имя — официант будет знать, чьё блюдо'; return; }
         btn.disabled = true;
@@ -1007,7 +1103,7 @@
       ? `<section class="ai-head"><img class="ai-head__orb ${loading ? 'is-thinking' : ''}" src="${UI('ai-orb.webp')}" alt="">
           <div><div class="ai-head__title">Фуджи ИИ</div><div class="ai-head__sub">${esc(loading ? 'Подбираю…' : error ? 'Не получилось' : (S.ai.label || 'Вот что я подобрал:'))}</div></div></section>`
       : `<section class="ai-hero"><img class="ai-orb" src="${UI('ai-orb.webp')}" alt="">
-          <h1>Спросите Фуджи ИИ</h1><div class="ai-hero__hello">${esc(hello)}</div></section>`;
+          <h1>Спросите Фуджи ИИ</h1><div class="ai-hero__hello" dir="auto">${esc(hello)}</div></section>`;
     return `${topbar()}<main class="screen screen--center screen--ai">
       ${head}
       ${hasResults ? '' : bannersHtml('ai')}
@@ -1274,7 +1370,7 @@
     }
     const multi = groups.size > 1 || [...groups.keys()].some((k) => k !== 'Вы');
     const sentHtml = [...groups].map(([who, list]) => `<div class="sent-group">
-        ${multi ? `<div class="sent-group__name">${esc(who)}</div>` : ''}
+        ${multi ? `<div class="sent-group__name" dir="auto">${esc(who)}</div>` : ''}
         ${list.map((i) => {
     const [cls, label] = itemStatus(i);
     return `<div class="sent-line">${thumb(findProduct(i.productId) || findProduct(i.iikoProductId))}
@@ -1311,6 +1407,7 @@
         ${lines.length ? row('data-go="menu"', 'Дополнить из меню') : ''}
         ${row('data-action="call"', 'Позвать официанта', `<img class="menu-row__icon" src="${UI('status-help.svg')}" alt="">`)}
         ${canClear ? row('data-action="clear"', 'Очистить корзину') : ''}`}
+        ${S.token ? row('data-action="profile"', 'Мои данные') : ''}
       </div>
     </main>`;
   }
@@ -1393,8 +1490,10 @@
     const opt = (reason, label) => `<button class="menu-row" data-reason="${reason}"><span>${label}</span><img src="${UI('chevron.svg')}" alt=""></button>`;
     openSheet(`<h2>Позвать официанта</h2><p class="sheet__hint">Официант увидит стол №${esc(S.table)} и причину вызова</p>
       <div class="menu-rows">${opt('general', 'Нужна помощь')}${opt('order', 'Дозаказ')}${hasItems ? opt('bill', 'Попросить счёт') : ''}${opt('question', 'Вопрос по блюдам')}</div>
+      ${S.token ? '<button class="link-btn link-btn--logout" data-profile>Мои данные</button>' : ''}
       <button class="link-btn link-btn--logout" data-logout>Выйти (${esc(S.guest?.phoneMasked || 'гость')})</button>`, (sheet) => {
       sheet.addEventListener('click', async (e) => {
+        if (e.target.closest('[data-profile]')) { openProfileSheet(); return; }
         if (e.target.closest('[data-logout]')) {
           closeSheet();
           try { Object.keys(localStorage).filter((k) => k.startsWith('fm:') && k !== 'fm:restaurant').forEach((k) => localStorage.removeItem(k)); } catch { /* noop */ }
@@ -1797,23 +1896,29 @@
       document.head.append(sc);
     });
   }
-  /** Виджет CloudPayments → проверка оплаты на сервере по номеру счёта (колбэка нет). */
+  /** Виджет CloudPayments → проверка оплаты на сервере по номеру счёта (вебхуки CloudPayments — дополнительно). */
   async function runOnlinePay(tip, guestIds = null) {
     const p = await api('POST', '/api/v1/table/pay/start', { sessionId: S.sessionId, tipAmount: tip, guestIds });
     await loadCpWidget();
     const outcome = await new Promise((resolve) => {
       const widget = new window.cp.CloudPayments({ language: 'ru-RU' });
-      widget.pay('charge', {
+      const opts = {
         publicId: p.publicId, description: p.description, amount: p.amount, currency: 'RUB',
         invoiceId: p.invoiceId, accountId: p.accountId, skin: 'mini',
-      }, { onSuccess: () => resolve({ ok: true }), onFail: (reason) => resolve({ ok: false, reason }), onComplete: () => {} });
+      };
+      // Чек 54-ФЗ (CloudKassir): сервер отдаёт p.receipt, только если включён CLOUDPAYMENTS_RECEIPT=on и в админке задана система налогообложения
+      if (p.receipt) {
+        opts.data = { CloudPayments: { CustomerReceipt: p.receipt } };
+        if (!p.receipt.phone) opts.requireEmail = true; // чеку нужен email или телефон покупателя
+      }
+      widget.pay('charge', opts, { onSuccess: () => resolve({ ok: true }), onFail: (reason) => resolve({ ok: false, reason }), onComplete: () => {} });
     });
     // Гость закрыл окно или банк отказал: один раз сверяемся с сервером и не ждём зря
     const tries = outcome.ok ? 8 : 1;
     for (let i = 0; i < tries; i++) {
       const r = await api('POST', '/api/v1/table/pay/confirm', { sessionId: S.sessionId, invoiceId: p.invoiceId });
       if (r.session) applySession(r.session);
-      if (r.status === 'completed') return 'ok';
+      if (r.status === 'completed' || r.status === 'duplicate') return 'ok'; // duplicate — строки уже оплачены, официант вернёт лишнее
       if (r.status === 'failed') throw new Error(r.reason ? `Оплата не прошла: ${r.reason}` : 'Оплата не прошла');
       if (i < tries - 1) await new Promise((res) => setTimeout(res, 2000));
     }
@@ -1930,7 +2035,7 @@
         <div class="bill-guests">${guests.map((g) => `<label class="bill-guest">
             <input type="checkbox" data-bill-guest="${esc(g.id)}" ${picked.has(String(g.id)) ? 'checked' : ''}>
             <span class="bill-guest__box">${ICONS.check}</span>
-            <span class="bill-guest__name">${esc(g.name)}${String(g.id) === me ? ' <i>(вы)</i>' : ''}</span>
+            <span class="bill-guest__name" dir="auto">${esc(g.name)}${String(g.id) === me ? ' <i>(вы)</i>' : ''}</span>
             <b>${rub(sumOf(g.id))}</b></label>`).join('')}
           ${noGuest ? `<div class="bill-guest bill-guest--note"><span class="bill-guest__name">Добавил официант, без гостя</span><b>${rub(noGuest)}</b></div>` : ''}
         </div>
@@ -2273,6 +2378,7 @@
     else if (action === 'reload-catalog') { S.catalogError = null; render(); loadCatalog(); }
     else if (action === 'ask-ai-search') { const q = S.menu.search; S.menu.search = ''; go('ai'); askAi(q); }
     else if (action === 'feedback') openFeedbackSheet();
+    else if (action === 'profile') openProfileSheet();
     else if (action === 'new-visit') newVisit();
     else if (action === 'clear') {
       if (!confirm('Убрать из корзины всё, что ещё не передано официанту?')) return;
@@ -2408,7 +2514,7 @@
     const fujiToken = params.get('fujiToken');
     if (fujiToken) {
       history.replaceState(null, '', location.pathname);
-      try { await onLoggedIn(await api('POST', '/api/v1/guest/fuji', { token: fujiToken })); } catch (e) { toast(e.message, true); }
+      openFujiConsentSheet(fujiToken); // вход по токену приложения — только после явного согласия
       return;
     }
     if (!S.token) return;

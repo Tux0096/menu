@@ -8,6 +8,7 @@
 import { notifyOrderReady } from './guest-push.js';
 import { uuidOrNull } from '../lib/uuid.js';
 import pool from '../db/pool.js';
+import { cleanText, cleanTextLoose } from '../lib/sanitize.js';
 import { isValidQrKey, QR_RESTAURANT_SLUG, qrSignedRequired } from '../lib/qr-config.js';
 import {
   IDLE_REMINDER_MS,
@@ -37,7 +38,7 @@ import {
   rubText, billText, callText, cookSlowText, newOrderText, readyText, readyWaitText, reorderText, removedText, waitText,
 } from '../lib/notification-text.js';
 import { arriveByQr } from './reservations.js';
-import { RESERVE_TZ, STATE_LABELS, clockText, reserveState } from '../lib/iiko-reserve-sync.js';
+import { STATE_LABELS, clockText, reserveState, reserveTz } from '../lib/iiko-reserve-sync.js';
 import { getSource, productSourceMap } from './sources.js';
 import { alcoholView, assertAgeConfirmed, assertAlcoSale } from '../lib/alco-rules.js';
 import { assertHoursRows, menuIndex, priceLine, priceVariant, rowVariantKey, variantKey } from './menu-pricing.js';
@@ -47,6 +48,7 @@ import { isSessionBusy, withSessionMutex } from '../lib/session-mutex.js';
 import { withIikoCreds } from '../iiko-client.js';
 
 import { httpError } from '../lib/http.js';
+import { fromKop, sumKop } from '../lib/money.js';
 
 export { httpError };
 
@@ -244,14 +246,14 @@ function minutesSince(ts) {
 }
 
 /** Бронь визита для карточки стола: «Бронь 19:00 · Мария · 4 гостя · пришли / ждём». */
-function reservationOf(session) {
+function reservationOf(session, restaurant) {
   const state = reserveState({
     startsAt: session.rv_starts_at, status: session.rv_status || 'new', arrivedAt: session.rv_arrived_at,
     noShowAt: session.rv_no_show_at, sessionId: session.id,
   });
   return {
     id: session.reservation_id,
-    time: clockText(session.rv_starts_at, RESERVE_TZ),
+    time: clockText(session.rv_starts_at, reserveTz(restaurant)),
     guestName: session.reserve_guest_name || '',
     guests: session.rv_guests || session.guest_count || 1,
     comment: session.rv_comment || '',
@@ -296,7 +298,7 @@ export function mapSession({ session, restaurant, items, guests = [] }, extra = 
       visitsCount: session.guest_visits || 0,
     } : null,
     // Визит создан под бронь из iiko: время, имя и число гостей, пришли ли (телефон — только в списке «Брони»)
-    reservation: session.reservation_id ? reservationOf(session) : null,
+    reservation: session.reservation_id ? reservationOf(session, restaurant) : null,
     guestsAtTable: (session.guest_ids || []).length || (session.guest_id ? 1 : 0),
     guests: tableGuests({ guests }),
     readyCount: mapped.filter((i) => i.isReady).reduce((s, i) => s + i.quantity, 0),
@@ -346,7 +348,7 @@ export async function getSessionView(sessionId) {
   const onlinePaid = {
     wholeTable: paid.some((p) => !p.guest_ids),
     guestIds: [...new Set(paid.flatMap((p) => (p.guest_ids || []).map(String)))],
-    amount: paid.reduce((n, p) => n + parseFloat(p.amount || 0), 0),
+    amount: fromKop(sumKop(paid, (p) => p.amount)),
   };
   const view = mapSession(ctx, { feedbackLeft: Boolean(rows[0]), feedbackRating: rows[0]?.rating || null, onlinePaid });
   // Стоп-лист по неотправленным позициям: официант видит до отправки на кухню, что заказать нельзя
@@ -451,7 +453,7 @@ export async function enterTable({
         };
       }
     }
-    const cleanName = String(name || '').trim().slice(0, 100);
+    const cleanName = cleanText(name, 100, { label: 'Имя' });
     if (cleanName && cleanName !== guest.name) {
       await pool.query('UPDATE guests SET name = $2 WHERE id = $1', [guest.id, cleanName]);
       guest.name = cleanName;
@@ -552,7 +554,7 @@ function aggregateCart(cartItems) {
         sizeId,
         modifiers,
         // название — только для текста ошибки; цену и название в заказ ставит сервер по меню (priceLine)
-        name: String(item.name || 'Позиция').slice(0, 300),
+        name: cleanTextLoose(item.name, 300) || 'Позиция',
         quantity: qty,
         // Курс подачи 1–3 (гость выбирает в корзине); undefined — не менять
         course: item.course === undefined ? undefined : (Number(item.course) >= 1 && Number(item.course) <= 3 ? Number(item.course) : null),
@@ -715,6 +717,9 @@ export async function saveGuestCart(sessionId, cartItems, guestId, { ageConfirme
   return getSessionView(sessionId);
 }
 
+/** Окно дедупликации уведомления «Новый заказ» при параллельных отправках корзины, с */
+const SUBMIT_DEDUP_SEC = 10;
+
 /** «Передать официанту» / «Передать дозаказ» (кейсы 6, 9). */
 export async function submitToWaiter(sessionId, cartItems, guestId, { ageConfirmed = false } = {}) {
   let notify = null;
@@ -735,13 +740,20 @@ export async function submitToWaiter(sessionId, cartItems, guestId, { ageConfirm
 
     const isReorder = fresh.items.some((i) => i.is_locked);
     const status = isReorder ? WORKFLOW.REORDER_PENDING : WORKFLOW.CART_READY;
+    // Параллельные «Передать официанту» (двойной тап, две вкладки, повтор запроса): то же состояние за последние
+    // ~10 с — официант уже уведомлён, второе и третье «Новый заказ» не шлём
+    const { rows: dup } = await client.query(
+      `SELECT 1 FROM table_sessions WHERE id = $1 AND workflow_status = $2 AND cart_ready_at > NOW() - INTERVAL '${SUBMIT_DEDUP_SEC} seconds'`,
+      [sessionId, status],
+    );
     await client.query(
       `UPDATE table_sessions SET workflow_status = $2, cart_ready_at = NOW(), wait_notified_at = NULL,
          last_guest_activity_at = NOW(), updated_at = NOW()
        WHERE id = $1`,
       [sessionId, status],
     );
-    const sum = pending.reduce((s, i) => s + Number(i.line_total), 0);
+    if (dup.length) return;
+    const sum = fromKop(sumKop(pending, (i) => i.line_total));
     notify = {
       restaurantId: fresh.restaurant.id,
       sessionId,
@@ -755,7 +767,7 @@ export async function submitToWaiter(sessionId, cartItems, guestId, { ageConfirm
       mergeLines: isReorder,
     };
   }));
-  await createWaiterNotification(notify);
+  if (notify) await createWaiterNotification(notify);
   return getSessionView(sessionId);
 }
 
@@ -792,7 +804,7 @@ export async function requestBill(sessionId, { guest = null, guestIds = null, me
   const barOnly = part === 'bar';
   const pay = BILL_METHODS[method] ? method : null;
   const lines = sent.filter((i) => (!barOnly || (i.source || 'main') !== 'main') && (whole || ids.includes(String(i.guest_id))));
-  const amount = lines.reduce((n, i) => n + parseFloat(i.line_total || 0), 0);
+  const amount = fromKop(sumKop(lines, (i) => i.line_total));
   const names = whole ? [] : ids.map((id) => guests.find((g) => String(g.id) === id)?.name || 'Гость');
   const by = guest ? (guests.find((g) => String(g.id) === String(guest.id))?.name || guest.name || 'Гость') : null;
   const request = {
@@ -840,8 +852,9 @@ export async function callWaiter(sessionId, reason = 'general', comment = '') {
   if (reason === 'bill' && ctx.items.length && ctx.session.payment_status !== 'paid') {
     return { ok: true, message: 'Официант скоро принесёт счёт', session: await requestBill(sessionId) };
   }
-  const text = CALL_REASONS[reason] || CALL_REASONS.general;
-  const call = callText({ table: ctx.session.table_number, reasonText: text.charAt(0).toLowerCase() + text.slice(1), comment });
+  const text = CALL_REASONS[typeof reason === 'string' ? reason : 'general'] || CALL_REASONS.general;
+  const cleanComment = cleanText(comment, 200, { multiline: true, label: 'Комментарий' });
+  const call = callText({ table: ctx.session.table_number, reasonText: text.charAt(0).toLowerCase() + text.slice(1), comment: cleanComment });
   if (await recentlyNotified(sessionId, NOTIFY_TYPES.CALL_WAITER, call.title, call.body, CALL_COOLDOWN_SEC)) {
     return { ok: true, message: 'Официант уже вызван — скоро подойдёт', tableNumber: ctx.session.table_number, repeated: true };
   }
@@ -930,16 +943,17 @@ export async function payBill(sessionId, { method = 'card', tipAmount = 0 } = {}
 
 // ── Отзыв (кейс 11) ─────────────────────────────────────────────────────────
 
-export async function submitFeedback(sessionId, { rating, comment = '' }) {
+export async function submitFeedback(sessionId, { rating, comment = '', guestId = null }) {
+  const cleanComment = cleanText(comment, 2000, { multiline: true, label: 'Отзыв' });
   const ctx = await requireContext(sessionId);
   // Отзыв — о визите: оставить его можно только после того, как заказ ушёл на кухню
   if (!ctx.items.some((i) => i.is_locked)) throw httpError(400, 'Отзыв можно оставить после заказа');
   const r = Math.round(Number(rating));
   if (!(r >= 1 && r <= 5)) throw httpError(400, 'Оценка от 1 до 5');
   const { rowCount } = await pool.query(
-    `INSERT INTO visit_feedback (session_id, rating, comment) VALUES ($1, $2, $3)
+    `INSERT INTO visit_feedback (session_id, rating, comment, guest_id) VALUES ($1, $2, $3, $4)
      ON CONFLICT (session_id) DO NOTHING`,
-    [sessionId, r, String(comment || '').slice(0, 2000)],
+    [sessionId, r, cleanComment, guestId],
   );
   if (!rowCount) return { ok: true, alreadySent: true };
   if (r <= 3) {
@@ -949,8 +963,8 @@ export async function submitFeedback(sessionId, { rating, comment = '' }) {
       tableNumber: ctx.session.table_number,
       type: NOTIFY_TYPES.NEGATIVE_FEEDBACK,
       title: `Стол №${ctx.session.table_number} — низкая оценка ${r}/5`,
-      body: comment || `Гость ${ctx.session.guest_name || ''} поставил ${r}/5`.trim(),
-      payload: { sessionId, rating: r, comment },
+      body: cleanComment || `Гость ${ctx.session.guest_name || ''} поставил ${r}/5`.trim(),
+      payload: { sessionId, rating: r, comment: cleanComment },
     });
   }
   return { ok: true };
@@ -1003,7 +1017,7 @@ export async function runServiceChecks() {
     `UPDATE table_sessions SET status = 'closed', workflow_status = CASE WHEN payment_status = 'paid' THEN 'paid' ELSE 'closed' END,
        closed_at = NOW(), updated_at = NOW()
      WHERE status = 'open'
-       AND COALESCE(last_guest_activity_at, updated_at::timestamptz, created_at::timestamptz) < NOW() - INTERVAL '12 hours'`,
+       AND COALESCE(last_guest_activity_at, updated_at, created_at) < NOW() - INTERVAL '12 hours'`,
   );
 
   const { rows: idle } = await pool.query(
@@ -1376,11 +1390,11 @@ async function refreshFromIikoNow(sessionId, prefetched = null) {
       if (st !== row.kitchen_status) {
         // Фиксируем время: начали готовить / стало готово; сколько готовилось — по iiko, иначе от «Готовится» (или отправки) до готовности
         await pool.query(
-          `UPDATE table_order_items SET kitchen_status = $2,
-             cooking_started_at = CASE WHEN $2 = 'CookingStarted' THEN COALESCE(cooking_started_at, NOW()) ELSE cooking_started_at END,
-             ready_at = CASE WHEN $2 = 'CookingCompleted' THEN COALESCE(ready_at, NOW()) ELSE ready_at END,
-             cook_minutes = CASE WHEN $2 = 'CookingCompleted' AND cook_minutes IS NULL
-               THEN COALESCE($3::numeric, ROUND((EXTRACT(EPOCH FROM (NOW() - COALESCE(cooking_started_at, sent_at::timestamptz, updated_at::timestamptz))) / 60)::numeric, 2))
+          `UPDATE table_order_items SET kitchen_status = $2::text,
+             cooking_started_at = CASE WHEN $2::text = 'CookingStarted' THEN COALESCE(cooking_started_at, NOW()) ELSE cooking_started_at END,
+             ready_at = CASE WHEN $2::text = 'CookingCompleted' THEN COALESCE(ready_at, NOW()) ELSE ready_at END,
+             cook_minutes = CASE WHEN $2::text = 'CookingCompleted' AND cook_minutes IS NULL
+               THEN COALESCE($3::numeric, ROUND((EXTRACT(EPOCH FROM (NOW() - COALESCE(cooking_started_at, sent_at, updated_at))) / 60)::numeric, 2))
                ELSE cook_minutes END
            WHERE id = $1 AND served_at IS NULL`,
           [row.id, st, cookOf(row)],

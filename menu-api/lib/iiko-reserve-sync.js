@@ -8,10 +8,16 @@
  *  — поиск брони по имени гостя без разницы ё/е и маска телефона (searchReserves, maskPhone).
  * В iiko мы только читаем: ничего из этого файла в iiko не пишет.
  */
-import { DEFAULT_TZ, localParts } from './lunch-schedule.js';
+import { DEFAULT_TZ, localParts, validTz } from './lunch-schedule.js';
 
 /** Часовой пояс точек: время брони в iiko — местное время терминальной группы. */
 export const RESERVE_TZ = process.env.RESERVE_TZ || DEFAULT_TZ;
+/** Часовой пояс точки: restaurants.timezone; нет (или битый) — RESERVE_TZ из окружения, затем Самара. */
+export function reserveTz(restaurant) {
+  const tz = restaurant?.timezone;
+  if (tz && validTz(tz)) return tz;
+  return RESERVE_TZ;
+}
 /** Рабочие сутки точки начинаются в это время: «сегодня и завтра до утра» = с 05:00 до 05:00. */
 export const BUSINESS_DAY_START_HOUR = 5;
 /** Бронь без длительности в ответе iiko считаем двухчасовой. */

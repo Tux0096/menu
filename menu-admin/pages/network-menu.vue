@@ -153,10 +153,7 @@ async function syncPoint(p: NetworkPoint) {
   }
 }
 // Метки блюда в строке — те же цвета, что у гостя
-const tagStyle = (b: string) => {
-  const t = TAGS.find((x) => x.value === b);
-  return t ? { background: t.bg, color: t.color } : { background: '#F1F5F9', color: '#475569' };
-};
+const tagClass = (b: string) => TAGS.find((x) => x.value === b)?.cls ?? TAG_FALLBACK_CLS;
 const tagLabel = (b: string) => (BADGES[b] || b).replace(/\s*\(.*\)$/, '');
 const setupPoint = ref<NetworkPoint | null>(null);
 // Подвкладки: блюда (общие карточки) и разделы меню (порядок, названия, картинки шторки «Меню»)
@@ -367,8 +364,8 @@ function openItem(it: NetworkItem, tab: 'card' | 'availability' = 'card') {
                     <span
                       v-for="b in badgeList(it.badge)"
                       :key="b"
-                      class="shrink-0 rounded-full px-1.5 text-[10px] font-semibold"
-                      :style="tagStyle(b)"
+                      class="shrink-0 rounded-full px-1.5 text-3xs font-semibold"
+                      :class="tagClass(b)"
                     >{{ tagLabel(b) }}</span>
                     <UBadge v-if="it.cardSize === 'big'" color="primary" variant="subtle" size="xs">большая</UBadge>
                   </div>

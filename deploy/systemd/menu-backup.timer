@@ -1,0 +1,11 @@
+[Unit]
+Description=Fuji Menu: ежедневная резервная копия в 04:30
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+# Сервер был выключен в 04:30 — копия сделается при включении
+Persistent=true
+Unit=menu-backup.service
+
+[Install]
+WantedBy=timers.target

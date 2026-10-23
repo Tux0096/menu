@@ -210,7 +210,7 @@ async function toggleActive(b: Banner) {
     <div v-else class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
       <div v-for="b in rows" :key="b.id" class="panel-box flex flex-col overflow-hidden">
         <button type="button" class="relative aspect-[2/1] w-full overflow-hidden bg-brand-50 text-left" @click="edit(b)">
-          <img v-if="b.image_url" :src="b.image_url" alt="" class="h-full w-full object-cover" loading="lazy" @error="hideBrokenImage" />
+          <img v-if="b.image_url" :src="thumbUrl(b.image_url, 640)" alt="" class="h-full w-full object-cover" loading="lazy" @error="hideBrokenImage" />
           <div v-else class="flex h-full items-center justify-center p-4 text-center text-lg font-semibold text-brand-300">{{ b.title }}</div>
           <UBadge :color="state(b).color" variant="solid" size="xs" class="absolute left-3 top-3">{{ state(b).label }}</UBadge>
         </button>
@@ -287,11 +287,11 @@ async function toggleActive(b: Banner) {
             <div class="mb-2 text-xs font-medium uppercase tracking-wider text-slate-500">Как увидит гость</div>
             <div class="rounded-[28px] bg-cream p-3 ring-1 ring-brand-100">
               <div class="relative aspect-[2/1] overflow-hidden rounded-2xl bg-brand-500">
-                <img v-if="form.image_url" :src="form.image_url" alt="" class="h-full w-full object-cover" @error="hideBrokenImage" />
+                <img v-if="form.image_url" :src="thumbUrl(form.image_url, 640)" alt="" class="h-full w-full object-cover" @error="hideBrokenImage" />
                 <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
                 <div class="absolute bottom-2 left-3 right-3 text-white">
                   <div class="truncate text-sm font-semibold">{{ form.title || 'Заголовок баннера' }}</div>
-                  <div v-if="form.text" class="truncate text-[11px] opacity-90">{{ form.text }}</div>
+                  <div v-if="form.text" class="truncate text-2xs opacity-90">{{ form.text }}</div>
                 </div>
               </div>
               <div class="mt-3 space-y-1.5">

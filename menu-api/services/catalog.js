@@ -7,7 +7,7 @@
 import pool from '../db/pool.js';
 import { categoryKey, cleanMenuName, menuKey } from '../lib/menu-key.js';
 import { isAlcoholName } from '../lib/alco.js';
-import { alcoPublic } from '../lib/alco-rules.js';
+import { alcoPublic, normalizeAlcoRules } from '../lib/alco-rules.js';
 import { assignDishVariants, dishCardKey } from '../lib/dish-key.js';
 import { orderGroups } from './menu-order.js';
 import { getStopIndex } from './stoplist.js';
@@ -528,7 +528,7 @@ async function buildRestaurantCatalog(restaurant, { force = false } = {}) {
     products: lunch.products,
     businessLunch: lunch.businessLunch,
     // Правила продажи алкоголя точки: гость видит плашку 18+, часы и «сейчас не продаётся»
-    alcohol: alcoPublic(restaurant.alcohol_rules),
+    alcohol: alcoPublic(normalizeAlcoRules(restaurant.alcohol_rules, restaurant.timezone)), // без своего пояса в правилах — пояс точки
     stopList: [...stop],
     source: raw.source,
     fetchedAt: raw.fetchedAt || new Date(raw.at).toISOString(),

@@ -6,6 +6,7 @@ import { httpError } from '../lib/http.js';
 import { getRestaurantCatalog } from './catalog.js';
 import { assertLunchOpen } from '../lib/lunch-schedule.js';
 import { assertCategoryOpen } from '../lib/category-hours.js';
+import { fromKop, toKop } from '../lib/money.js';
 
 /** Сколько штук одной позиции можно заказать за раз (защита от опечаток и переполнения сумм) */
 export const MAX_LINE_QTY = 50;
@@ -32,7 +33,7 @@ export async function menuIndex(restaurant) {
   for (const p of catalog.products || []) {
     const entry = {
       name: String(p.name || 'Позиция').slice(0, 300),
-      price: Math.round((Number(p.price) || 0) * 100) / 100,
+      price: fromKop(toKop(Number(p.price) || 0)),
       isInStopList: Boolean(p.isInStopList),
       balance: Number(p.stopBalance) > 0 ? Number(p.stopBalance) : null, // ограниченный остаток в iiko
       base: p.basePrice ?? null,
@@ -149,7 +150,7 @@ export function priceVariant(entry, key, { sizeId = null, modifiers = [], defaul
   }
   if (!groups.length && wanted.size) throw httpError(400, `«${name}»: у блюда больше нет дополнений — выберите заново`);
   const mods = [];
-  let extra = 0;
+  let extraKop = 0; // доплата за выбор — в целых копейках
   for (const g of groups) {
     let picked = g.items.filter((it) => wanted.has(String(it.id))).map((it) => ({ it, amount: wanted.get(String(it.id)) }));
     for (const x of picked) wanted.delete(String(x.it.id));
@@ -178,13 +179,14 @@ export function priceVariant(entry, key, { sizeId = null, modifiers = [], defaul
       if (x.it.max > 0 && x.amount > x.it.max) throw httpError(400, `«${name}»: «${x.it.name}» — не больше ${x.it.max}`);
     }
     // Бесплатные единицы группы — самые дешёвые
-    const units = picked.flatMap((x) => Array(x.amount).fill(x.it.price || 0)).sort((a, b) => a - b);
-    extra += units.slice(Math.min(g.free || 0, units.length)).reduce((n, v) => n + v, 0);
+    const units = picked.flatMap((x) => Array(x.amount).fill(toKop(x.it.price || 0))).sort((a, b) => a - b);
+    extraKop += units.slice(Math.min(g.free || 0, units.length)).reduce((n, v) => n + v, 0);
     for (const x of picked) mods.push({ id: String(x.it.id), groupId: g.id, name: x.it.name, amount: x.amount, price: x.it.price || 0 });
   }
   if (wanted.size) throw httpError(400, `«${name}»: часть дополнений больше недоступна — выберите заново`);
   const base = size ? size.price : (entry.base ?? entry.price);
-  const price = Math.round((base + extra) * 100) / 100;
+  const price = fromKop(toKop(base) + extraKop);
+  const extra = fromKop(extraKop);
   // Набор «Собери свой ланч»: база 0, цена в блюдах — без платного выбора продавать нечего
   if ((size ? size.needsChoice : entry.needsChoice) && !(extra > 0)) throw httpError(400, `«${name}»: выберите состав набора`);
   const text = [size?.name || null, ...mods.map((m) => (m.amount > 1 ? `${m.name} ×${m.amount}` : m.name))].filter(Boolean).join(', ');

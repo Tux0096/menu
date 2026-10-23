@@ -4,12 +4,12 @@ import { MEDIA_DIR } from '../lib/paths.js';
 import { join } from 'path';
 import { mkdirSync, writeFileSync } from 'fs';
 import { randomUUID } from 'crypto';
-import { h, httpError, requireBody } from '../lib/http.js';
+import { h, httpError, requireBody, rateLimit, sendError } from '../lib/http.js';
 import pool from '../db/pool.js';
 import { isIikoDemo, accessibleOrgs, iikoRequest, withIikoCreds } from '../iiko-client.js';
 import { iikoCredsList, iikoCredsLabel, iikoApiLogin, maskIikoKey } from '../lib/iiko-token.js';
 import { listSources } from '../services/sources.js';
-import { paySettingsForAdmin, savePaySettings } from '../services/payments.js';
+import { paySettingsForAdmin, resetPayKeys, savePaySettings } from '../services/payments.js';
 import { listStopLists, refreshStopLists } from '../services/stoplist.js';
 import { getRestaurantCatalog, invalidateCatalogCache } from '../services/catalog.js';
 import { bumpCatalogVersion } from '../lib/catalog-version.js';
@@ -269,9 +269,20 @@ admin.post('/point-info', h(async (req) => {
 }));
 // База сотрудников «Фуджи Тим» (вход на of. по табельному): подключение, структура базы (без данных),
 // запрос сотрудников — проверка и сохранение. Строка подключения — только на сервере (GitHub Secret FUJI_TEAM_DATABASE_URL)
+// Только администратор сети (сотрудник без привязки к точке): здесь строка подключения к базе и список сотрудников
+const requireNetworkAdmin = (req, res, next) => (req.staff.restaurantId
+  ? sendError(res, httpError(403, 'Настройка общая для сети — её меняет администратор сети'), req)
+  : next());
+const teamTestLimit = rateLimit({ windowMs: 60_000, max: 10, message: 'Слишком много проверок — подождите минуту' });
+admin.use('/fuji-team', requireNetworkAdmin);
 admin.get('/fuji-team', h(async () => teamStatus()));
 admin.get('/fuji-team/schema', h(async () => teamSchema()));
-admin.post('/fuji-team/test', h(async (req) => testStaffQuery(req.body?.query)));
+admin.post('/fuji-team/test', teamTestLimit, h(async (req) => {
+  const out = await testStaffQuery(req.body?.query);
+  // В аудит — только числа, без имён и кодов сотрудников
+  audit(req.staff, 'fuji_team.test', 'settings', 'fuji_team', { total: out.total, active: out.active });
+  return out;
+}));
 admin.put('/fuji-team', h(async (req) => {
   const out = await saveStaffQuery(req.body?.query);
   audit(req.staff, 'fuji_team.query', 'settings', 'fuji_team', { length: out.query.length });
@@ -282,12 +293,12 @@ admin.put('/fuji-team', h(async (req) => {
 // Гость и официант видят их в карточках позиций и над заказом; сервер отклоняет заказ алкоголя вне правил
 admin.get('/alcohol', h(async (req) => {
   const r = await staffRestaurant(req);
-  const rules = normalizeAlcoRules(r.alcohol_rules);
+  const rules = normalizeAlcoRules(r.alcohol_rules, r.timezone);
   return { ...rules, preview: alcoPublic(rules) };
 }));
 admin.post('/alcohol', h(async (req) => {
   const r = await staffRestaurant(req);
-  const rules = validateAlcoRules(req.body);
+  const rules = validateAlcoRules(req.body, r.timezone);
   // Каталог гостя пересоберётся сам: любая успешная правка админки сбрасывает его версию
   await pool.query('UPDATE restaurants SET alcohol_rules = $2 WHERE id = $1', [r.id, JSON.stringify(rules)]);
   audit(req.staff, 'restaurant.alcohol', 'restaurant', r.slug, {
@@ -335,6 +346,13 @@ admin.post('/payments', h(async (req) => {
   audit(req.staff, 'payments.save', 'restaurant', r.slug, {
     onlineEnabled: res.onlineEnabled, publicId: res.publicId, secretChanged: Boolean(req.body?.apiSecret || req.body?.clearSecret),
   });
+  return res;
+}));
+// Сбросить ключи точки: дальше она платит по общим ключам сервера (тестовые ключи точки перекрывали рабочие общие)
+admin.post('/payments/reset-keys', h(async (req) => {
+  const r = await staffRestaurant(req);
+  const res = await resetPayKeys(r.id);
+  audit(req.staff, 'payments.reset-keys', 'restaurant', r.slug, { publicIdSource: res.publicIdSource });
   return res;
 }));
 admin.get('/sources', h(async (req) => {
@@ -437,8 +455,8 @@ for (const [path, table] of [['chips', 'ai_chips'], ['promos', 'promo_blocks']])
     audit(req.staff, `${path}.delete`, table, req.params.id);
   }));
 }
-admin.get('/feedback', h(async (req) => listFeedback((await staffRestaurant(req)).id)));
-admin.get('/audit', h(async (req) => listAudit(200, req.staff.restaurantId || null)));
+admin.get('/feedback', h(async (req) => listFeedback((await staffRestaurant(req)).id, req.query)));
+admin.get('/audit', h(async (req) => listAudit(req.query, req.staff.restaurantId || null)));
 // Вход официантов и управляющих зала через iiko включён — тогда в «Сотрудниках» только учётки админки
 admin.get('/staff/mode', h(async () => ({ iikoLogin: iikoStaffLoginEnabled() || fujiTeamEnabled(), source: fujiTeamEnabled() ? 'team' : 'iiko' })));
 admin.get('/staff', h(async (req) => listStaff(req.staff)));

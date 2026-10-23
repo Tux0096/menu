@@ -9,6 +9,8 @@ import axios from 'axios';
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import pool from '../db/pool.js';
 import { httpError } from '../lib/http.js';
+import { PRIVACY_VERSION } from '../lib/privacy.js';
+import { cleanList, cleanText, cleanTextLoose } from '../lib/sanitize.js';
 
 const LEGACY_API = process.env.LEGACY_API_URL || 'https://apiv2.infra-fuji.ru';
 const TOKEN_TTL_DAYS = parseInt(process.env.GUEST_TOKEN_TTL_DAYS || '30', 10);
@@ -31,6 +33,8 @@ function mapGuest(row) {
     allergens: row.allergens || [],
     visitsCount: row.visits_count || 0,
     isFujiUser: Boolean(row.fuji_user_id),
+    aiConsent: Boolean(row.ai_consent),
+    consentVersion: row.consent_version || null,
   };
 }
 
@@ -41,15 +45,18 @@ export function publicGuest(guest) {
   return rest;
 }
 
+/** Согласие на обработку ПДн отмечено при каждом входе: фиксируем время и версию политики, на которую оно дано */
 async function upsertGuest({ phone, name, fujiUserId = null }) {
   const { rows } = await pool.query(
-    `INSERT INTO guests (phone, name, fuji_user_id)
-     VALUES ($1, $2, $3)
+    `INSERT INTO guests (phone, name, fuji_user_id, consent_at, consent_version)
+     VALUES ($1, $2, $3, NOW(), $4)
      ON CONFLICT (phone) DO UPDATE SET
        name = COALESCE(NULLIF(guests.name, ''), NULLIF(EXCLUDED.name, '')), -- вход по номеру не меняет имя владельца
-       fuji_user_id = COALESCE(EXCLUDED.fuji_user_id, guests.fuji_user_id)
+       fuji_user_id = COALESCE(EXCLUDED.fuji_user_id, guests.fuji_user_id),
+       consent_at = NOW(),
+       consent_version = EXCLUDED.consent_version
      RETURNING *`,
-    [phone, name || null, fujiUserId],
+    [phone, name || null, fujiUserId, PRIVACY_VERSION],
   );
   return rows[0];
 }
@@ -64,10 +71,16 @@ async function issueToken(guestId) {
   return token;
 }
 
-export async function loginByPhone({ phone, name }) {
+/** Без явного согласия (consent === true) вход невозможен: галочка в форме не отмечена заранее */
+export function requireConsent(consent) {
+  if (consent !== true) throw httpError(400, 'Нужно согласие на обработку персональных данных');
+}
+
+export async function loginByPhone({ phone, name, consent }) {
+  requireConsent(consent);
   const normalized = normalizePhone(phone);
   if (!normalized) throw httpError(400, 'Введите номер телефона в формате +7 XXX XXX-XX-XX');
-  const cleanName = String(name || '').trim().slice(0, 100);
+  const cleanName = cleanText(name, 100, { label: 'Имя' });
   const guest = await upsertGuest({ phone: normalized, name: cleanName });
   const token = await issueToken(guest.id);
   return { token, guest: publicGuest(mapGuest(guest)) };
@@ -90,7 +103,8 @@ function verifyJwtLocally(parts, secret) {
 }
 
 /** Проверка токена приложения Fuji и загрузка профиля. */
-export async function loginByFujiToken(fujiToken) {
+export async function loginByFujiToken(fujiToken, { consent } = {}) {
+  requireConsent(consent);
   const decoded = decodeJwt(fujiToken);
   const phone = normalizePhone(decoded?.payload?.phone);
   if (!decoded || !phone) throw httpError(401, 'Недействительный токен приложения Fuji');
@@ -118,7 +132,7 @@ export async function loginByFujiToken(fujiToken) {
   }
   if (!verified) throw httpError(503, 'Не удалось проверить вход через приложение Fuji — попробуйте позже');
 
-  const name = profile?.name || profile?.firstName || profile?.user?.name || null;
+  const name = cleanTextLoose(profile?.name || profile?.firstName || profile?.user?.name, 100) || null;
   const guest = await upsertGuest({
     phone,
     name,
@@ -139,14 +153,19 @@ export async function getGuestByToken(token) {
   return mapGuest(rows[0]);
 }
 
-export async function updateGuestProfile(guestId, { name, allergens }) {
+/** aiConsent — отдельное согласие на передачу имени и аллергенов ИИ-помощнику (OpenRouter, за рубеж) */
+export async function updateGuestProfile(guestId, { name, allergens, aiConsent }) {
+  const cleanName = name === undefined || name === null ? '' : cleanText(name, 100, { label: 'Имя' });
+  const list = allergens === undefined || allergens === null ? null : cleanList(allergens, 30, 60, { label: 'Аллергены' });
+  if (aiConsent !== undefined && typeof aiConsent !== 'boolean') throw httpError(400, 'Согласие на ИИ: ожидается true или false');
   const { rows } = await pool.query(
     `UPDATE guests SET
        name = COALESCE($2, name),
-       allergens = COALESCE($3, allergens)
+       allergens = COALESCE($3, allergens),
+       ai_consent_at = CASE WHEN $4::boolean IS NULL OR $4::boolean = ai_consent THEN ai_consent_at ELSE NOW() END,
+       ai_consent = COALESCE($4::boolean, ai_consent)
      WHERE id = $1 RETURNING *`,
-    [guestId, name ? String(name).slice(0, 100) : null,
-      Array.isArray(allergens) ? allergens.slice(0, 30).map((a) => String(a).slice(0, 60)) : null],
+    [guestId, cleanName || null, list, aiConsent ?? null],
   );
   return publicGuest(mapGuest(rows[0]));
 }

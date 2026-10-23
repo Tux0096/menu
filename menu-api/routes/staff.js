@@ -50,9 +50,8 @@ router.post('/api/v1/staff/pin-login', h(async (req) => {
   }
   requireBody(req.body, 'restaurant', 'pin');
   const r = await resolveRestaurant(req.body.restaurant);
-  // Лимит попыток — по адресу и устройству: телефоны зала за одним Wi-Fi не блокируют друг друга
-  const device = String(req.get('X-Device-Id') || '').replace(/[^\w-]/g, '').slice(0, 64);
-  return pinLogin(r.id, req.body.pin, `${req.ip}|${device}`);
+  // Лимит попыток — по адресу и ресторану (X-Device-Id задаёт клиент — на него лимит не опираем), см. services/staff-auth.js
+  return pinLogin(r.id, req.body.pin, req.ip);
 }));
 router.get('/api/v1/staff/restaurants', staffAuth('waiter', ['marketing']), h(async (req) => {
   const list = await listRestaurants();
@@ -73,7 +72,7 @@ waiter.param('id', async (req, res, next, id) => {
 });
 waiter.get('/notifications', h(async (req) => {
   const r = await staffRestaurant(req);
-  return listWaiterNotifications(r.id, { unreadOnly: req.query.unread === '1', staff: req.staff });
+  return listWaiterNotifications(r.id, { unreadOnly: req.query.unread === '1', staff: req.staff, query: req.query });
 }));
 waiter.post('/notifications/read-all', h(async (req) => {
   const r = await staffRestaurant(req);
@@ -172,7 +171,7 @@ waiter.post('/devices', h(async (req) => {
   await registerDevice(req.staff, r.id, req.body.token, req.body.platform);
   return { ok: true, pushEnabled: isPushEnabled() };
 }));
-waiter.delete('/devices/:token', h(async (req) => { await unregisterDevice(req.params.token); }));
+waiter.delete('/devices/:token', h(async (req) => { await unregisterDevice(req.params.token, req.staff.id); }));
 // Официант смотрит стол — его блокировка продлевается (раньше через 2 минуты просмотра стол «уходил» другому)
 waiter.get('/session/:id', h(async (req) => {
   await pool.query(
@@ -232,7 +231,7 @@ waiter.post('/session/:id/close', h(async (req) => {
 const editAudited = new Map();
 router.use('/api/v1/waiter', waiter);
 
-router.get('/api/v1/manager/feedback', staffAuth('manager'), h(async (req) => listFeedback((await staffRestaurant(req)).id)));
+router.get('/api/v1/manager/feedback', staffAuth('manager'), h(async (req) => listFeedback((await staffRestaurant(req)).id, req.query)));
 router.get('/api/v1/manager/dashboard', staffAuth('manager'), h(async (req) => getHallDashboard((await staffRestaurant(req)).id)));
 // Брони на сегодня для админки: только просмотр, телефон маскирован
 router.get('/api/v1/manager/reservations', staffAuth('manager'), h(async (req) => {

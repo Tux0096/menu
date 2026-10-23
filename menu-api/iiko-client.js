@@ -63,6 +63,9 @@ function bgSlot() {
 /** Последний 429 от iiko: путь и когда можно снова — для текста ошибки и диагностики */
 let lastLimit = null;
 export const iikoLimitInfo = () => (lastLimit ? { ...lastLimit, coolingDown: iikoCoolingDown() } : null);
+// Сколько подряд iiko отвечает 429 (серия обрывается, если 429 не было 3 минуты) — для оповещения, если дольше 10 минут
+let limitStreakSince = 0;
+export const iikoLimitStreakMs = () => (lastLimit && Date.now() - Date.parse(lastLimit.at) < 3 * 60_000 ? Date.now() - limitStreakSince : 0);
 const shortPath = (path) => String(path).replace(/^\/api\/(1\/)?/, '');
 
 async function iikoPost(path, body, { retried = false, limited = false } = {}) {
@@ -90,6 +93,7 @@ async function iikoPost(path, body, { retried = false, limited = false } = {}) {
       const retryAfter = Number(e.response.headers?.['retry-after']);
       const waitSec = retryAfter > 0 ? Math.min(retryAfter, 300) : 60;
       coolingUntil = Date.now() + waitSec * 1000;
+      if (!lastLimit || Date.now() - Date.parse(lastLimit.at) > 3 * 60_000) limitStreakSince = Date.now();
       lastLimit = { path: shortPath(path), at: new Date().toISOString(), retryAfterSec: retryAfter > 0 ? retryAfter : null };
       console.warn(`iiko: лимит запросов (429) на ${path}, Retry-After ${retryAfter || '—'} — фоновые опросы на паузе ${waitSec} с`);
       // Запрос человека (вход, заказ): iiko просит подождать пару секунд — ждём и пробуем ещё раз

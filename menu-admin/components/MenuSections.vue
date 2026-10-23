@@ -168,7 +168,7 @@ const missingImages = computed(() => (list.value ?? []).filter((c) => !c.hidden 
         >
           <div class="flex w-8 shrink-0 cursor-grab flex-col items-center text-slate-400" title="Перетащите">
             <UIcon name="i-heroicons-bars-3" class="h-5 w-5" />
-            <span class="text-[11px]">{{ i + 1 }}</span>
+            <span class="text-2xs">{{ i + 1 }}</span>
           </div>
           <div class="flex shrink-0 flex-col">
             <UButton size="2xs" color="gray" variant="ghost" icon="i-heroicons-chevron-up" :disabled="i === 0" aria-label="Выше" @click="move(i, -1)" />
@@ -246,8 +246,8 @@ const missingImages = computed(() => (list.value ?? []).filter((c) => !c.hidden 
         <div v-for="c in previewTiles" :key="c.key" class="flex h-24 flex-col items-center justify-center gap-1 rounded-xl p-1 text-center ring-1 ring-slate-300">
           <img v-if="shown(c)" :src="thumbUrl(shown(c), 160)" alt="" class="h-12 w-14 object-contain" />
           <UIcon v-else name="i-heroicons-photo" class="h-8 w-8 text-slate-300" />
-          <span class="line-clamp-2 text-[10px] leading-tight">{{ c.title || c.name }}</span>
-          <span v-if="hoursText(c)" class="rounded bg-amber-50 px-1 text-[9px] leading-tight text-amber-700">{{ hoursText(c) }}</span>
+          <span class="line-clamp-2 text-3xs leading-tight">{{ c.title || c.name }}</span>
+          <span v-if="hoursText(c)" class="rounded bg-amber-50 px-1 text-nano leading-tight text-amber-700">{{ hoursText(c) }}</span>
         </div>
       </div>
       <p v-if="!previewTiles.length" class="py-6 text-center text-xs text-slate-500">Во вкладке нет разделов</p>

@@ -1,4 +1,17 @@
 /* Фуджи — терминал персонала: официант / управляющий / администратор */
+/* Ошибки браузера → POST /api/v1/client-errors (в журнал сервера; без ПДн, не больше 5 за сеанс) */
+(() => {
+  let sent = 0;
+  const send = (message, source, line, col, stack) => {
+    if (sent++ >= 5) return;
+    try {
+      fetch('/api/v1/client-errors', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ app: 'staff', message: String(message || '').slice(0, 300), source: String(source || '').slice(0, 200), line, col, stack: String(stack || '').slice(0, 1200) }) }).catch(() => {});
+    } catch { /* мониторинг не должен ломать страницу */ }
+  };
+  window.addEventListener('error', (e) => send(e.message, e.filename, e.lineno, e.colno, e.error && e.error.stack));
+  window.addEventListener('unhandledrejection', (e) => send(e.reason && e.reason.message || e.reason, '', 0, 0, e.reason && e.reason.stack));
+})();
 (() => {
   'use strict';
 
@@ -7,6 +20,15 @@
   const rub = (n) => `${Math.round(Number(n) || 0).toLocaleString('ru-RU')} ₽`;
   const time = (iso) => (iso ? new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '');
   const dateTime = (iso) => (iso ? new Date(iso).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }) : '');
+  // Фото iiko и загруженные в админке — мегабайты: в терминале берём уменьшенную копию через /img (WebP), как в меню гостя
+  const imgUrl = (src, w = 160) => (/^https?:\/\//.test(src || '') || /^\/media\//.test(src || '') ? `/img?w=${w}&u=${encodeURIComponent(src)}` : src || '');
+  const NET_MSG = 'Нет связи с сервером — проверьте интернет и повторите';
+  /** fetch с понятной ошибкой при обрыве сети (вместо «Failed to fetch») */
+  async function xfetch(url, opts) {
+    try { return await fetch(url, opts); } catch (e) {
+      const err = new Error(NET_MSG); err.network = true; throw err;
+    }
+  }
   const ls = {
     get(k, d = null) { try { return JSON.parse(localStorage.getItem(`fs:${k}`)) ?? d; } catch { return d; } },
     set(k, v) { try { localStorage.setItem(`fs:${k}`, JSON.stringify(v)); } catch { /* noop */ } },
@@ -71,7 +93,7 @@
   async function api(method, path, body) {
     const sep = path.includes('?') ? '&' : '?';
     const url = S.restaurant && !path.startsWith('/api/v1/staff/login') ? `${path}${sep}restaurant=${encodeURIComponent(S.restaurant)}` : path;
-    const res = await fetch(url, {
+    const res = await xfetch(url, {
       method,
       headers: { 'Content-Type': 'application/json', ...(S.token ? { Authorization: `Bearer ${S.token}` } : {}) },
       body: body ? JSON.stringify(body) : undefined,
@@ -119,6 +141,7 @@
     loginMode = ls.get('loginMode') === 'password' || (HOST === 'admin' && ls.get('loginMode') !== 'staff') ? 'password' : serverMode;
   }
   async function renderLogin(err = '', choose = null) {
+    lastHtml = ''; netBanner('');
     await resolveLoginMode();
     if (loginMode === 'pin' && !loginRests) {
       loginRests = await fetch('/api/v1/restaurants').then((r) => r.json()).catch(() => []);
@@ -155,7 +178,7 @@
       start();
     };
     const iikoLogin = async (pin, restaurant) => {
-      const r = await fetch('/api/v1/staff/pin-login', {
+      const r = await xfetch('/api/v1/staff/pin-login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Device-Id': deviceId() },
         body: JSON.stringify({ pin, restaurant: restaurant || undefined }),
@@ -185,7 +208,7 @@
           done(r.res);
         } else if (loginMode === 'pin') {
           ls.set('pinRestaurant', f.get('restaurant'));
-          const r = await fetch('/api/v1/staff/pin-login', {
+          const r = await xfetch('/api/v1/staff/pin-login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'X-Device-Id': deviceId() },
             body: JSON.stringify({ restaurant: f.get('restaurant'), pin: f.get('pin') }),
@@ -209,7 +232,7 @@
     };
     return byCode[res.code] || res.error || `Ошибка ${status}`;
   }
-  function logout() { S.token = null; S.staff = null; ls.del('token'); ls.del('staff'); renderLogin(); }
+  function logout() { S.loaded = {}; S.token = null; S.staff = null; ls.del('token'); ls.del('staff'); renderLogin(); }
 
   // ── Каркас ─────────────────────────────────────────────────
   function shell(content) {
@@ -229,28 +252,72 @@
     </div>`;
   }
 
-  async function render() {
+  // Экран загрузки при первом открытии вкладки (дальше — тихое обновление без «пустого» экрана)
+  const skeleton = () => `<div class="skel" role="status" aria-label="Загрузка">
+    <div class="skel__row"></div><div class="skel__row"></div><div class="skel__row"></div><div class="skel__row skel__row--short"></div>
+  </div>`;
+  const loadedKey = () => `${S.restaurant}:${S.tab}`;
+  let lastHtml = '';
+  let renderSeq = 0;
+  /** Показать/скрыть плашку «нет связи» поверх уже нарисованного экрана (фоновый опрос не стирает экран ошибкой) */
+  function netBanner(msg) {
+    let el = $('#net-banner');
+    if (!msg) { el?.remove(); return; }
+    if (!el) { el = document.createElement('div'); el.id = 'net-banner'; el.className = 'net-banner'; el.setAttribute('role', 'status'); document.body.appendChild(el); }
+    el.textContent = msg;
+  }
+  /** Заменить разметку, только если она изменилась: нет мерцания при опросе, прокрутка сохраняется. */
+  function paint(html) {
+    if (html === lastHtml) return false;
+    const y = window.scrollY;
+    const app = $('#app');
+    const inner = app.querySelector('.main');
+    const innerY = inner ? inner.scrollTop : 0;
+    const tabsScroll = $('.tabs')?.scrollLeft || 0;
+    app.innerHTML = html;
+    lastHtml = html;
+    const main = app.querySelector('.main');
+    if (main && innerY) main.scrollTop = innerY;
+    if (y && window.scrollY !== y) window.scrollTo(0, y);
+    const tabsEl = $('.tabs');
+    if (tabsEl) tabsEl.scrollLeft = tabsScroll;
+    return true;
+  }
+
+  async function render({ poll = false } = {}) {
     if (!S.staff) return; // экран входа: фоновые таймеры не рисуют рабочий экран
     const tabs = roleTabs(S.staff.role).map(([k]) => k);
     if (!tabs.includes(S.tab)) S.tab = tabs[0];
     const view = VIEWS[S.tab];
+    const key = loadedKey();
+    const seq = ++renderSeq;
+    if (!S.loaded?.[key] && !poll) paint(shell(skeleton()));
     try {
-      const tabsScroll = $('.tabs')?.scrollLeft || 0;
-      $('#app').innerHTML = shell(await view.render());
+      const html = shell(await view.render());
+      if (seq !== renderSeq || !S.staff) return; // за время загрузки вкладку/ресторан сменили — этот ответ устарел
+      (S.loaded ||= {})[key] = true;
+      netBanner('');
+      const changedDom = paint(html);
       // Телефон, открыт стол: общая шапка скрыта — у экрана стола своя, со стрелкой «назад»
       document.body.classList.toggle('table-open', S.tab === 'tables' && Boolean(S.openId && S.edit));
-      // Лента вкладок на телефоне: сохраняем прокрутку и показываем активную вкладку
+      if (!changedDom) return;
+      // Лента вкладок на телефоне: показываем активную вкладку
       const tabsEl = $('.tabs');
       const active = $('.tabs .is-active');
-      if (tabsEl) {
-        tabsEl.scrollLeft = tabsScroll;
-        if (active && (active.offsetLeft < tabsEl.scrollLeft || active.offsetLeft + active.offsetWidth > tabsEl.scrollLeft + tabsEl.clientWidth)) {
-          tabsEl.scrollLeft = active.offsetLeft - 12;
-        }
+      if (tabsEl && active && (active.offsetLeft < tabsEl.scrollLeft || active.offsetLeft + active.offsetWidth > tabsEl.scrollLeft + tabsEl.clientWidth)) {
+        tabsEl.scrollLeft = active.offsetLeft - 12;
       }
       view.mounted?.();
     } catch (e) {
-      $('#app').innerHTML = shell(`<div class="card error-box">${esc(e.message)}</div>`);
+      if (seq !== renderSeq || !S.staff) return;
+      // Фоновое обновление не удалось, а экран уже есть — оставляем его и говорим про связь
+      if (poll && S.loaded?.[key]) { netBanner(e.network ? NET_MSG : `Не удалось обновить: ${e.message}`); return; }
+      netBanner('');
+      paint(shell(`<div class="card error-box error-box--retry" role="alert">
+        <div class="error-box__title">${e.network ? 'Нет связи с сервером' : 'Не удалось загрузить'}</div>
+        <div class="error-box__text">${esc(e.network ? 'Проверьте интернет или Wi-Fi и повторите.' : e.message)}</div>
+        <button class="btn btn--dark" type="button" data-retry>Повторить</button>
+      </div>`));
     }
   }
 
@@ -302,7 +369,7 @@
   const RSV_TONE = { arrived: 'ok', waiting: 'wait', upcoming: 'wait', no_show: 'bad', cancelled: 'bad', closed: '' };
   function reserveBadge(r) {
     const who = [`Бронь ${r.time}`, r.guestName, guestsWord(r.guests)].filter(Boolean).map(esc).join(' · ');
-    return `<span class="rsv-badge" data-tone="${RSV_TONE[r.state] || ''}">${who} · <b>${esc(r.stateLabel || '')}</b></span>`;
+    return `<span class="rsv-badge" dir="auto" data-tone="${RSV_TONE[r.state] || ''}">${who} · <b>${esc(r.stateLabel || '')}</b></span>`;
   }
 
   // ── Экран стола (официант): отдельный экран, блюда по гостям, панель действий снизу ──
@@ -408,20 +475,20 @@
     return `<section class="tscreen" id="editor">
       <div class="tscreen__head">
         <button class="back-btn" data-hide-editor aria-label="К списку столов"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg></button>
-        <div class="tscreen__title"><div class="h2" style="margin:0">Стол №${esc(s.tableNumber)}</div>
-          <div class="muted" style="font-size:12px">Открыт ${time(s.createdAt)}${s.waitingMinutes != null ? ` · ждёт ${s.waitingMinutes} мин` : ''}${s.guest?.visitsCount ? ` · визитов: ${s.guest.visitsCount}` : ''}${s.waiterId ? ` · ${mineTable ? 'мой стол' : esc(s.waiterName || 'официант')}` : ' · общий'}</div></div>
+        <div class="tscreen__title"><div class="h2 u-m0">Стол №${esc(s.tableNumber)}</div>
+          <div class="muted u-fs-xs">Открыт ${time(s.createdAt)}${s.waitingMinutes != null ? ` · ждёт ${s.waitingMinutes} мин` : ''}${s.guest?.visitsCount ? ` · визитов: ${s.guest.visitsCount}` : ''}${s.waiterId ? ` · ${mineTable ? 'мой стол' : esc(s.waiterName || 'официант')}` : ' · общий'}</div></div>
         ${statusPill(s)}
         ${canGive ? `<div class="tmenu-wrap"><button class="icon-btn tmenu-btn" data-tmenu aria-label="Меню стола" aria-expanded="${Boolean(S.tmenu)}">⋯</button>
           ${S.tmenu ? '<div class="tmenu"><button class="tmenu__item" data-unassign>Отдать в общие</button></div>' : ''}</div>` : ''}
       </div>
-      ${s.reservation ? `<div class="rsv-box">${reserveBadge(s.reservation)}${s.reservation.comment ? `<div class="muted" style="font-size:12px;margin-top:4px">${esc(s.reservation.comment)}</div>` : ''}
+      ${s.reservation ? `<div class="rsv-box">${reserveBadge(s.reservation)}${s.reservation.comment ? `<div class="muted" dir="auto" style="font-size:12px;margin-top:4px">${esc(s.reservation.comment)}</div>` : ''}
         ${!s.reservation.arrived ? '<button class="btn btn--sm btn--dark" data-rsv-arrived-session>Гости пришли</button>' : ''}</div>` : ''}
       ${s.openedInIiko ? `<div class="note-box">Открыт на кассе${s.iikoWaiterName ? ` · официант ${esc(s.iikoWaiterName)}` : ''}. Блюда удаляйте и отменяйте на кассе iiko — здесь они обновятся сами.</div>` : ''}
       ${(s.removedItems || []).filter((r) => Date.now() - new Date(r.at).getTime() < 30 * 60_000).length ? `<div class="note-box note-box--warn"><b>На кассе удалено:</b> ${s.removedItems.filter((r) => Date.now() - new Date(r.at).getTime() < 30 * 60_000).slice(-5).reverse().map((r) => `${esc(r.name)} ×${r.quantity}`).join('; ')}</div>` : ''}
       ${assignBoxHtml(s)}
       ${lockedByOther ? '<div class="error-box">Стол сейчас редактирует другой официант</div>' : ''}
       ${alcoBoxHtml(e.items)}
-      ${s.readyCount ? `<div class="ready-box"><span>🔔 Готово на кухне: ${s.items.filter((i) => i.isReady).map((i) => `${esc(i.name)} ×${i.quantity}${i.guestName ? ` — ${esc(i.guestName)}` : ''}`).join(', ')}</span>
+      ${s.readyCount ? `<div class="ready-box"><span dir="auto">🔔 Готово на кухне: ${s.items.filter((i) => i.isReady).map((i) => `${esc(i.name)} ×${i.quantity}${i.guestName ? ` — ${esc(i.guestName)}` : ''}`).join(', ')}</span>
         <button class="btn btn--sm btn--dark" data-served>Вынесено всё</button></div>` : ''}
       ${(s.billRequests || []).length ? `<div class="bill-box"><b>Счёт запрошен</b>${s.billRequests.map((r) => `<div>${esc(r.by ? `${r.by}: ` : '')}${r.part === 'bar' ? 'бар (кухня оплачена онлайн), ' : ''}${r.scope === 'table' ? 'за весь стол' : esc((r.names || []).join(' и '))} — <b>${rub(r.amount)}</b>${r.method ? ` <span class="pill" data-tone="wait">${r.method === 'cash' ? 'наличными' : 'картой'}</span>` : ''} <span class="muted">${dateTime(r.at)}</span></div>`).join('')}</div>` : ''}
       ${s.iikoLastError ? `<div class="error-box"><b>Ошибка iiko:</b> ${esc(s.iikoLastError)}<br>Не отправленное сохранено — нажмите «В работу» ещё раз.</div>` : ''}
@@ -429,8 +496,8 @@
         <span class="muted">Гостей</span>
         <div class="qty"><button class="icon-btn" data-guests="-1" aria-label="Меньше гостей">−</button><b>${e.guestCount}</b><button class="icon-btn" data-guests="1" aria-label="Больше гостей">+</button></div>
         <div class="gbar__names">${seats.map((n) => (guests.some((g) => g.seat === n)
-    ? `<span class="gchip"><b>${n}</b> ${esc(nameOf(n))}</span>`
-    : `<button class="gchip gchip--edit" data-seat-name="${n}" title="Назвать гостя"><b>${n}</b> ${esc(nameOf(n))} <span class="muted">✎</span></button>`)).join('')}</div>
+    ? `<span class="gchip" dir="auto"><b>${n}</b> ${esc(nameOf(n))}</span>`
+    : `<button class="gchip gchip--edit" dir="auto" data-seat-name="${n}" title="Назвать гостя"><b>${n}</b> ${esc(nameOf(n))} <span class="muted">✎</span></button>`)).join('')}</div>
       </div>
       <div class="tscreen__items">${blocks || '<div class="empty-note">Заказа пока нет. Нажмите «+ Блюдо», чтобы добавить из меню.</div>'}</div>
       <div class="tscreen__total"><span class="muted">Итого по столу</span><b>${rub(total)}</b></div>
@@ -454,13 +521,13 @@
     const ask = [...(s.billRequests || [])].reverse().find((r) => r.method);
     return `<div class="pay-box">
       <div><b>К оплате ${rub(due)}</b>${online ? ` <span class="muted">· онлайн оплачено ${rub(online)}</span>` : ''}
-        ${ask ? `<div class="muted" style="font-size:12px">Гость хочет ${ask.method === 'cash' ? 'наличными' : 'картой'}</div>` : ''}</div>
+        ${ask ? `<div class="muted u-fs-xs">Гость хочет ${ask.method === 'cash' ? 'наличными' : 'картой'}</div>` : ''}</div>
       <div class="pay-box__btns">
         <button class="btn btn--sm ${ask?.method === 'cash' ? 'btn--dark' : ''}" data-accept-pay="cash" ${pending.length ? 'disabled' : ''}>Наличными</button>
         <button class="btn btn--sm ${ask?.method !== 'cash' ? 'btn--dark' : ''}" data-accept-pay="card" ${pending.length ? 'disabled' : ''}>Картой</button>
         <button class="btn btn--sm" data-close-table title="Счёт закрыт на кассе — просто закрыть стол">Закрыть стол</button>
       </div>
-      ${pending.length ? '<div class="muted" style="font-size:12px">Сначала отправьте новые блюда в работу</div>' : ''}
+      ${pending.length ? '<div class="muted u-fs-xs">Сначала отправьте новые блюда в работу</div>' : ''}
     </div>`;
   }
 
@@ -498,7 +565,7 @@
     return `<div class="pick-backdrop" data-close-picker>
       <div class="pick-sheet" role="dialog" aria-label="Добавить блюда">
         <div class="pick-sheet__grip"></div>
-        <div class="pick-sheet__head"><div class="h3" style="margin:0">Добавить блюда</div><button class="btn btn--sm btn--dark" data-close-picker-btn>Готово</button></div>
+        <div class="pick-sheet__head"><div class="h3 u-m0">Добавить блюда</div><button class="btn btn--sm btn--dark" data-close-picker-btn>Готово</button></div>
         <div class="seg seg--wide" role="group" aria-label="Кому">${[null, ...seats].map((n) => `<button class="${(S.pickSeat || null) === n ? 'is-on' : ''}" data-pick-seat="${n ?? ''}">${n ? esc(`${n} · ${nameOf(n)}`) : 'Всем'}</button>`).join('')}</div>
         ${S.catalog?.businessLunch?.combos?.length ? `<button class="lunch-btn ${S.catalog.businessLunch.active ? '' : 'is-off'}" data-open-lunch>
           <span><b>Бизнес-ланч</b><small>${S.catalog.businessLunch.active ? `Собрать набор · ${esc(S.catalog.businessLunch.text)}` : `Сейчас недоступен · доступен ${esc(S.catalog.businessLunch.text)}`}</small></span><i>›</i></button>` : ''}
@@ -534,7 +601,7 @@
             <div class="tcard__body">
               <div class="tcard__pills">${statusPill(x)}${x.openedInIiko ? ' <span class="pill" data-tone="work" title="Заказ открыт на кассе iiko">открыт на кассе</span>' : ''}${x.readyCount ? ` <span class="pill" data-tone="bad">🔔 Готово ${x.readyCount}</span>` : ''}${x.isOverdue ? ` <span class="overdue">⏱ ${x.waitingMinutes} мин</span>` : ''}</div>
               ${x.reservation ? `<div class="tcard__rsv">${reserveBadge(x.reservation)}</div>` : ''}
-              <div class="tcard__guest">${esc((x.guests || []).length ? x.guests.map((g) => g.name).join(', ') : (x.guest?.name || x.reservation?.guestName || (x.openedInIiko ? `Заказ на кассе${x.iikoWaiterName ? ` · ${x.iikoWaiterName}` : ''}` : 'Гость')))}${x.pendingCount ? ` · новых: ${x.pendingCount}` : ''}${x.waiterId && x.waiterId !== me ? ` · ${esc(x.waiterName || 'официант')}` : ''}</div>
+              <div class="tcard__guest" dir="auto">${esc((x.guests || []).length ? x.guests.map((g) => g.name).join(', ') : (x.guest?.name || x.reservation?.guestName || (x.openedInIiko ? `Заказ на кассе${x.iikoWaiterName ? ` · ${x.iikoWaiterName}` : ''}` : 'Гость')))}${x.pendingCount ? ` · новых: ${x.pendingCount}` : ''}${x.waiterId && x.waiterId !== me ? ` · ${esc(x.waiterName || 'официант')}` : ''}</div>
             </div>
             <div class="tcard__sum">${rub(x.total)}</div>
           </button>
@@ -557,7 +624,7 @@
             ${unread.length ? '<button class="btn btn--sm" data-read-all>Прочитать все</button>' : ''}</div>
           <div class="feed">${S.notes.length ? S.notes.map((n) => `<button class="note ${n.is_read ? '' : 'is-unread'}" data-type="${esc(n.type)}" data-note="${esc(n.id)}" data-session="${esc(n.session_id || '')}">
             <div class="note__head"><span>${esc(n.title)}</span><span class="note__time">${time(n.created_at)}</span></div>
-            <div class="note__body">${esc(n.body)}${isMgr && n.table_waiter_name ? ` <span class="muted">· ${esc(n.table_waiter_name)}</span>` : ''}</div></button>`).join('') : '<div class="muted">Пока тихо</div>'}</div>`;
+            <div class="note__body" dir="auto">${esc(n.body)}${isMgr && n.table_waiter_name ? ` <span class="muted">· ${esc(n.table_waiter_name)}</span>` : ''}</div></button>`).join('') : '<div class="muted">Пока тихо</div>'}</div>`;
         const view = ['common', 'mine', 'notes', 'serve', 'reserves'].includes(S.wview) ? S.wview : 'common';
         // «Брони»: сегодняшние брони из iiko по времени, поиск по имени (ё = е); телефон — маска, полный по нажатию «показать»
         if (view === 'reserves') await loadReserves();
@@ -568,8 +635,8 @@
             <button class="rcard__main" data-rsv-open="${esc(r.id)}" ${dim ? 'disabled' : ''}>
               <div class="rcard__time">${esc(r.time)}</div>
               <div class="rcard__body">
-                <div class="rcard__name">${esc(r.guestName || 'Без имени')}${r.sameName ? ' <span class="pill" data-tone="wait">тёзки</span>' : ''}</div>
-                <div class="rcard__meta">${r.table ? `Стол ${esc(r.table)}` : 'стол не назначен'}${(r.tables || []).length > 1 ? ` (+${r.tables.length - 1})` : ''} · ${esc(guestsWord(r.guests))}${r.comment ? ` · ${esc(r.comment)}` : ''}</div>
+                <div class="rcard__name" dir="auto">${esc(r.guestName || 'Без имени')}${r.sameName ? ' <span class="pill" data-tone="wait">тёзки</span>' : ''}</div>
+                <div class="rcard__meta" dir="auto">${r.table ? `Стол ${esc(r.table)}` : 'стол не назначен'}${(r.tables || []).length > 1 ? ` (+${r.tables.length - 1})` : ''} · ${esc(guestsWord(r.guests))}${r.comment ? ` · ${esc(r.comment)}` : ''}</div>
               </div>
               <span class="pill" data-tone="${RSV_TONE[r.state] || ''}">${esc(r.stateLabel)}</span>
             </button>
@@ -667,17 +734,17 @@
           if (b.ends_at && new Date(b.ends_at) <= now) return ['завершён', ''];
           return ['показывается', 'ok'];
         };
-        return `<div class="card"><div class="toolbar"><div class="h2 grow" style="margin:0">Баннеры и акции</div>
+        return `<div class="card"><div class="toolbar"><div class="h2 grow u-m0">Баннеры и акции</div>
             <button class="btn btn--dark btn--sm" data-banner-new>Добавить баннер</button></div>
-          <p class="muted" style="margin-top:0">Баннеры видят гости в QR-меню: карусель над меню, на экране AI или в заказе.
+          <p class="muted u-mt0">Баннеры видят гости в QR-меню: карусель над меню, на экране AI или в заказе.
             По нажатию открывается блюдо, раздел меню или ссылка. Картинка — 2:1, например 1200×600.</p>
           ${rows.length ? `<div class="banner-grid">${rows.map((b) => {
             const [label, tone] = state(b);
             return `<div class="banner-card">
-              <div class="banner-card__img">${b.image_url ? `<img src="${esc(b.image_url)}" alt="" loading="lazy">` : `<span>${esc(b.title)}</span>`}</div>
+              <div class="banner-card__img">${b.image_url ? `<img src="${esc(imgUrl(b.image_url, 480))}" alt="" loading="lazy" decoding="async">` : `<span>${esc(b.title)}</span>`}</div>
               <div class="banner-card__body">
                 <b>${esc(b.title)}</b>
-                <div class="muted" style="font-size:12px">${esc(PLACEMENTS[b.placement] || PLACEMENTS.menu)} · ${esc(rest(b.restaurant_id))}${b.ends_at ? ` · до ${dateTime(b.ends_at)}` : ''}</div>
+                <div class="muted u-fs-xs">${esc(PLACEMENTS[b.placement] || PLACEMENTS.menu)} · ${esc(rest(b.restaurant_id))}${b.ends_at ? ` · до ${dateTime(b.ends_at)}` : ''}</div>
                 <div style="display:flex;gap:6px;align-items:center;margin-top:8px"><span class="pill" data-tone="${tone}">${label}</span>
                   <span class="grow"></span>
                   <button class="btn btn--sm" data-banner-edit='${esc(JSON.stringify(b))}'>Изменить</button>
@@ -692,13 +759,13 @@
       async render() {
         const [tables, rests] = await Promise.all([api('GET', '/api/v1/admin/tables'), api('GET', '/api/v1/admin/restaurants')]);
         const r = rests.find((x) => x.slug === S.restaurant) || rests[0];
-        return `<div class="toolbar no-print"><div class="h2 grow" style="margin:0">QR-коды столов — ${esc(r.name)}</div>
+        return `<div class="toolbar no-print"><div class="h2 grow u-m0">QR-коды столов — ${esc(r.name)}</div>
           <label class="muted">Столов:</label><input class="inp" type="number" min="1" max="200" id="tables-count" value="${r.tables_count}" style="width:90px">
           <button class="btn btn--sm" data-save-tables="${esc(r.id)}">Сохранить</button>
           <button class="btn btn--dark btn--sm" onclick="window.print()">Печать</button></div>
           <div class="qr-grid">${tables.map((t) => `<div class="qr-card"><b>Стол №${esc(t.table)}</b>
             <img src="${esc(t.qr)}" alt="QR стол ${esc(t.table)}" loading="lazy">
-            <div style="font-size:12px">Отсканируйте, чтобы открыть меню</div>
+            <div class="u-fs-xs">Отсканируйте, чтобы открыть меню</div>
             <small><a href="${esc(t.url)}" target="_blank">${esc(t.url)}</a></small></div>`).join('')}</div>`;
       },
     },
@@ -709,7 +776,7 @@
         const p = await api('GET', '/api/v1/admin/payments');
         const r = S.restaurants.find((x) => x.slug === S.restaurant) || S.restaurants[0] || {};
         return `<div class="card" style="max-width:720px"><div class="h2">Оплата — ${esc(r.name || '')}</div>
-          <p class="muted" style="margin-top:0">Гость выбирает в меню: <b>онлайн</b>, <b>картой официанту</b> или <b>наличными</b>, и за кого платит
+          <p class="muted u-mt0">Гость выбирает в меню: <b>онлайн</b>, <b>картой официанту</b> или <b>наличными</b>, и за кого платит
             (весь стол, свой заказ или отмеченные гости). Онлайн оплачивается только кухня; бар — картой официанту.
             После онлайн-оплаты заказ кухни в iiko закрывается сам, официанту приходит «бар — принять картой».</p>
           <div style="margin:0 0 14px"><span class="pill" data-tone="${p.ready ? 'ok' : ''}">${p.ready ? 'Онлайн-оплата работает' : p.onlineEnabled ? 'Не хватает ключей' : 'Онлайн-оплата выключена'}</span></div>
@@ -724,7 +791,7 @@
               Типы оплат находятся в iiko автоматически («Наличные», «Банковские карты»); ID нужен, только если выбирается не тот.</p>
             <div class="field"><label>Тип оплаты «Наличные» в iiko (ID, необязательно)</label><input class="inp" name="iikoCashTypeId" value="${esc(p.iikoCashTypeId || '')}" autocomplete="off" placeholder="авто"></div>
             <div class="field"><label>Тип оплаты «Карта» в iiko (ID, необязательно)</label><input class="inp" name="iikoCardTypeId" value="${esc(p.iikoCardTypeId || '')}" autocomplete="off" placeholder="авто"></div>
-            <p class="muted" style="font-size:12px">Пароль API хранится только на сервере и в браузер не возвращается. Уведомления (колбэк) CloudPayments не нужны — статус оплаты сервер проверяет сам.</p>
+            <p class="muted u-fs-xs">Пароль API хранится только на сервере и в браузер не возвращается. Уведомления (колбэк) CloudPayments не нужны — статус оплаты сервер проверяет сам.</p>
             <div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить</button></div>
           </form></div>`;
       },
@@ -752,8 +819,8 @@
           <tr><th>Когда</th><th>Стол</th><th>Оценка</th><th>Комментарий</th><th>Гость</th><th>Официант</th><th>Сумма</th></tr>
           ${rows.map((f) => `<tr><td data-label="Когда">${dateTime(f.created_at)}</td><td data-label="Стол">№${esc(f.table_number)}</td>
             <td data-label="Оценка"><span class="stars">${'★'.repeat(f.rating)}</span><span class="muted">${'★'.repeat(5 - f.rating)}</span></td>
-            <td data-label="Комментарий">${f.rating <= 3 ? '<span class="pill" data-tone="bad">эскалация</span> ' : ''}${esc(f.comment || '')}</td>
-            <td data-label="Гость">${esc(f.guest_name || '—')}</td><td data-label="Официант">${esc(f.waiter_name || '—')}</td><td data-label="Сумма">${rub(f.total)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Отзывов пока нет</td></tr>'}
+            <td data-label="Комментарий" dir="auto">${f.rating <= 3 ? '<span class="pill" data-tone="bad">эскалация</span> ' : ''}${esc(f.comment || '')}</td>
+            <td data-label="Гость" dir="auto">${esc(f.guest_name || '—')}</td><td data-label="Официант">${esc(f.waiter_name || '—')}</td><td data-label="Сумма">${rub(f.total)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">Отзывов пока нет</td></tr>'}
         </table></div></div>`;
       },
     },
@@ -763,7 +830,7 @@
         const [rows, rests] = await Promise.all([api('GET', '/api/v1/admin/staff'), api('GET', '/api/v1/admin/restaurants')]);
         S.staffRests = rests;
         const roleName = { admin: 'Администратор', manager: 'Управляющий', waiter: 'Официант', marketing: 'Маркетинг' };
-        return `<div class="card"><div class="toolbar"><div class="h2 grow" style="margin:0">Сотрудники</div><button class="btn btn--dark btn--sm" data-staff-new>Добавить</button></div>
+        return `<div class="card"><div class="toolbar"><div class="h2 grow u-m0">Сотрудники</div><button class="btn btn--dark btn--sm" data-staff-new>Добавить</button></div>
           <div class="tbl-wrap"><table class="tbl tbl--cards"><tr><th>Имя</th><th>Логин</th><th>Роль</th><th>PIN</th><th>Ресторан</th><th>Статус</th><th></th></tr>
           ${rows.map((u) => `<tr><td class="td-title">${esc(u.name)}</td><td data-label="Логин">${esc(u.login)}</td><td data-label="Роль">${roleName[u.role]}</td><td data-label="PIN">${u.hasPin ? '●●●●' : '—'}</td>
             <td data-label="Ресторан">${esc(rests.find((r) => r.id === u.restaurantId)?.name || 'Все')}</td><td data-label="Статус">${u.isActive ? '<span class="pill" data-tone="ok">активен</span>' : '<span class="pill">отключён</span>'}</td>
@@ -792,9 +859,9 @@
     if (!d) return '';
     const credsLabel = (c) => d.creds.find((x) => x.code === c)?.label || (c ? `Ключ ${c} — не задан на сервере` : 'Основной ключ');
     return `<div class="card" style="margin-bottom:16px">
-      <div class="toolbar"><div class="h2 grow" style="margin:0">Источники iiko</div>
+      <div class="toolbar"><div class="h2 grow u-m0">Источники iiko</div>
         <button class="btn btn--sm btn--dark" data-src-add>Добавить бар / другой iiko</button></div>
-      <p class="muted" style="margin-top:0">Меню собирается из всех источников в одно — гость и официант видят один список.
+      <p class="muted u-mt0">Меню собирается из всех источников в одно — гость и официант видят один список.
         При «В работу» заказ делится: каждая часть уходит в свой iiko на тот же стол.</p>
       <div class="tbl-wrap"><table class="tbl tbl--cards"><tr><th>Источник</th><th>Организация iiko</th><th>Ключ</th><th>Внешнее меню</th><th></th></tr>
         ${d.sources.map((x) => `<tr>
@@ -811,7 +878,7 @@
   function openSourceForm(x = {}) {
     const d = S.adminSources;
     modal(`<div class="h2">${x.code ? 'Источник iiko' : 'Новый источник iiko'}</div>
-      <p class="muted" style="margin-top:0">Например, бар: алкоголь продаётся через другую организацию iiko. Если она в другом аккаунте iiko —
+      <p class="muted u-mt0">Например, бар: алкоголь продаётся через другую организацию iiko. Если она в другом аккаунте iiko —
         добавьте на сервер секреты IIKO_BAR_API_LOGIN, IIKO_BAR_CLIENT_SECRET (и IIKO_BAR_APP_ID, если отличается) и выберите «Ключ BAR».</p>
       <form id="src-form"><div class="form-grid">
         <div class="field"><label>Название</label><input class="inp" name="name" value="${esc(x.name || 'Бар')}" required></div>
@@ -819,7 +886,7 @@
         <div class="field"><label>Ключ iiko</label><select class="sel" name="creds" id="src-creds">${d.creds.map((c) => `<option value="${esc(c.code)}" ${(x.creds || '') === c.code ? 'selected' : ''}>${esc(c.label)}</option>`).join('')}</select></div>
         <div class="field"><label>Организация iiko</label><select class="sel" name="organizationId" id="src-org" required><option value="">Загрузка…</option></select></div>
         <div class="field"><label>Внешнее меню</label><select class="sel" name="externalMenuId" id="src-menu"><option value="">Авто</option></select></div>
-        <label style="display:flex;gap:10px;align-items:center;margin-top:20px"><input type="checkbox" name="isEnabled" ${x.is_enabled !== false ? 'checked' : ''}> Включён</label>
+        <label class="u-actions"><input type="checkbox" name="isEnabled" ${x.is_enabled !== false ? 'checked' : ''}> Включён</label>
       </div>
       <div class="error-box hidden" id="src-err"></div>
       <div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить и выгрузить меню</button><button class="btn" type="button" data-modal-close>Отмена</button></div></form>`, (root) => {
@@ -865,7 +932,7 @@
     const sw = (on, attr, red = false) => `<button class="switch ${on ? 'is-on' : ''} ${red ? 'is-red' : ''}" ${attr}></button>`;
     return `<div class="card">
       <div class="toolbar">
-        <div class="h2 grow" style="margin:0">Меню <span class="muted" style="font-weight:400;font-size:14px">источник: ${esc(m.source)} · обновлено ${dateTime(m.fetchedAt)}</span></div>
+        <div class="h2 grow u-m0">Меню <span class="muted" style="font-weight:400;font-size:14px">источник: ${esc(m.source)} · обновлено ${dateTime(m.fetchedAt)}</span></div>
         ${S.staff.role === 'admin' ? '<button class="btn btn--sm" data-menu-refresh>Перевыгрузить из iiko</button>' : ''}
       </div>
       <div class="toolbar">
@@ -877,8 +944,8 @@
       <div class="tbl-wrap"><table class="tbl tbl--cards tbl--menu">
         <tr><th></th><th>Блюдо</th><th>Категория</th><th>Цена</th><th>Метка</th><th title="Больше — выше в разделе; 0 — как в iiko">Приоритет</th>${canStop ? '<th>Стоп-лист</th>' : ''}<th>Скрыть</th><th>Рекомендуем</th><th></th></tr>
         ${rows.map((p) => `<tr>
-          <td>${p.image ? `<img class="thumb" src="${esc(p.image)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">` : '<div class="thumb">🍽</div>'}</td>
-          <td><b>${esc(p.name)}</b>${p.badge ? ` <span class="pill" data-tone="ok">${esc(badgeText(p.badge))}</span>` : ''}${p.video ? ' <span class="pill" data-tone="work">▶ видео</span>' : ''}<div class="muted" style="font-size:12px">${p.sku ? `арт. ${esc(p.sku)} · ` : ''}${esc(p.weight || '')}${p.energy ? ` · ${Math.round(p.energy)} ккал` : ''}${p.allergens?.length ? ` · аллергены: ${esc(p.allergens.join(', '))}` : ''}</div></td>
+          <td>${p.image ? `<img class="thumb" src="${esc(imgUrl(p.image, 120))}" alt="" loading="lazy" decoding="async" onerror="this.style.visibility='hidden'">` : '<div class="thumb">🍽</div>'}</td>
+          <td><b>${esc(p.name)}</b>${p.badge ? ` <span class="pill" data-tone="ok">${esc(badgeText(p.badge))}</span>` : ''}${p.video ? ' <span class="pill" data-tone="work">▶ видео</span>' : ''}<div class="muted u-fs-xs">${p.sku ? `арт. ${esc(p.sku)} · ` : ''}${esc(p.weight || '')}${p.energy ? ` · ${Math.round(p.energy)} ккал` : ''}${p.allergens?.length ? ` · аллергены: ${esc(p.allergens.join(', '))}` : ''}</div></td>
           <td class="muted" data-label="Категория">${esc(p.group)}</td><td data-label="Цена">${p.price ? rub(p.price) : ''}</td>
           <td data-label="Метка">${p.isHidden ? '' : badgeList(p.badge).length > 1 ? `<span class="muted" title="Несколько меток — меняются в «Меню сети»">${esc(badgeText(p.badge))}</span>` : `<select class="sel sel--sm sel--badge" data-badge-set="${esc(p.id)}" aria-label="Метка блюда"><option value="">—</option>${Object.entries(BADGES).map(([k, l]) => `<option value="${k}" ${p.badge === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`}</td>
           <td data-label="Приоритет">${p.isHidden ? '' : `<input class="inp inp--prio" type="number" inputmode="numeric" min="-999" max="999" step="1" value="${Number(p.priority) || 0}" data-prio="${esc(p.id)}" aria-label="Приоритет показа">`}</td>
@@ -906,7 +973,7 @@
     modal(`<div class="h2">${esc(p.name)}</div>
       <form id="prod-form">
         <div style="display:flex;gap:14px;align-items:center;margin-bottom:10px">
-          <img id="prod-img" src="${esc(p.image || '')}" alt="" style="width:96px;height:96px;border-radius:16px;object-fit:cover;background:#fff;${p.image ? '' : 'visibility:hidden'}">
+          <img id="prod-img" src="${esc(imgUrl(p.image, 240))}" alt="" loading="lazy" style="width:96px;height:96px;border-radius:16px;object-fit:cover;background:#fff;${p.image ? '' : 'visibility:hidden'}">
           <label class="btn btn--sm" style="cursor:pointer">Загрузить фото<input type="file" id="prod-file" accept="image/jpeg,image/png,image/webp,image/gif" hidden></label>
         </div>
         ${f('image_url', 'Фото (ссылка)', p.image)}
@@ -919,15 +986,15 @@
         </div>
         <input type="hidden" name="video_url" value="${esc(p.video || '')}">
         <p class="muted" style="font-size:12px;margin:6px 4px 0">«Живое» меню: короткое видео без звука (3–6 с, до 25 МБ, лучше MP4 квадрат 720 px) играет вместо фото по кругу. Анимированный WebP/GIF — тоже можно. Фото остаётся обложкой, пока видео грузится.</p>
-        ${badgeList(p.badge).length > 1 ? `<div class="field" style="margin-top:10px"><label>Метки в меню</label><div class="muted">${esc(badgeText(p.badge))} — несколько меток меняются в «Меню сети»</div></div>`
-    : `<div class="field" style="margin-top:10px"><label>Метка в меню</label><select class="sel" name="badge"><option value="">Без метки</option>${Object.entries(BADGES).map(([k, l]) => `<option value="${k}" ${p.badge === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`}
-        <div class="field" style="margin-top:10px"><label>Описание</label><textarea class="inp" name="description">${esc(p.description || '')}</textarea></div>
-        <div class="form-grid" style="margin-top:10px">
+        ${badgeList(p.badge).length > 1 ? `<div class="field u-mt-10"><label>Метки в меню</label><div class="muted">${esc(badgeText(p.badge))} — несколько меток меняются в «Меню сети»</div></div>`
+    : `<div class="field u-mt-10"><label>Метка в меню</label><select class="sel" name="badge"><option value="">Без метки</option>${Object.entries(BADGES).map(([k, l]) => `<option value="${k}" ${p.badge === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>`}
+        <div class="field u-mt-10"><label>Описание</label><textarea class="inp" name="description">${esc(p.description || '')}</textarea></div>
+        <div class="form-grid u-mt-10">
           ${f('weight', 'Вес / объём', p.weight)}${f('energy', 'Ккал', p.energy, 'number')}${f('proteins', 'Белки', p.proteins, 'number')}
           ${f('fats', 'Жиры', p.fats, 'number')}${f('carbs', 'Углеводы', p.carbs, 'number')}
         </div>
         ${f('allergens', 'Аллергены (через запятую)', (p.allergens || []).join(', '))}
-        <div class="field" style="margin-top:10px"><label>Где применить</label><select class="sel" name="scope"><option value="restaurant">Только в этом ресторане</option><option value="global">Во всех ресторанах</option></select></div>
+        <div class="field u-mt-10"><label>Где применить</label><select class="sel" name="scope"><option value="restaurant">Только в этом ресторане</option><option value="global">Во всех ресторанах</option></select></div>
         <p class="muted" style="font-size:12px;margin:12px 4px 0">Данные карточки приходят из iiko. Правки хранятся только в меню и накладываются по UUID блюда (${esc(p.id)}); в iiko ничего не меняется.</p>
         <div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить</button>
           ${ownOverrides.length ? '<button class="btn btn--danger" type="button" data-reset-iiko>Вернуть как в iiko</button>' : ''}
@@ -950,7 +1017,7 @@
         if (file.size > 25 * 1024 * 1024) { toast('Видео больше 25 МБ — сожмите или обрежьте до 3–6 секунд', true); return; }
         try {
           toast('Загружаем…');
-          const res = await fetch('/api/v1/admin/upload', {
+          const res = await xfetch('/api/v1/admin/upload', {
             method: 'POST', headers: { 'Content-Type': file.type || 'video/mp4', Authorization: `Bearer ${S.token}` }, body: file,
           });
           const data = await res.json();
@@ -958,7 +1025,7 @@
           if (file.type.startsWith('image/')) {
             // Анимированная картинка — вместо фото
             root.querySelector('[name=image_url]').value = data.url;
-            const img = $('#prod-img', root); img.src = data.url; img.style.visibility = 'visible';
+            const img = $('#prod-img', root); img.src = imgUrl(data.url, 240); img.style.visibility = 'visible';
           } else {
             root.querySelector('[name=video_url]').value = data.url;
             const v = $('#prod-video', root); v.src = data.url; v.style.display = 'block'; v.play().catch(() => {});
@@ -970,7 +1037,7 @@
         const file = e.target.files?.[0];
         if (!file) return;
         try {
-          const res = await fetch('/api/v1/admin/upload', {
+          const res = await xfetch('/api/v1/admin/upload', {
             method: 'POST', headers: { 'Content-Type': file.type, Authorization: `Bearer ${S.token}` }, body: file,
           });
           const data = await res.json();
@@ -998,7 +1065,7 @@
     const link = b.product_id ? 'product' : b.category_id ? 'category' : b.link_url ? 'url' : '';
     const dt = (v) => (v ? new Date(new Date(v).getTime() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '');
     modal(`<div class="h2">${b.id ? 'Баннер' : 'Новый баннер'}</div><form id="banner-form">
-      <div class="banner-preview" id="bn-preview">${b.image_url ? `<img src="${esc(b.image_url)}" alt="">` : '<span>Картинка 2:1</span>'}</div>
+      <div class="banner-preview" id="bn-preview">${b.image_url ? `<img src="${esc(imgUrl(b.image_url, 640))}" alt="" loading="lazy">` : '<span>Картинка 2:1</span>'}</div>
       <div style="display:flex;gap:8px;margin:8px 0 12px"><label class="btn btn--sm" style="cursor:pointer">Загрузить картинку<input type="file" id="bn-file" accept="image/jpeg,image/png,image/webp" hidden></label>
         <input class="inp grow" name="image_url" placeholder="или ссылка на картинку" value="${esc(b.image_url || '')}"></div>
       <div class="form-grid" style="grid-template-columns:1fr">
@@ -1015,11 +1082,11 @@
         <div class="field"><label>Показывать с</label><input class="inp" name="starts_at" type="datetime-local" value="${dt(b.starts_at)}"></div>
         <div class="field"><label>Показывать до</label><input class="inp" name="ends_at" type="datetime-local" value="${dt(b.ends_at)}"></div>
         <div class="field"><label>Порядок</label><input class="inp" name="sort_order" type="number" value="${esc(b.sort_order ?? 0)}"></div>
-        <label style="display:flex;gap:10px;align-items:center;margin-top:20px"><input type="checkbox" name="is_active" ${b.is_active !== false ? 'checked' : ''}> Показывать</label>
+        <label class="u-actions"><input type="checkbox" name="is_active" ${b.is_active !== false ? 'checked' : ''}> Показывать</label>
       </div>
       <div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить</button><button class="btn" type="button" data-modal-close>Отмена</button></div></form>`, (root) => {
       const form = $('#banner-form', root);
-      const preview = (url) => { $('#bn-preview', root).innerHTML = url ? `<img src="${esc(url)}" alt="">` : '<span>Картинка 2:1</span>'; };
+      const preview = (url) => { $('#bn-preview', root).innerHTML = url ? `<img src="${esc(imgUrl(url, 640))}" alt="">` : '<span>Картинка 2:1</span>'; };
       form.elements.image_url.addEventListener('change', (e) => preview(e.target.value));
       $('#bn-link', root).addEventListener('change', (e) => {
         root.querySelectorAll('[data-link]').forEach((el) => { el.hidden = el.dataset.link !== e.target.value; });
@@ -1028,7 +1095,7 @@
         const file = e.target.files?.[0];
         if (!file) return;
         try {
-          const res = await fetch('/api/v1/admin/upload', { method: 'POST', headers: { 'Content-Type': file.type, Authorization: `Bearer ${S.token}` }, body: file });
+          const res = await xfetch('/api/v1/admin/upload', { method: 'POST', headers: { 'Content-Type': file.type, Authorization: `Bearer ${S.token}` }, body: file });
           const data = await res.json();
           if (!res.ok) throw new Error(data.error || 'Не удалось загрузить');
           form.elements.image_url.value = data.url; preview(data.url); toast('Картинка загружена');
@@ -1056,8 +1123,8 @@
     return {
       async render() {
         const rows = await api('GET', path);
-        return `<div class="card"><div class="toolbar"><div class="h2 grow" style="margin:0">${title}</div><button class="btn btn--dark btn--sm" data-crud-new="${path}">Добавить</button></div>
-          <p class="muted" style="margin-top:0">${hint}</p>
+        return `<div class="card"><div class="toolbar"><div class="h2 grow u-m0">${title}</div><button class="btn btn--dark btn--sm" data-crud-new="${path}">Добавить</button></div>
+          <p class="muted u-mt0">${hint}</p>
           <div class="tbl-wrap"><table class="tbl tbl--cards"><tr>${fields.map(([, l]) => `<th>${l}</th>`).join('')}<th></th></tr>
           ${rows.map((r) => `<tr>${fields.map(([k, l, t]) => `<td data-label="${esc(l)}">${t === 'bool' ? (r[k] ? '✓' : '—') : esc(r[k] ?? '')}</td>`).join('')}
             <td class="td-actions" style="white-space:nowrap"><button class="btn btn--sm" data-crud-edit='${esc(JSON.stringify({ path, row: r }))}'>Изменить</button>
@@ -1113,8 +1180,8 @@
       <div class="field"><label>Ресторан</label><select class="sel" name="restaurantId"><option value="">Все</option>${(S.staffRests || []).map((r) => `<option value="${r.id}" ${u.restaurantId === r.id ? 'selected' : ''}>${esc(r.name)}</option>`).join('')}</select></div>
       <div class="field"><label>${u.id ? 'Новый пароль (пусто — не менять)' : 'Пароль'}</label><input class="inp" name="password" type="password" ${u.id ? '' : 'required'}></div>
       <div class="field"><label>PIN для входа официанта (4–6 цифр${u.hasPin ? ', пусто — не менять' : ''})</label><input class="inp" name="pin" inputmode="numeric" pattern="\\d{4,6}" maxlength="6" autocomplete="off" placeholder="${u.hasPin ? 'PIN задан' : 'например, 482915'}"></div>
-      ${u.hasPin ? '<label style="display:flex;gap:10px;align-items:center;margin-top:20px"><input type="checkbox" name="clearPin"> Сбросить PIN</label>' : ''}
-      <label style="display:flex;gap:10px;align-items:center;margin-top:20px"><input type="checkbox" name="isActive" ${u.isActive !== false ? 'checked' : ''}> Активен</label>
+      ${u.hasPin ? '<label class="u-actions"><input type="checkbox" name="clearPin"> Сбросить PIN</label>' : ''}
+      <label class="u-actions"><input type="checkbox" name="isActive" ${u.isActive !== false ? 'checked' : ''}> Активен</label>
       </div><div class="footer-actions"><button class="btn btn--dark" type="submit">Сохранить</button><button class="btn" type="button" data-modal-close>Отмена</button></div></form>`, (root) => {
       $('#staff-role', root).addEventListener('change', (e) => { $('#role-info', root).textContent = ROLE_INFO[e.target.value][1]; });
       $('#staff-form', root).addEventListener('submit', async (e) => {
@@ -1192,7 +1259,7 @@
     const chips = d.dishes.filter((x) => !needle || x.name.toLowerCase().replace(/ё/g, 'е').includes(needle)).slice(0, 14);
     const row = (i) => `<div class="srow is-${i.level} ${i.state === 'ready' ? 'is-ready' : ''}">
         <button class="srow__main" data-open="${esc(i.sessionId)}">
-          <div class="srow__title">Стол <b>${esc(i.tableNumber)}</b>${i.guestName ? ` — ${esc(i.guestName)}` : ''}, ×${i.quantity}</div>
+          <div class="srow__title" dir="auto">Стол <b>${esc(i.tableNumber)}</b>${i.guestName ? ` — ${esc(i.guestName)}` : ''}, ×${i.quantity}</div>
           <div class="srow__name">${esc(i.name)}</div>
           <div class="srow__meta"><span class="cook is-${i.level}">${esc(i.cook?.text || `${i.state === 'ready' ? 'ждут' : 'на кухне'} ${waitText(i.waitingMinutes)}`)}</span>${i.waiterName ? ` · ${esc(i.waiterName)}` : ''}</div>
         </button>
@@ -1484,6 +1551,7 @@
     const q = (sel) => t.closest(sel);
     try {
       if (q('[data-logout]')) { logout(); return; }
+      if (q('[data-retry]')) { if (S.restaurants.length) render(); else start(); return; }
       if (q('[data-tab]')) { S.tab = q('[data-tab]').dataset.tab; ls.set('tab', S.tab); render(); return; }
       if (q('[data-read-all]')) { await api('POST', '/api/v1/waiter/notifications/read-all'); render(); return; }
       if (q('[data-note]')) {
@@ -1578,7 +1646,7 @@
       if (q('[data-open-table-pick]')) {
         let hall;
         try { hall = await api('GET', '/api/v1/waiter/hall'); } catch (err) { toast(err.message, true); return; }
-        modal(`<div class="h3" style="margin-top:0">Открыть стол</div>
+        modal(`<div class="h3 u-mt0">Открыть стол</div>
           <p class="muted" style="margin:0 0 10px;font-size:13px">Выберите стол гостя. Занятый — откроется его заказ.</p>
           <div class="mt-grid">${hall.tables.map((t) => `<button class="mt-cell ${t.sessionId ? 'is-busy' : ''}" data-hall-table="${esc(t.number)}" data-session="${esc(t.sessionId || '')}">
             <b>${esc(t.number)}</b><small>${t.sessionId ? esc(t.statusLabel) : 'свободен'}</small></button>`).join('')}</div>
@@ -1646,18 +1714,27 @@
         if (navigator.vibrate) try { navigator.vibrate(10); } catch { /* нет вибро */ }
         changed(); return;
       }
-      if (q('[data-save]')) { await saveEdit(); toast('Правки сохранены — гость видит актуальный заказ'); render(); return; }
+      if (q('[data-save]')) {
+        const btn = q('[data-save]'); const label = btn.textContent; btn.disabled = true;
+        try {
+          await saveEdit(); toast('Правки сохранены — гость видит актуальный заказ'); render();
+        } catch (err) {
+          toast(err.message, true);
+          btn.disabled = false; btn.textContent = label;
+        }
+        return;
+      }
       if (q('[data-send]')) {
         // Алкоголь вне часов продажи точки: отправить можно, но только осознанно
         if (!alcoOpenNow() && S.edit.items.some((i) => !i.isLocked && isAlcoItem(i))
           && !confirm(`${alcoClosedText()}. Всё равно отправить алкоголь на кухню?`)) return;
-        const btn = q('[data-send]'); btn.disabled = true; btn.textContent = 'Отправляем в iiko…';
-        if (S.edit.dirty) await saveEdit();
+        const btn = q('[data-send]'); const label = btn.textContent; btn.disabled = true; btn.textContent = 'Отправляем в iiko…';
         try {
+          if (S.edit.dirty) await saveEdit();
           const s = await api('POST', `/api/v1/waiter/session/${S.openId}/send-to-production`);
           S.edit = editFrom(s);
           toast('Заказ отправлен на кухню');
-        } catch (err) { toast(err.message, true); }
+        } catch (err) { toast(err.message, true); btn.disabled = false; btn.textContent = label; }
         render(); return;
       }
       if (q('[data-accept-pay]')) {
@@ -1754,7 +1831,7 @@
         const own = S.restaurants.find((r) => r.id === S.staff.restaurantId);
         S.restaurant = (own || S.restaurants.find((r) => r.slug === 'novo-sadovaya') || S.restaurants[0])?.slug;
       }
-    } catch (e) { if (!S.token) return; toast(e.message, true); }
+    } catch (e) { if (!S.token) return; if (!e.network) toast(e.message, true); }
     await render();
     clearInterval(poll);
     poll = setInterval(() => {
@@ -1762,8 +1839,8 @@
       if (document.hidden || busy || $('#modal-root').innerHTML) return;
       // Стол открыт — продлеваем свою блокировку (иначе через 2 минуты просмотра стол «уходит» другому)
       if (S.openId && S.edit) api('GET', `/api/v1/waiter/session/${S.openId}`).catch(() => {});
-      if (S.tab === 'tables' && !S.edit?.dirty && !S.saving && !S.picker) render();
-      else if (S.tab === 'hall') render();
+      if (S.tab === 'tables' && !S.edit?.dirty && !S.saving && !S.picker) render({ poll: true });
+      else if (S.tab === 'hall') render({ poll: true });
     }, 5000);
   }
 

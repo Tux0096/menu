@@ -13,8 +13,8 @@ import pool from '../db/pool.js';
 import { uuidOrNull } from '../lib/uuid.js';
 import { httpError } from '../lib/http.js';
 import {
-  RESERVE_TZ, STATE_LABELS, clockText, formatPhone, maskPhone, planReserve, reserveSettings, reserveState, reserveTexts,
-  reserveWindow, searchReserves,
+  STATE_LABELS, clockText, formatPhone, maskPhone, planReserve, reserveSettings, reserveState, reserveTexts,
+  reserveTz, reserveWindow, searchReserves,
 } from '../lib/iiko-reserve-sync.js';
 import { withSessionMutex } from '../lib/session-mutex.js';
 import { NOTIFY_TYPES } from '../lib/table-workflow-config.js';
@@ -137,7 +137,8 @@ async function closeVisit(sessionId) {
 }
 
 async function notify(row, session, type, body, payload = {}) {
-  const texts = reserveTexts({ ...rowToReserve(row), guestName: row.guest_name, guestsCount: row.guests_count, tableNumber: row.table_number });
+  const { rows: [point] } = await pool.query('SELECT timezone FROM restaurants WHERE id = $1', [row.restaurant_id]);
+  const texts = reserveTexts({ ...rowToReserve(row), guestName: row.guest_name, guestsCount: row.guests_count, tableNumber: row.table_number }, reserveTz(point));
   await createWaiterNotification({
     restaurantId: row.restaurant_id,
     sessionId: session?.id || row.session_id || null,
@@ -301,7 +302,7 @@ export const markArrived = (restaurantId, id) => seatReservation(restaurantId, i
 // ── Списки и поиск ──────────────────────────────────────────────────────────
 
 /** Бронь для API: телефон только в маске (полный — отдельным запросом по нажатию «показать»). */
-function toApi(r, now) {
+function toApi(r, now, tz) {
   const reserve = {
     startsAt: r.starts_at, status: r.iiko_status, arrivedAt: r.arrived_at, noShowAt: r.no_show_at,
     sessionId: r.open_session_id, tableCreatedAt: r.table_created_at,
@@ -310,7 +311,7 @@ function toApi(r, now) {
   const tables = r.table_numbers || [];
   return {
     id: r.id,
-    time: clockText(r.starts_at, RESERVE_TZ),
+    time: clockText(r.starts_at, tz),
     startsAt: r.starts_at,
     endsAt: new Date(new Date(r.starts_at).getTime() + (r.duration_min || 120) * 60_000),
     durationMin: r.duration_min,
@@ -335,7 +336,9 @@ function toApi(r, now) {
 
 /** Брони точки на сегодня (рабочие сутки) по времени; q — поиск по имени гостя. */
 export async function listReserves(restaurantId, { q = '', now = new Date() } = {}) {
-  const w = reserveWindow(now);
+  const { rows: [point] } = await pool.query('SELECT timezone FROM restaurants WHERE id = $1', [restaurantId]);
+  const tz = reserveTz(point);
+  const w = reserveWindow(now, tz);
   const { rows } = await pool.query(
     `SELECT r.*, (SELECT s.id FROM table_sessions s WHERE s.id = r.session_id AND s.status = 'open') AS open_session_id,
             (SELECT c.id FROM table_sessions c WHERE c.id = r.conflict_session_id AND c.status = 'open') AS open_conflict_id
@@ -347,7 +350,7 @@ export async function listReserves(restaurantId, { q = '', now = new Date() } = 
   // конфликт показываем, только пока чужой визит ещё открыт
   const prepared = rows.map((r) => ({ ...r, conflict_at: r.open_conflict_id ? r.conflict_at : null }));
   const found = searchReserves(prepared.map((r) => ({ ...r, guestName: r.guest_name, phone: r.phone, startsAt: r.starts_at })), q);
-  const items = found.map((f) => ({ ...toApi(f, now), sameName: f.sameName }));
+  const items = found.map((f) => ({ ...toApi(f, now, tz), sameName: f.sameName }));
   return { items, query: q, sameNames: [...new Set(items.filter((i) => i.sameName).map((i) => i.guestName))] };
 }
 

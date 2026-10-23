@@ -781,7 +781,7 @@ assert.equal(r.status, 401); step('токен персонала в адресе
     const sid2 = t2.sessionId;
     assert.equal(t2.waiterId, null); assert.equal(t2.waiterName, null);
     const mine = (list) => list.filter((n) => n.session_id === sid2);
-    const wn = (who) => api('GET', '/api/v1/waiter/notifications?restaurant=novo-sadovaya&limit=200', null, who).then((x) => ok(x, 'notes'));
+    const wn = (who) => api('GET', '/api/v1/waiter/notifications?restaurant=novo-sadovaya&limit=200', null, who).then((x) => { const d = ok(x, 'notes'); return Array.isArray(d) ? d : d.items; });
     assert.ok(mine(await wn(WA)).some((n) => n.type === 'cart_ready') && mine(await wn(WB)).some((n) => n.type === 'cart_ready'));
     step('стол без официанта («Общие»): новый заказ виден обоим официантам');
     // короткое событие вместо всего заказа
@@ -856,6 +856,131 @@ assert.equal(r.status, 401); step('токен персонала в адресе
   }
 }
 
+// Онлайн-оплата CloudPayments: дубли счетов, вебхуки (подпись, идемпотентность, возврат), повтор карты после отказа.
+// Нужны ключи в env сервера (CLOUDPAYMENTS_PUBLIC_ID / CLOUDPAYMENTS_API_SECRET) и мок payments/find:
+//   node test/mock-cloudpayments.mjs &  и сервер с CLOUDPAYMENTS_API_URL=http://127.0.0.1:3199;  для теста CP_MOCK=http://127.0.0.1:3199
+{
+  const { createHmac } = await import('node:crypto');
+  const SECRET = process.env.CLOUDPAYMENTS_API_SECRET || 'test_secret';
+  const CP_MOCK = process.env.CP_MOCK || '';
+  const hook = async (kind, fields, { secret = SECRET, form = false, signed = true } = {}) => {
+    const raw = form ? new URLSearchParams(fields).toString() : JSON.stringify(fields);
+    const headers = { 'Content-Type': form ? 'application/x-www-form-urlencoded' : 'application/json' };
+    if (signed) headers['Content-HMAC'] = createHmac('sha256', secret).update(raw).digest('base64');
+    const res = await fetch(`${BASE}/api/v1/payments/cloudpayments/${kind}`, { method: 'POST', headers, body: raw });
+    return { status: res.status, data: await res.json().catch(() => null) };
+  };
+  const g4 = { 'X-Guest-Token': login.token };
+  const PT = `${TABLE}p`;
+  const sp = ok(await api('POST', '/api/v1/table/enter', { restaurantSlug: 'novo-sadovaya', tableNumber: PT }, g4), 'enter pay');
+  const sid = sp.sessionId;
+  const [a, b] = catalog.products.filter((p) => !p.lunchCombo && !p.modifierGroups?.length && !p.sizes?.length && p.price > 0 && !p.isInStopList);
+  const ln = (p, q) => ({ productId: p.id, iikoProductId: p.iikoId || p.id, name: p.name, quantity: q });
+
+  // Включаем онлайн-оплату для точки на время теста (потом возвращаем как было)
+  const payCfg0 = ok(await api('GET', '/api/v1/admin/payments?restaurant=novo-sadovaya', null, A), 'pay cfg');
+  ok(await api('POST', '/api/v1/admin/payments?restaurant=novo-sadovaya', { onlineEnabled: true, publicId: payCfg0.ownPublicId || '', apiSecret: '' }, A), 'pay cfg on');
+  try {
+    // Параллельный submit-to-waiter — одно уведомление «Новый заказ»
+    const subs = await Promise.all([1, 2, 3].map(() => api('POST', '/api/v1/table/submit-to-waiter', { sessionId: sid, items: [ln(a, 2), ln(b, 1)] }, g4)));
+    subs.forEach((x) => assert.ok(x.status < 300, `parallel submit: ${x.status}`));
+    let nl = ok(await api('GET', '/api/v1/waiter/notifications?restaurant=novo-sadovaya', null, W), 'notes pay');
+    assert.equal(nl.filter((n) => n.session_id === sid && n.type === 'cart_ready').length, 1, 'три параллельных отправки — одно уведомление');
+    step('параллельный submit-to-waiter ×3: одно уведомление «Новый заказ»');
+
+    ok(await api('POST', `/api/v1/waiter/session/${sid}/assign`, {}, W), 'assign pay');
+    ok(await api('POST', `/api/v1/waiter/session/${sid}/send-to-production`, {}, W), 'send pay');
+
+    // Повторный и параллельный pay/start — один и тот же счёт
+    const start = (tip = 0) => api('POST', '/api/v1/table/pay/start', { sessionId: sid, tipAmount: tip }, g4);
+    const p1s = ok(await start(), 'pay start 1');
+    const p2s = ok(await start(), 'pay start 2');
+    assert.equal(p2s.invoiceId, p1s.invoiceId, 'повторный pay/start — тот же InvoiceId');
+    const par = await Promise.all([start(), start(), start()]);
+    par.forEach((x) => assert.equal(x.data?.invoiceId, p1s.invoiceId, 'параллельные pay/start — тот же счёт'));
+    assert.equal(p2s.amount, p1s.amount);
+    step(`pay/start ×5 (в т.ч. параллельно): один счёт ${p1s.invoiceId}, ${p1s.amount} ₽`);
+    // Другая сумма (чаевые) — новый счёт, прежний вытеснен
+    const pB = ok(await start(10), 'pay start tip');
+    assert.notEqual(pB.invoiceId, p1s.invoiceId);
+    assert.equal(pB.amount, p1s.amount + 10);
+    assert.ok(!pB.receipt, 'без CLOUDPAYMENTS_RECEIPT=on чека в виджете нет');
+    step('другие чаевые → новый счёт, старый вытеснен (superseded)');
+
+    // Вебхуки: подпись
+    // Номера транзакций — свои на каждый прогон (в базе транзакция уникальна)
+    const TXR = Date.now() % 1e9;
+    const TX = (n) => String(TXR * 10000 + Number(n));
+    const payBody = { InvoiceId: p1s.invoiceId, TransactionId: TX('9001'), Amount: p1s.amount, Currency: 'RUB', Status: 'Completed' };
+    let wr = await hook('pay', payBody, { secret: 'wrong' });
+    assert.equal(wr.status, 401); step('вебхук с неверной подписью — 401');
+    wr = await hook('pay', payBody, { signed: false });
+    assert.equal(wr.status, 401); step('вебхук без подписи — 401');
+    wr = await hook('check', { InvoiceId: p1s.invoiceId, Amount: p1s.amount });
+    assert.deepEqual(wr.data, { code: 0 }); step('Check разрешён: {"code":0}');
+    let view = ok(await api('GET', `/api/v1/table/session/${sid}`, null, g4), 'view');
+    assert.ok(!view.isPaid, 'после неподписанных вебхуков стол не оплачен');
+
+    // Pay (form-urlencoded, как шлёт CloudPayments) — один раз засчитан, повтор ничего не меняет
+    const payFields = { InvoiceId: p1s.invoiceId, TransactionId: TX('9001'), Amount: p1s.amount.toFixed(2), Currency: 'RUB', Status: 'Completed' };
+    wr = await hook('pay', payFields, { form: true });
+    assert.deepEqual(wr.data, { code: 0 });
+    wr = await hook('pay', payFields, { form: true });
+    assert.deepEqual(wr.data, { code: 0 });
+    view = ok(await api('GET', `/api/v1/table/session/${sid}`, null, g4), 'view paid');
+    assert.ok(view.isPaid, 'Pay → кухня оплачена, стол оплачен');
+    nl = ok(await api('GET', '/api/v1/waiter/notifications?restaurant=novo-sadovaya', null, W), 'notes paid');
+    assert.equal(nl.filter((n) => n.session_id === sid && n.type === 'payment_done').length, 1, 'Pay дважды — одна проводка и одно уведомление');
+    step('Pay дважды → одна проводка (одно «Оплачено онлайн»), стол оплачен');
+
+    // Дубль: вытесненный счёт B оплачен после A — строки уже оплачены → duplicate + уведомление о возврате, без проводки
+    wr = await hook('pay', { InvoiceId: pB.invoiceId, TransactionId: TX('9002'), Amount: pB.amount, Currency: 'RUB', Status: 'Completed' });
+    assert.deepEqual(wr.data, { code: 0 });
+    nl = ok(await api('GET', '/api/v1/waiter/notifications?restaurant=novo-sadovaya', null, W), 'notes dup');
+    assert.equal(nl.filter((n) => n.session_id === sid && n.type === 'payment_done').length, 1, 'дубль не даёт второй проводки');
+    assert.equal(nl.filter((n) => n.session_id === sid && n.type === 'iiko_error' && /двойная оплата/.test(n.title)).length, 1, 'уведомление о возврате дубля');
+    step('второй оплаченный счёт на те же строки → duplicate, без повторной проводки, официанту — «оформите возврат»');
+
+    // Refund: частичный не открывает стол, полный — открывает; повтор события ничего не меняет
+    wr = await hook('refund', { InvoiceId: p1s.invoiceId, TransactionId: TX('7001'), PaymentTransactionId: TX('9001'), Amount: '100.00', Currency: 'RUB' });
+    assert.deepEqual(wr.data, { code: 0 });
+    view = ok(await api('GET', `/api/v1/table/session/${sid}`, null, g4), 'view part refund');
+    assert.ok(view.isPaid, 'частичный возврат стол не открывает');
+    const rest = (p1s.amount - 100).toFixed(2);
+    wr = await hook('refund', { TransactionId: TX('7002'), PaymentTransactionId: TX('9001'), Amount: rest, Currency: 'RUB' }); // без InvoiceId — по номеру транзакции
+    assert.deepEqual(wr.data, { code: 0 });
+    view = ok(await api('GET', `/api/v1/table/session/${sid}`, null, g4), 'view full refund');
+    assert.ok(!view.isPaid, 'полный возврат — стол больше не оплачен');
+    await hook('refund', { TransactionId: TX('7002'), PaymentTransactionId: TX('9001'), Amount: rest, Currency: 'RUB' });
+    nl = ok(await api('GET', '/api/v1/waiter/notifications?restaurant=novo-sadovaya', null, W), 'notes refund');
+    assert.equal(nl.filter((n) => n.session_id === sid && /возврат онлайн-оплаты/.test(n.title)).length, 2, 'два возврата — два уведомления, повтор не дублирует');
+    step('Refund: частичный — стол оплачен; полный — refunded, стол снова не оплачен; повтор события безопасен');
+
+    // Отказ банка, затем успешная оплата в том же виджете — засчитывается (нужен мок payments/find)
+    if (CP_MOCK) {
+      const pC = ok(await start(), 'pay start after refund');
+      const setMock = (m) => fetch(`${CP_MOCK}/__set`, { method: 'POST', body: JSON.stringify({ InvoiceId: pC.invoiceId, ...m }) });
+      await setMock({ Status: 'Declined', Amount: pC.amount, TransactionId: TX('5001') });
+      let c = ok(await api('POST', '/api/v1/table/pay/confirm', { sessionId: sid, invoiceId: pC.invoiceId }, g4), 'confirm declined');
+      assert.equal(c.status, 'failed');
+      await setMock({ Status: 'Completed', Amount: pC.amount - 0.01, TransactionId: TX('5002') });
+      c = ok(await api('POST', '/api/v1/table/pay/confirm', { sessionId: sid, invoiceId: pC.invoiceId }, g4), 'confirm short');
+      assert.notEqual(c.status, 'completed', 'сумма меньше счёта хотя бы на копейку не засчитывается');
+      await setMock({ Status: 'Completed', Amount: pC.amount, TransactionId: TX('5002') });
+      c = ok(await api('POST', '/api/v1/table/pay/confirm', { sessionId: sid, invoiceId: pC.invoiceId }, g4), 'confirm completed');
+      assert.equal(c.status, 'completed'); assert.ok(c.session.isPaid);
+      step('Declined, затем Completed по тому же InvoiceId → засчитан (failed не терминален); недоплата на 0,01 ₽ — нет');
+    } else {
+      step('(пропущено: CP_MOCK не задан — проверка «Declined → Completed»)');
+    }
+  } finally {
+    ok(await api('POST', '/api/v1/admin/payments?restaurant=novo-sadovaya', {
+      onlineEnabled: payCfg0.onlineEnabled, publicId: payCfg0.ownPublicId || '', apiSecret: '',
+    }, A), 'pay cfg restore');
+    await api('POST', `/api/v1/waiter/session/${sid}/close`, { force: true }, W);
+  }
+}
+
 // Официант закрывает стол; в закрытый визит гость больше ничего не добавляет
 r = await api('POST', `/api/v1/waiter/session/${s.sessionId}/close`, {}, W);
 assert.equal(r.status, 409); assert.equal(r.data.code, 'UNPAID');
@@ -863,5 +988,95 @@ assert.ok(r.data.details.unpaid > 0); step(`закрыть неоплаченн�
 ok(await api('POST', `/api/v1/waiter/session/${s.sessionId}/close`, { force: true }, W), 'close');
 r = await api('POST', '/api/v1/table-order/cart', { sessionId: s.sessionId, items: [line(p1, 4)] }, G);
 assert.equal(r.status, 409); step('стол закрыт — гость не может дозаказать в закрытый визит (409)');
+
+// 17. Персональные данные (152-ФЗ): согласие, санитизация, выгрузка, удаление
+{
+  const NUL = String.fromCharCode(0);
+  const tail4 = String(Math.floor(Math.random() * 9000) + 1000);
+  const PH = `8 (900) 177-${tail4.slice(0, 2)}-${tail4.slice(2)}`; // новый номер на каждый прогон: имя уже вошедшего гостя вход не меняет
+  for (const bad of [undefined, false, 'true', 1]) {
+    r = await api('POST', '/api/v1/guest/login', { phone: PH, name: 'Без согласия', consent: bad });
+    assert.equal(r.status, 400, `consent=${String(bad)} → 400`);
+  }
+  r = await api('POST', '/api/v1/guest/fuji', { token: 'x.y.z' });
+  assert.equal(r.status, 400); // сначала согласие, потом проверка токена
+  step('вход без consent === true → 400 (login и fuji)');
+
+  r = await api('POST', '/api/v1/guest/login', { phone: PH, name: { a: 1 }, consent: true });
+  assert.equal(r.status, 400); step('имя не строкой → 400');
+  const pl = ok(await api('POST', '/api/v1/guest/login', { phone: PH, name: `При${NUL}ват\u0007ность`, consent: true }), 'login privacy');
+  assert.equal(pl.guest.name, 'Приватность'); step('NUL и управляющие символы в имени вырезаны (не 500)');
+  const PG = { 'X-Guest-Token': pl.token };
+  assert.equal(pl.guest.aiConsent, false); step('согласие на ИИ по умолчанию выключено');
+
+  const PT = `${TABLE}p`;
+  let ps = ok(await api('POST', '/api/v1/table/enter', { restaurantSlug: 'novo-sadovaya', tableNumber: PT, name: `Имя${NUL}😀`.repeat(30) }, PG), 'enter privacy');
+  assert.ok(ps.guest.name.length <= 100 * 2 && !ps.guest.name.includes(NUL));
+  assert.equal(Array.from(ps.guest.name).length, 100); step('имя при входе за стол: NUL убран, обрезка по кодовым точкам (100)');
+  r = await api('POST', '/api/v1/table/enter', { restaurantSlug: 'novo-sadovaya', tableNumber: `1${NUL}2` }, PG);
+  assert.ok(r.status < 500, `NUL в номере стола: ${r.status}`);
+  r = await api('POST', '/api/v1/table/call-waiter', { sessionId: ps.sessionId, reason: 'general', comment: `Нужен${NUL} соус` }, PG);
+  assert.equal(r.status, 200);
+  r = await api('POST', '/api/v1/table/call-waiter', { sessionId: ps.sessionId, reason: 'question', comment: { x: 1 } }, PG);
+  assert.equal(r.status, 400); step('комментарий вызова: NUL вырезан, не строка → 400');
+  r = await api('PATCH', '/api/v1/guest/me', { allergens: 'орехи' }, PG);
+  assert.equal(r.status, 400);
+  r = await api('POST', '/api/v1/ai/suggest', { restaurantSlug: 'novo-sadovaya', query: `остр${NUL}ое` }, PG);
+  assert.equal(r.status, 200); step('аллергены не списком → 400; NUL в запросе к ИИ → не 500');
+
+  ok(await api('PATCH', '/api/v1/guest/me', { aiConsent: true, allergens: ['орехи'] }, PG), 'ai consent on');
+  const me2 = ok(await api('GET', '/api/v1/guest/me', null, PG), 'me');
+  assert.equal(me2.aiConsent, true); assert.deepEqual(me2.allergens, ['орехи']);
+  ok(await api('PATCH', '/api/v1/guest/me', { aiConsent: false }, PG), 'ai consent off');
+  step('переключатель согласия на ИИ в профиле');
+
+  // Заказ → в работу → отзыв: попадёт в выгрузку
+  ps = ok(await api('POST', '/api/v1/table-order/cart', { sessionId: ps.sessionId, items: [line(p1, 2)] }, PG), 'cart privacy');
+  ok(await api('POST', '/api/v1/table/submit-to-waiter', { sessionId: ps.sessionId, items: [line(p1, 2)] }, PG), 'submit privacy');
+  ok(await api('POST', `/api/v1/waiter/session/${ps.sessionId}/assign`, {}, W), 'assign privacy');
+  ok(await api('POST', `/api/v1/waiter/session/${ps.sessionId}/send-to-production`, {}, W), 'send privacy');
+  ok(await api('POST', '/api/v1/table/feedback', { sessionId: ps.sessionId, rating: 4, comment: `Вкусно${NUL}!` }, PG), 'feedback privacy');
+
+  r = await api('GET', '/api/v1/guest/me/export');
+  assert.equal(r.status, 401); step('выгрузка без входа → 401');
+  const ex = ok(await api('GET', '/api/v1/guest/me/export', null, PG), 'export');
+  assert.equal(ex.profile.name, ps.guest.name); assert.deepEqual(ex.profile.allergens, ['орехи']);
+  assert.equal(ex.consents.personalData.policyVersion, '2026-10-23'); assert.ok(ex.consents.personalData.givenAt);
+  const visit = ex.visits.find((v) => v.id === ps.sessionId);
+  assert.ok(visit, 'визит в выгрузке');
+  assert.equal(visit.orders.length, 1); assert.equal(visit.orders[0].quantity, 2); assert.ok(visit.orders[0].sum > 0);
+  assert.equal(visit.feedback[0].comment, 'Вкусно!'); assert.equal(visit.feedback[0].rating, 4);
+  assert.ok(!JSON.stringify(ex).includes(pl.token), 'токен не попадает в выгрузку');
+  step(`выгрузка: профиль, согласие (consent_at + версия), визит с заказом (${visit.orders[0].sum} ₽), отзыв`);
+
+  // Имя в терминале официанта до удаления
+  let list = ok(await api('GET', '/api/v1/waiter/sessions?restaurant=novo-sadovaya', null, W), 'sessions before');
+  const before = JSON.stringify(list.find((x) => x.sessionId === ps.sessionId) || {});
+  assert.ok(before.includes('Имя'), 'до удаления имя гостя видно');
+
+  r = await api('DELETE', '/api/v1/guest/me');
+  assert.equal(r.status, 401);
+  ok(await api('DELETE', '/api/v1/guest/me', null, PG), 'erase');
+  r = await api('GET', '/api/v1/guest/me', null, PG);
+  assert.equal(r.status, 401); step('удаление: токен недействителен (401)');
+  r = await api('GET', '/api/v1/guest/me/export', null, PG);
+  assert.equal(r.status, 401);
+  list = ok(await api('GET', '/api/v1/waiter/sessions?restaurant=novo-sadovaya', null, W), 'sessions after');
+  const after = JSON.stringify(list.find((x) => x.sessionId === ps.sessionId) || {});
+  assert.ok(after.length > 2 && !after.includes('Имя') && !after.includes('Приватность') && !after.includes(`177-${tail4.slice(0, 2)}-${tail4.slice(2)}`), 'в визите нет имени и телефона');
+  step('удаление: имя гостя в визите стёрто, заказ остался');
+  // Повторный вход по тому же номеру — новый пустой профиль
+  const again = ok(await api('POST', '/api/v1/guest/login', { phone: PH, consent: true }), 'login again');
+  assert.equal(again.guest.name, null); assert.equal(again.guest.visitsCount, 0);
+  ok(await api('DELETE', '/api/v1/guest/me', null, { 'X-Guest-Token': again.token }), 'erase again');
+  await api('POST', `/api/v1/waiter/session/${ps.sessionId}/close`, { force: true }, W);
+  step('повторный вход — чистый профиль; страницы политики и условий открываются');
+  for (const path of ['/privacy', '/terms']) {
+    const res = await fetch(`${BASE}${path}`);
+    const html = await res.text();
+    assert.equal(res.status, 200); assert.match(res.headers.get('content-type') || '', /text\/html/);
+    assert.ok(html.includes('2026-10-23') && !html.includes('id="app"'), `${path}: статическая страница, не SPA`);
+  }
+}
 
 console.log('\nВсе проверки пройдены');

@@ -3,23 +3,23 @@ export const CLOUDKASSIR_CONFIG = {
   // API URL CloudKassir
   apiUrl: process.env.CLOUDKASSIR_API_URL || 'https://api.cloudpayments.ru',
 
-  // Public ID для аутентификации (логин) - тестовые данные ИП Сидоренко
-  publicId: process.env.CLOUDKASSIR_PUBLIC_ID || 'pk_41f2195cf1df0c8f87a011d18f5d4',
+  // Public ID для аутентификации (логин)
+  publicId: process.env.CLOUDKASSIR_PUBLIC_ID || '',
 
-  // API Secret для аутентификации (пароль) - тестовые данные
-  apiSecret: process.env.CLOUDKASSIR_API_SECRET || 'ab77640852a88dff29a0e26235e26217',
+  // API Secret для аутентификации (пароль)
+  apiSecret: process.env.CLOUDKASSIR_API_SECRET || '',
 
   // ИНН организации
-  inn: process.env.CLOUDKASSIR_INN || '631304455014',
+  inn: process.env.CLOUDKASSIR_INN || '',
 
   // Заводской номер кассы
-  cashRegisterNumber: process.env.CLOUDKASSIR_CASH_REGISTER_NUMBER || '1992320030114065',
+  cashRegisterNumber: process.env.CLOUDKASSIR_CASH_REGISTER_NUMBER || '',
 
   // Номер ФН
-  fiscalNumber: process.env.CLOUDKASSIR_FISCAL_NUMBER || '7384440900696733',
+  fiscalNumber: process.env.CLOUDKASSIR_FISCAL_NUMBER || '',
 
   // Регистрационный номер кассы
-  registrationNumber: process.env.CLOUDKASSIR_REGISTRATION_NUMBER || '0009290172048275',
+  registrationNumber: process.env.CLOUDKASSIR_REGISTRATION_NUMBER || '',
 
   // ОФД (Оператор фискальных данных)
   ofd: process.env.CLOUDKASSIR_OFD || 'taxcom',
@@ -28,10 +28,10 @@ export const CLOUDKASSIR_CONFIG = {
   taxSystem: process.env.CLOUDKASSIR_TAX_SYSTEM || 1,
 
   // Email организации
-  email: process.env.CLOUDKASSIR_EMAIL || 'buh-st-zagora@mail.ru',
+  email: process.env.CLOUDKASSIR_EMAIL || '',
 
   // Телефон организации
-  phone: process.env.CLOUDKASSIR_PHONE || '+79879825326',
+  phone: process.env.CLOUDKASSIR_PHONE || '',
 
   // БСО (Бланки строгой отчетности)
   bso: process.env.CLOUDKASSIR_BSO === 'true' || false,
@@ -48,16 +48,14 @@ export const CLOUDKASSIR_CONFIG = {
 
 // Проверка обязательных переменных окружения
 export const validateCloudKassirConfig = () => {
-  const requiredVars = ['CLOUDKASSIR_PUBLIC_ID', 'CLOUDKASSIR_API_SECRET'];
+  const requiredVars = ['CLOUDKASSIR_PUBLIC_ID', 'CLOUDKASSIR_API_SECRET', 'CLOUDKASSIR_INN'];
   const missingVars = requiredVars.filter((varName) => !process.env[varName]);
 
   if (missingVars.length > 0) {
     console.warn('⚠️  CloudKassir: Отсутствуют переменные окружения:', missingVars.join(', '));
-    console.warn('   Используются тестовые значения');
+    console.warn('   Задайте их в .env (см. docs/CLOUDKASSIR_SETUP.md), без них чеки не отправляются');
   } else {
     console.log('✅ CloudKassir: Конфигурация загружена успешно');
-    console.log(`   ИНН: ${CLOUDKASSIR_CONFIG.inn}`);
-    console.log(`   Касса: ${CLOUDKASSIR_CONFIG.cashRegisterNumber}`);
     console.log(`   ОФД: ${CLOUDKASSIR_CONFIG.ofd}`);
   }
 

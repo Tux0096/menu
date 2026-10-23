@@ -1,14 +1,16 @@
 // Метки блюда в меню гостя (menu-api: menu_overrides.badge — коды через запятую; гостевое меню рисует их на фото).
-// Набор и цвета — из макета Figma «WEB MENU»
-export const TAGS: { value: string; label: string; bg: string; color: string }[] = [
-  { value: 'mild', label: 'Остро (зелёный перец)', bg: '#C7EA98', color: '#2B5D21' },
-  { value: 'spicy', label: 'Остро (красный перец)', bg: '#FFB9CA', color: '#76122B' },
-  { value: 'new', label: 'Новинка', bg: '#FFC9AC', color: '#CB4700' },
-  { value: 'hit', label: 'Хит', bg: '#DFC0FF', color: '#6000C7' },
-  { value: 'kids', label: 'Детям', bg: '#FFCEEE', color: '#710049' },
-  { value: 'gift', label: 'Подарок', bg: '#93C9EA', color: '#0C4F79' },
-  { value: 'nosugar', label: 'Без сахара', bg: '#B0D77D', color: '#456E0F' },
+// Набор и цвета — из макета Figma «WEB MENU»; цвета — токены tag-* в tailwind.config.ts (cls — готовые классы фона и текста)
+export const TAGS: { value: string; label: string; cls: string }[] = [
+  { value: 'mild', label: 'Остро (зелёный перец)', cls: 'bg-tag-mild text-tag-mild-ink' },
+  { value: 'spicy', label: 'Остро (красный перец)', cls: 'bg-tag-spicy text-tag-spicy-ink' },
+  { value: 'new', label: 'Новинка', cls: 'bg-tag-new text-tag-new-ink' },
+  { value: 'hit', label: 'Хит', cls: 'bg-tag-hit text-tag-hit-ink' },
+  { value: 'kids', label: 'Детям', cls: 'bg-tag-kids text-tag-kids-ink' },
+  { value: 'gift', label: 'Подарок', cls: 'bg-tag-gift text-tag-gift-ink' },
+  { value: 'nosugar', label: 'Без сахара', cls: 'bg-tag-nosugar text-tag-nosugar-ink' },
 ];
+/** Классы метки, которой нет в TAGS (прежние: вег, выгодно, шеф) */
+export const TAG_FALLBACK_CLS = 'bg-slate-100 text-slate-600';
 // Подписи всех меток, включая прежние (вег, выгодно, шеф) — они остаются на уже размеченных блюдах
 export const BADGES: Record<string, string> = {
   ...Object.fromEntries(TAGS.map((t) => [t.value, t.label])),

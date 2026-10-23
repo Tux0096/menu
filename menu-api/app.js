@@ -8,14 +8,19 @@ import { httpError, securityHeaders, sendError } from './lib/http.js';
 import { ADMIN_WEB_DIR, MEDIA_DIR, WEB_DIR } from './lib/paths.js';
 import { guestPage } from './lib/guest-page.js';
 import { isIikoDemo } from './iiko-client.js';
+import { initMonitoring } from './lib/monitor.js';
 import { isLlmEnabled } from './services/ai-llm.js';
 import { startBackgroundJobs } from './services/background-jobs.js';
+import { encryptStoredPaySecrets } from './services/payments.js';
+import cloudPaymentsWebhook from './routes/cloudpayments-webhook.js';
 import publicRoutes from './routes/public.js';
 import iikoWebhookRoutes from './routes/iiko-webhook.js';
 import guestRoutes from './routes/guest.js';
 import staffRoutes from './routes/staff.js';
 import adminRoutes from './routes/admin.js';
 import legacyRoutes from './routes/legacy.js';
+
+await initMonitoring(); // обработчики unhandledRejection/uncaughtException, Sentry (SENTRY_DSN)
 
 const app = express();
 const PORT = process.env.PORT || 3101;
@@ -36,6 +41,8 @@ app.use(cors({
   origin: (origin, cb) => cb(null, corsAllowed(origin)),
   exposedHeaders: ['X-Staff-Token'], // новый токен персонала (скользящий вход) читает приложение официанта
 }));
+// Вебхуки CloudPayments подписаны по сырому телу — подключаем до express.json (он съел бы тело и подпись не сошлась бы)
+app.use(cloudPaymentsWebhook);
 app.use(express.json({ limit: '1mb' }));
 
 // Маршруты API по областям: публичное, вебхуки iiko, гость, персонал, админка
@@ -80,6 +87,11 @@ app.get('/sw.js', (req, res, next) => {
   res.type('application/javascript').sendFile(join(WEB_DIR, 'guest', 'sw.js'), (err) => err && next(err));
 });
 app.use(express.static(join(WEB_DIR, 'guest'), { index: false }));
+// Политика обработки ПДн и пользовательские условия: статические страницы (не SPA), открываются по ссылке из формы входа
+app.get(['/privacy', '/terms'], (req, res, next) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('html').sendFile(join(WEB_DIR, 'guest', `${req.path.slice(1)}.html`), (err) => err && next(err));
+});
 app.get('*', guest.page);
 
 // Последний обработчик ошибок: битый JSON, слишком большой файл и т. п. — JSON без стека и путей сервера
@@ -87,6 +99,8 @@ app.get('*', guest.page);
 app.use((err, req, res, next) => sendError(res, err.type === 'entity.parse.failed' ? httpError(400, 'Неверный формат запроса') : err, req));
 
 startBackgroundJobs();
+// Секреты CloudPayments точек в базе — только зашифрованными (однократно, повторный запуск безопасен)
+encryptStoredPaySecrets().then((n) => n && console.log(`Секреты оплаты зашифрованы: ${n}`)).catch((e) => console.warn('encryptStoredPaySecrets:', e.message));
 
 app.listen(PORT, () => {
   console.log(`Menu API running on http://localhost:${PORT} (iiko: ${isIikoDemo() ? 'demo' : 'live'}, AI: ${isLlmEnabled() ? 'OpenRouter' : 'instant'})`);

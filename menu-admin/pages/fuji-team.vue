@@ -164,7 +164,7 @@ const ROLE_LABEL: Record<string, string> = { waiter: 'Официанты', manag
           <div v-for="t in tables" :key="`${t.schema}.${t.name}`" class="rounded-xl p-3 ring-1 ring-brand-100">
             <div class="mb-1 text-sm font-semibold">{{ t.schema === 'public' ? t.name : `${t.schema}.${t.name}` }}</div>
             <div class="flex flex-wrap gap-1">
-              <span v-for="c in t.columns" :key="c.name" class="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[11px] text-slate-700" :title="c.type">{{ c.name }}</span>
+              <span v-for="c in t.columns" :key="c.name" class="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-2xs text-slate-700" :title="c.type">{{ c.name }}</span>
             </div>
           </div>
         </div>
