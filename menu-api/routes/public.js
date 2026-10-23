@@ -1,7 +1,8 @@
 /** Публичное API: рестораны, меню, конфиг гостевого меню, QR, картинки, проверка здоровья. */
 import { createHash } from 'crypto';
 import express from 'express';
-import { h } from '../lib/http.js';
+import { h, httpError } from '../lib/http.js';
+import { qrSignedRequired } from '../lib/qr-config.js';
 import pool from '../db/pool.js';
 import { isIikoDemo, accessibleOrgIds } from '../iiko-client.js';
 import { imageHandler } from '../services/images.js';
@@ -99,6 +100,8 @@ router.get('/api/v1/config', h(async (req) => {
 }));
 
 router.get('/api/v1/qr.svg', h(async (req, res) => {
+  // Включён вход только по QR с подписью — QR без подписи не выдаём (подписанные берут из админки)
+  if (await qrSignedRequired()) throw httpError(403, 'Вход только по подписанному QR — QR столов берите в админке («QR-коды столов»)');
   const r = await resolveRestaurant(req.query.restaurant);
   res.type('image/svg+xml').send(await tableQrSvg(r.slug, req.query.table || '1'));
 }));

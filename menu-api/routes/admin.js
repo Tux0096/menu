@@ -4,7 +4,7 @@ import { MEDIA_DIR } from '../lib/paths.js';
 import { join } from 'path';
 import { mkdirSync, writeFileSync } from 'fs';
 import { randomUUID } from 'crypto';
-import { h, httpError, requireBody } from '../lib/http.js';
+import { h, httpError, requireBody, rateLimit, sendError } from '../lib/http.js';
 import pool from '../db/pool.js';
 import { isIikoDemo, accessibleOrgs, iikoRequest, withIikoCreds } from '../iiko-client.js';
 import { iikoCredsList, iikoCredsLabel, iikoApiLogin, maskIikoKey } from '../lib/iiko-token.js';
@@ -269,9 +269,20 @@ admin.post('/point-info', h(async (req) => {
 }));
 // База сотрудников «Фуджи Тим» (вход на of. по табельному): подключение, структура базы (без данных),
 // запрос сотрудников — проверка и сохранение. Строка подключения — только на сервере (GitHub Secret FUJI_TEAM_DATABASE_URL)
+// Только администратор сети (сотрудник без привязки к точке): здесь строка подключения к базе и список сотрудников
+const requireNetworkAdmin = (req, res, next) => (req.staff.restaurantId
+  ? sendError(res, httpError(403, 'Настройка общая для сети — её меняет администратор сети'), req)
+  : next());
+const teamTestLimit = rateLimit({ windowMs: 60_000, max: 10, message: 'Слишком много проверок — подождите минуту' });
+admin.use('/fuji-team', requireNetworkAdmin);
 admin.get('/fuji-team', h(async () => teamStatus()));
 admin.get('/fuji-team/schema', h(async () => teamSchema()));
-admin.post('/fuji-team/test', h(async (req) => testStaffQuery(req.body?.query)));
+admin.post('/fuji-team/test', teamTestLimit, h(async (req) => {
+  const out = await testStaffQuery(req.body?.query);
+  // В аудит — только числа, без имён и кодов сотрудников
+  audit(req.staff, 'fuji_team.test', 'settings', 'fuji_team', { total: out.total, active: out.active });
+  return out;
+}));
 admin.put('/fuji-team', h(async (req) => {
   const out = await saveStaffQuery(req.body?.query);
   audit(req.staff, 'fuji_team.query', 'settings', 'fuji_team', { length: out.query.length });

@@ -21,6 +21,7 @@ import { getSource, MAIN } from './sources.js';
 import { createWaiterNotification } from './waiter-notifications.js';
 import { NOTIFY_TYPES } from '../lib/table-workflow-config.js';
 import { httpError } from '../lib/http.js';
+import { decryptSecret, encryptSecret } from '../lib/secret-box.js';
 import { withSessionMutex } from '../lib/session-mutex.js';
 
 const CP_API = 'https://api.cloudpayments.ru';
@@ -43,7 +44,7 @@ export async function paySettings(restaurantId) {
   const { rows } = await pool.query('SELECT * FROM restaurant_payment_settings WHERE restaurant_id = $1', [restaurantId]);
   const r = rows[0] || {};
   const publicId = r.cp_public_id || process.env.CLOUDPAYMENTS_PUBLIC_ID || '';
-  const apiSecret = r.cp_api_secret || process.env.CLOUDPAYMENTS_API_SECRET || '';
+  const apiSecret = decryptSecret(r.cp_api_secret) || process.env.CLOUDPAYMENTS_API_SECRET || '';
   return {
     enabled: Boolean(r.online_enabled && publicId && apiSecret),
     onlineEnabled: Boolean(r.online_enabled),
@@ -54,6 +55,17 @@ export async function paySettings(restaurantId) {
     iikoCashTypeId: r.iiko_cash_type_id || process.env.IIKO_CASH_PAYMENT_TYPE_ID || '',
     iikoCardTypeId: r.iiko_card_type_id || process.env.IIKO_CARD_PAYMENT_TYPE_ID || '',
   };
+}
+
+/** Однократно при старте: открытые секреты точек в базе → enc:v1 (повторный запуск ничего не меняет) */
+export async function encryptStoredPaySecrets() {
+  const { rows } = await pool.query(`SELECT restaurant_id, cp_api_secret FROM restaurant_payment_settings
+    WHERE cp_api_secret IS NOT NULL AND cp_api_secret <> '' AND cp_api_secret NOT LIKE 'enc:v1:%'`);
+  for (const r of rows) {
+    await pool.query('UPDATE restaurant_payment_settings SET cp_api_secret = $2 WHERE restaurant_id = $1 AND cp_api_secret = $3',
+      [r.restaurant_id, encryptSecret(r.cp_api_secret), r.cp_api_secret]);
+  }
+  return rows.length;
 }
 
 /** Для админки: секрет не отдаём, только «задан/не задан». */
@@ -67,7 +79,7 @@ export async function paySettingsForAdmin(restaurantId) {
 
 export async function savePaySettings(restaurantId, body = {}) {
   const publicId = String(body.publicId ?? '').trim().slice(0, 100) || null;
-  const secret = body.apiSecret != null && String(body.apiSecret).trim() ? String(body.apiSecret).trim() : null;
+  const secret = body.apiSecret != null && String(body.apiSecret).trim() ? encryptSecret(String(body.apiSecret).trim()) : null;
   const typeId = (v) => String(v ?? '').trim().slice(0, 64) || null;
   const iikoType = typeId(body.iikoPaymentTypeId);
   await pool.query(

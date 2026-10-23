@@ -10,6 +10,7 @@ import { guestPage } from './lib/guest-page.js';
 import { isIikoDemo } from './iiko-client.js';
 import { isLlmEnabled } from './services/ai-llm.js';
 import { startBackgroundJobs } from './services/background-jobs.js';
+import { encryptStoredPaySecrets } from './services/payments.js';
 import publicRoutes from './routes/public.js';
 import iikoWebhookRoutes from './routes/iiko-webhook.js';
 import guestRoutes from './routes/guest.js';
@@ -87,6 +88,8 @@ app.get('*', guest.page);
 app.use((err, req, res, next) => sendError(res, err.type === 'entity.parse.failed' ? httpError(400, 'Неверный формат запроса') : err, req));
 
 startBackgroundJobs();
+// Секреты CloudPayments точек в базе — только зашифрованными (однократно, повторный запуск безопасен)
+encryptStoredPaySecrets().then((n) => n && console.log(`Секреты оплаты зашифрованы: ${n}`)).catch((e) => console.warn('encryptStoredPaySecrets:', e.message));
 
 app.listen(PORT, () => {
   console.log(`Menu API running on http://localhost:${PORT} (iiko: ${isIikoDemo() ? 'demo' : 'live'}, AI: ${isLlmEnabled() ? 'OpenRouter' : 'instant'})`);

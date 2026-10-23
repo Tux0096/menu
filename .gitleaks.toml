@@ -1,0 +1,23 @@
+# Правила gitleaks для репозитория (опционально; основная проверка — scripts/check-secrets.sh)
+title = "fuji-menu"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "hex32-secret"
+description = "32-hex значение рядом с secret/password/token"
+regex = '''(?i)(secret|passw(or)?d|token|api_?key)[a-z_]*['"]?\s*[:=]\s*(process\.env\.[A-Z_]+\s*\|\|\s*)?['"][0-9a-f]{32}['"]'''
+
+[[rules]]
+id = "openrouter-key"
+description = "Ключ OpenRouter"
+regex = '''sk-or-[A-Za-z0-9_-]{16,}'''
+
+[[rules]]
+id = "postgres-url-with-password"
+description = "postgres://user:password@host"
+regex = '''postgres(ql)?://[^:/@\s'"]+:[^@/\s'"$]+@'''
+
+[allowlist]
+paths = ['''package-lock\.json''', '''node_modules''', '''\.nuxt''']
