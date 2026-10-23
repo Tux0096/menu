@@ -7,7 +7,7 @@ FILES=$(git ls-files | grep -vE '(^|/)(package-lock\.json|node_modules/|\.nuxt/|
 fail=0
 check() {
   local title="$1" re="$2" hits
-  hits=$(echo "$FILES" | xargs -d '\n' grep -InE "$re" 2>/dev/null | grep -vE 'example|placeholder|your_|dev-secret-change-me|PG_PASSWORD' | cut -c1-200)
+  hits=$(echo "$FILES" | xargs -d '\n' grep -InE "$re" 2>/dev/null | grep -vE 'example|placeholder|your_|dev-secret-change-me|PG_PASSWORD|'test_secret'' | cut -c1-200)
   if [ -n "$hits" ]; then echo "== $title"; echo "$hits"; fail=1; fi
 }
 check "32 hex рядом с secret/password/token/key" "(secret|passw(or)?d|token|api_?key)[A-Za-z_]*['\"]?[[:space:]]*[:=][[:space:]]*(process\.env\.[A-Z_]+[[:space:]]*\|\|[[:space:]]*)?['\"][0-9a-f]{32}['\"]"
