@@ -110,7 +110,7 @@ const llmCache = new Map();
  * при недоступности — мгновенный подбор по ключевым словам (fallback без пустого экрана).
  * Возвращает { suggestions, engine, answer }.
  */
-export async function suggestForQuery(restaurant, query, limit = 6, guest = null, { useLlm = true, cartNames = [] } = {}) {
+export async function suggestForQuery(restaurant, query, limit = 6, guest = null, { useLlm = true, cartNames = [], limitKey = null } = {}) {
   const products = excludeAllergens(await getCatalogProducts(restaurant), guest?.allergens);
   const [learning, favorites] = await Promise.all([
     getLearningBoosts(query),
@@ -131,6 +131,7 @@ export async function suggestForQuery(restaurant, query, limit = 6, guest = null
     const favNames = guest?.aiConsent ? available.filter((p) => favorites.has(String(p.iikoId || p.id))).map((p) => p.name).slice(0, 8) : [];
     const llm = await llmSuggest(query, available, {
       limit: Math.min(limit, 5),
+      limitKey,
       guest: { name: guest?.name, allergens: guest?.allergens, aiConsent: guest?.aiConsent === true, favorites: favNames, cart: cartNames.slice(0, 20) },
     });
     if (llm) {

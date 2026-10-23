@@ -72,7 +72,7 @@ waiter.param('id', async (req, res, next, id) => {
 });
 waiter.get('/notifications', h(async (req) => {
   const r = await staffRestaurant(req);
-  return listWaiterNotifications(r.id, { unreadOnly: req.query.unread === '1', staff: req.staff });
+  return listWaiterNotifications(r.id, { unreadOnly: req.query.unread === '1', staff: req.staff, query: req.query });
 }));
 waiter.post('/notifications/read-all', h(async (req) => {
   const r = await staffRestaurant(req);
@@ -231,7 +231,7 @@ waiter.post('/session/:id/close', h(async (req) => {
 const editAudited = new Map();
 router.use('/api/v1/waiter', waiter);
 
-router.get('/api/v1/manager/feedback', staffAuth('manager'), h(async (req) => listFeedback((await staffRestaurant(req)).id)));
+router.get('/api/v1/manager/feedback', staffAuth('manager'), h(async (req) => listFeedback((await staffRestaurant(req)).id, req.query)));
 router.get('/api/v1/manager/dashboard', staffAuth('manager'), h(async (req) => getHallDashboard((await staffRestaurant(req)).id)));
 // Брони на сегодня для админки: только просмотр, телефон маскирован
 router.get('/api/v1/manager/reservations', staffAuth('manager'), h(async (req) => {

@@ -1,6 +1,7 @@
 /** Вебхуки iiko: стоп-листы и статусы заказов на стол (токен — в заголовке Authorization). */
 import express from 'express';
 import { h, safeEqual } from '../lib/http.js';
+import { sessionHasIikoOrderSql, uuidOrNull } from '../lib/uuid.js';
 import { demoApply } from '../lib/iiko-demo-orders.js';
 import { demoReservesApply } from '../lib/iiko-demo-reserves.js';
 import { asBackground, isIikoDemo } from '../iiko-client.js';
@@ -31,11 +32,11 @@ router.post('/api/v1/iiko/webhook', (req, res) => {
       // TableOrderError — ошибка создания заказа на стол: обновляем визит сразу, не дожидаясь фонового опроса
       if (['TableOrderUpdate', 'TableOrderError'].includes(ev?.eventType) && ev.eventInfo?.id) {
         // Заказ кухни или доп. источника (бар) — ищем по всем заказам визита
-        const { rows } = await pool.query(
-          `SELECT id FROM table_sessions WHERE iiko_order_id::text = $1
-              OR EXISTS (SELECT 1 FROM jsonb_each(iiko_orders) e WHERE e.value->>'orderId' = $1)`,
-          [String(ev.eventInfo.id)],
-        );
+        // Формат ID проверяем: чужая строка в запросе по uuid-колонке дала бы ошибку БД
+        const orderId = uuidOrNull(String(ev.eventInfo.id).toLowerCase());
+        const { rows } = orderId
+          ? await pool.query(`SELECT id FROM table_sessions WHERE ${sessionHasIikoOrderSql('$1')}`, [orderId])
+          : { rows: [] };
         for (const r of rows) await refreshFromIiko(r.id);
         // Заказа у нас нет: открыли на кассе (или новый заказ на столе с нашим визитом) — подтягиваем открытые заказы точки
         if (!rows.length && ev.eventType === 'TableOrderUpdate') scheduleImport(ev.organizationId);

@@ -1,13 +1,19 @@
 [Unit]
 Description=Fuji Menu API
-After=network.target postgresql.service docker.service
+After=network-online.target postgresql.service docker.service
+Wants=network-online.target
+# Без ограничения числа перезапусков: если БД или сеть недоступны дольше минуты, сервис продолжает пробовать, а не сдаётся
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/menu/menu-api
 Environment=NODE_ENV=production
+# Postgres в Docker поднимается позже системы: ждём ответа БД до 60 секунд (db/wait-db.js), потом запускаем API
+ExecStartPre=/usr/bin/node db/wait-db.js
 ExecStart=/usr/bin/node app.js
+TimeoutStartSec=90
 Restart=always
 RestartSec=5
 

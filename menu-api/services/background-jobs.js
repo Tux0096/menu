@@ -1,8 +1,9 @@
 /** Фоновые задачи API: выгрузка меню iiko, стоп-листы, статусы кухни, проверки сервиса и онлайн-оплат. */
 import pool from '../db/pool.js';
-import { asBackground, isIikoDemo } from '../iiko-client.js';
+import { asBackground, iikoLimitStreakMs, isIikoDemo } from '../iiko-client.js';
+import { startWatchdog } from '../lib/monitor.js';
 import { syncAllRestaurants } from '../db/sync-iiko.js';
-import { warmImages } from './images.js';
+import { cleanImageCache, warmImages } from './images.js';
 import { checkPendingPayments } from './payments.js';
 import { refreshStopLists, registerWebhooks } from './stoplist.js';
 import { invalidateCatalogCache, warmCatalogs } from './catalog.js';
@@ -113,6 +114,10 @@ export function startBackgroundJobs() {
   setInterval(() => checkPendingPayments().catch((e) => console.warn('онлайн-оплата:', e.message)), 30000);
   setInterval(() => asBackground(refreshAllStopLists), parseInt(process.env.STOP_LIST_REFRESH_MS || '600000', 10));
   initGuestPush();
+  startWatchdog(pool, iikoLimitStreakMs); // БД, диск, лимит iiko → Telegram (ALERT_TELEGRAM_*)
+  // Кэш картинок: раз в сутки убираем старое (30 дней без обращения) и лишнее сверх 2 ГБ
+  setInterval(() => cleanImageCache().catch((e) => console.warn('кэш картинок:', e.message)), 24 * 60 * 60 * 1000);
+  setTimeout(() => cleanImageCache().catch((e) => console.warn('кэш картинок:', e.message)), 5 * 60_000).unref?.();
   loadTeamSettings(); // запрос сотрудников «Фуджи Тим» из админки
   setInterval(cleanupExpired, 6 * 60 * 60 * 1000);
   setTimeout(cleanupExpired, 60_000).unref?.();

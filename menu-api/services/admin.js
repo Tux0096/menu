@@ -4,6 +4,7 @@
  */
 import QRCode from 'qrcode';
 import pool from '../db/pool.js';
+import { finishPage, parsePage } from '../lib/paging.js';
 import { PUBLIC_MENU_URL, qrKey } from '../lib/qr-config.js';
 import { getRestaurantCatalog, invalidateCatalogCache } from './catalog.js';
 import { httpError } from './table-session.js';
@@ -157,31 +158,52 @@ export async function deleteRow(table, id) {
 
 // ── Отзывы, журнал ──────────────────────────────────────────────────────────
 
-export async function listFeedback(restaurantId, limit = 100) {
+/** Отзывы точки, новые первыми. Без параметров листа — массив (старые клиенты), с limit/before — { items, hasMore, nextCursor, total }. */
+export async function listFeedback(restaurantId, query = {}) {
+  const page = parsePage(query, { def: 100, max: 200 });
+  const { cursor } = page;
   const { rows } = await pool.query(
-    `SELECT f.id, f.rating, f.comment, f.created_at, s.table_number, s.total,
+    `SELECT f.id, f.rating, f.comment, f.created_at, f.created_at::text AS cursor_at, s.table_number, s.total,
             g.name AS guest_name, g.phone AS guest_phone, u.name AS waiter_name
      FROM visit_feedback f
      JOIN table_sessions s ON s.id = f.session_id
      LEFT JOIN guests g ON g.id = s.guest_id
      LEFT JOIN staff_users u ON u.id = s.waiter_id
-     WHERE s.restaurant_id = $1
-     ORDER BY f.created_at DESC LIMIT $2`,
-    [restaurantId, limit],
+     WHERE s.restaurant_id = $1 AND ($3::timestamptz IS NULL OR (f.created_at, f.id::text) < ($3::timestamptz, $4::text))
+     ORDER BY f.created_at DESC, f.id::text DESC LIMIT $2`,
+    [restaurantId, page.limit + 1, cursor?.at ?? null, cursor ? String(cursor.id) : null],
   );
-  return rows;
+  let total = null;
+  if (page.paged) {
+    total = (await pool.query(
+      'SELECT COUNT(*)::int AS n FROM visit_feedback f JOIN table_sessions s ON s.id = f.session_id WHERE s.restaurant_id = $1',
+      [restaurantId],
+    )).rows[0].n;
+  }
+  return finishPage(rows, page, total);
 }
 
-/** Журнал действий; сотруднику ресторана — только действия сотрудников этого ресторана */
-export async function listAudit(limit = 200, restaurantId = null) {
-  const { rows } = restaurantId
-    ? await pool.query(
-      `SELECT a.* FROM audit_log a JOIN staff_users u ON u.id = a.staff_id
-       WHERE u.restaurant_id = $2 ORDER BY a.created_at DESC LIMIT $1`,
-      [limit, restaurantId],
-    )
-    : await pool.query('SELECT * FROM audit_log ORDER BY created_at DESC LIMIT $1', [limit]);
-  return rows;
+/** Журнал действий; сотруднику ресторана — только действия сотрудников этого ресторана. Формат ответа — как у listFeedback. */
+export async function listAudit(query = {}, restaurantId = null) {
+  const page = parsePage(query, { def: 200, max: 500 });
+  const { cursor } = page;
+  const scope = restaurantId ? 'JOIN staff_users u ON u.id = a.staff_id AND u.restaurant_id = $4' : '';
+  const params = [page.limit + 1, cursor?.at ?? null, cursor ? Number(cursor.id) : null];
+  if (restaurantId) params.push(restaurantId);
+  const { rows } = await pool.query(
+    `SELECT a.*, a.created_at::text AS cursor_at FROM audit_log a ${scope}
+     WHERE ($2::timestamptz IS NULL OR (a.created_at, a.id) < ($2::timestamptz, $3::int))
+     ORDER BY a.created_at DESC, a.id DESC LIMIT $1`,
+    params,
+  );
+  let total = null;
+  if (page.paged) {
+    total = (await pool.query(
+      `SELECT COUNT(*)::int AS n FROM audit_log a ${restaurantId ? 'JOIN staff_users u ON u.id = a.staff_id AND u.restaurant_id = $1' : ''}`,
+      restaurantId ? [restaurantId] : [],
+    )).rows[0].n;
+  }
+  return finishPage(rows, page, total);
 }
 
 export async function listRestaurants() {

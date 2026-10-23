@@ -1,8 +1,7 @@
 /** Гость QR-меню: вход, стол, корзина, счёт и оплата, AI-помощник. */
 import express from 'express';
-import { h, httpError, rateLimit, requireBody, sendError } from '../lib/http.js';
-import { cleanText } from '../lib/sanitize.js';
-import { stripNulMiddleware } from '../lib/sanitize.js';
+import { createLimiter, h, httpError, rateLimit, requireBody, sendError } from '../lib/http.js';
+import { cleanText, stripNulMiddleware } from '../lib/sanitize.js';
 import { confirmOnlinePayment, startOnlinePayment } from '../services/payments.js';
 import { getWelcomeSuggestions, suggestForQuery } from '../services/ai-suggest.js';
 import { logAiQuery, recordAiFeedback } from '../services/ai-learning.js';
@@ -24,6 +23,8 @@ export default router;
 const guestLoginLimit = rateLimit({ windowMs: 10 * 60_000, max: 100, message: 'Слишком много попыток входа — подождите 10 минут' });
 const aiLimit = rateLimit({ windowMs: 60_000, max: 60, message: 'Слишком много запросов к помощнику — подождите минуту' });
 const pushSubscribeLimit = rateLimit({ windowMs: 10 * 60_000, max: 60, message: 'Слишком много запросов — подождите' });
+// Анонимный (без входа) подбор — 10 в минуту с адреса: каждый запрос может быть платным вызовом модели
+const aiAnonLimit = createLimiter({ windowMs: 60_000, max: 10, message: 'Слишком много запросов к помощнику — подождите минуту' });
 const aiFeedbackLimit = rateLimit({ windowMs: 60_000, max: 120 });
 
 // ── Гость: вход ─────────────────────────────────────────────────────────────
@@ -167,7 +168,9 @@ router.post('/api/v1/ai/suggest', aiLimit, guestAuth({ required: false }), h(asy
   const query = cleanText(req.body.query, 300, { label: 'Запрос' });
   if (!query) throw httpError(400, 'Не заполнено: query');
   const cartNames = Array.isArray(req.body.cart) ? req.body.cart.map((c) => cleanText(c, 100, { label: 'Корзина' })).filter(Boolean) : [];
-  const { suggestions, engine, answer } = await suggestForQuery(restaurant, query, 6, req.guest, { cartNames });
+  if (!req.guest) aiAnonLimit.hit(req.ip);
+  const limitKey = req.guest?.id ? `g:${req.guest.id}` : `ip:${req.ip}`; // дневной лимит запросов к модели — на гостя или адрес
+  const { suggestions, engine, answer } = await suggestForQuery(restaurant, query, 6, req.guest, { cartNames, limitKey });
   logAiQuery(restaurant.slug, query, suggestions).catch(() => {});
   return { query, suggestions, engine, answer };
 }));

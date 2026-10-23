@@ -32,7 +32,7 @@ const SCHEMA = `
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(100) NOT NULL,
     slug VARCHAR(100) UNIQUE NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS restaurants (
@@ -48,7 +48,7 @@ const SCHEMA = `
     sort_order INTEGER DEFAULT 0,
     is_disabled BOOLEAN DEFAULT FALSE,
     work_hours JSONB DEFAULT '[]',
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
   );
   ALTER TABLE restaurants
     ADD COLUMN IF NOT EXISTS tables_count INT NOT NULL DEFAULT 20;
@@ -61,7 +61,7 @@ const SCHEMA = `
     sort_order INTEGER DEFAULT 0,
     image_url TEXT,
     is_visible BOOLEAN DEFAULT TRUE,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW()
   );
 
   CREATE TABLE IF NOT EXISTS products (
@@ -82,7 +82,7 @@ const SCHEMA = `
     proteins NUMERIC(8,2),
     fats NUMERIC(8,2),
     carbs NUMERIC(8,2),
-    created_at TIMESTAMP DEFAULT NOW(),
+    created_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (restaurant_id, iiko_id)
   );
   CREATE INDEX IF NOT EXISTS idx_products_restaurant ON products(restaurant_id);
@@ -92,7 +92,7 @@ const SCHEMA = `
     id SERIAL PRIMARY KEY,
     name VARCHAR(100) UNIQUE NOT NULL,
     value JSONB,
-    updated_at TIMESTAMP DEFAULT NOW()
+    updated_at TIMESTAMPTZ DEFAULT NOW()
   );
 
   -- Гости (идентификация по телефону / токену приложения Fuji)
@@ -124,8 +124,8 @@ const SCHEMA = `
     status VARCHAR(30) NOT NULL DEFAULT 'open',
     payment_status VARCHAR(30) NOT NULL DEFAULT 'unpaid',
     total NUMERIC(12,2) NOT NULL DEFAULT 0,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
   );
   CREATE UNIQUE INDEX IF NOT EXISTS idx_table_sessions_one_open
     ON table_sessions(restaurant_id, table_number)
@@ -166,8 +166,8 @@ const SCHEMA = `
     quantity INTEGER NOT NULL DEFAULT 1,
     line_total NUMERIC(10,2) NOT NULL DEFAULT 0,
     synced_to_iiko BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
   );
   CREATE INDEX IF NOT EXISTS idx_table_order_items_session ON table_order_items(session_id);
   ALTER TABLE table_order_items
@@ -178,11 +178,11 @@ const SCHEMA = `
     ADD COLUMN IF NOT EXISTS kitchen_status VARCHAR(40),
     ADD COLUMN IF NOT EXISTS guest_id UUID,
     ADD COLUMN IF NOT EXISTS guest_name VARCHAR(100),
-    ADD COLUMN IF NOT EXISTS ready_notified_at TIMESTAMP,
-    ADD COLUMN IF NOT EXISTS served_at TIMESTAMP,
-    ADD COLUMN IF NOT EXISTS sent_at TIMESTAMP;
+    ADD COLUMN IF NOT EXISTS ready_notified_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS served_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS sent_at TIMESTAMPTZ;
   -- Тревога «готово, но не вынесено» отправлена (одна на позицию)
-  ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS ready_wait_notified_at TIMESTAMP;
+  ALTER TABLE table_order_items ADD COLUMN IF NOT EXISTS ready_wait_notified_at TIMESTAMPTZ;
   -- Время готовки: когда начали готовить, когда готово, сколько готовилось (минуты), тревога «долго готовится» отправлена
   ALTER TABLE table_order_items
     ADD COLUMN IF NOT EXISTS cooking_started_at TIMESTAMPTZ,
@@ -195,9 +195,6 @@ const SCHEMA = `
   -- Когда стол взял официант (кнопка «Взять стол» на of. или импорт из iiko); NULL — стол «общий»
   ALTER TABLE table_sessions ADD COLUMN IF NOT EXISTS waiter_assigned_at TIMESTAMPTZ;
   CREATE INDEX IF NOT EXISTS idx_table_sessions_waiter ON table_sessions(restaurant_id, waiter_id) WHERE status = 'open';
-  -- product_id в каталоге prod-API не совпадает с products.id → убираем FK, если он был
-  ALTER TABLE table_order_items DROP CONSTRAINT IF EXISTS table_order_items_product_id_fkey;
-  ALTER TABLE table_order_items ALTER COLUMN product_id TYPE VARCHAR(100) USING product_id::text;
 
   CREATE TABLE IF NOT EXISTS restaurant_table_cache (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -205,7 +202,7 @@ const SCHEMA = `
     table_number VARCHAR(50) NOT NULL,
     iiko_table_id UUID NOT NULL,
     table_name VARCHAR(200),
-    updated_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
     UNIQUE (restaurant_id, table_number)
   );
 
@@ -401,9 +398,6 @@ const SCHEMA = `
   ALTER TABLE staff_users ADD COLUMN IF NOT EXISTS team_code VARCHAR(32);
   CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_users_team_code ON staff_users (team_code);
   ALTER TABLE staff_users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ;
-  -- Роль «Маркетинг»: только контент меню (баннеры, подсказки AI, карточки блюд)
-  ALTER TABLE staff_users DROP CONSTRAINT IF EXISTS staff_users_role_check;
-  ALTER TABLE staff_users ADD CONSTRAINT staff_users_role_check CHECK (role IN ('admin', 'manager', 'waiter', 'marketing'));
   -- Метка блюда в меню: hit, new, spicy, veg, sale, chef
   ALTER TABLE menu_overrides ADD COLUMN IF NOT EXISTS badge VARCHAR(20);
   -- Баннеры: где показывать, в каком ресторане, куда ведут, когда показывать
@@ -430,8 +424,7 @@ const SCHEMA = `
   ALTER TABLE table_payments ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;
   CREATE UNIQUE INDEX IF NOT EXISTS idx_table_payments_invoice ON table_payments (invoice_id) WHERE invoice_id IS NOT NULL;
   ALTER TABLE table_payments ADD COLUMN IF NOT EXISTS guest_ids JSONB;
-  -- Макет меню: несколько меток у блюда (через запятую), большая карточка в списке
-  ALTER TABLE menu_overrides ALTER COLUMN badge TYPE VARCHAR(120);
+  -- Макет меню: большая карточка в списке (несколько меток у блюда — шаг badge_varchar120)
   ALTER TABLE menu_overrides ADD COLUMN IF NOT EXISTS card_size VARCHAR(10);
   -- Время работы точки — в выборе ресторана у гостя
   ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS hours_text VARCHAR(60);
@@ -450,17 +443,7 @@ const SCHEMA = `
   -- Раздел показывается только в часы: «с HH:MM» и/или «до HH:MM» по времени точки (пусто — всегда)
   ALTER TABLE category_content ADD COLUMN IF NOT EXISTS show_from VARCHAR(5);
   ALTER TABLE category_content ADD COLUMN IF NOT EXISTS show_until VARCHAR(5);
-  -- Разделы кухни и бара с одним названием настраиваются отдельно: у раздела бара ключ «название|bar», старый ключ — у кухни.
-  -- Раздел, который есть только в баре, переезжает на новый ключ со своими настройками (копия; старая строка остаётся)
-  INSERT INTO category_content (key, name, image_url, title, sort_order, tab, is_hidden)
-  SELECT cc.key || '|bar', cc.name, cc.image_url, cc.title, cc.sort_order, cc.tab, cc.is_hidden
-    FROM category_content cc
-   WHERE cc.key NOT LIKE '%|bar'
-     AND EXISTS (SELECT 1 FROM products p JOIN categories c ON c.id = p.category_id
-                  WHERE p.source <> 'main' AND btrim(regexp_replace(replace(lower(c.name), 'ё', 'е'), '[^a-zа-я0-9]+', ' ', 'g')) = cc.key)
-     AND NOT EXISTS (SELECT 1 FROM products p JOIN categories c ON c.id = p.category_id
-                      WHERE p.source = 'main' AND btrim(regexp_replace(replace(lower(c.name), 'ё', 'е'), '[^a-zа-я0-9]+', ' ', 'g')) = cc.key)
-  ON CONFLICT (key) DO NOTHING;
+  -- Разделы кухни и бара с одним названием настраиваются отдельно (ключ «название|bar») — перенос данных: шаг category_content_bar_keys
   -- Размеры и модификаторы блюда из внешнего меню iiko (с ценами точки): { sizes: [...] } или { groups: [...] }
   ALTER TABLE products ADD COLUMN IF NOT EXISTS options JSONB;
   -- Блюдо стоит в нескольких разделах внешнего меню (бизнес-ланч из обычных блюд): { источник: [{ c: раздел, o: порядок }] }
@@ -639,6 +622,23 @@ const SCHEMA = `
     ADD COLUMN IF NOT EXISTS ai_consent_at TIMESTAMPTZ;
   -- Чей отзыв (для выгрузки и удаления данных гостя); у старых отзывов NULL — гость определяется по визиту
   ALTER TABLE visit_feedback ADD COLUMN IF NOT EXISTS guest_id UUID;
+
+  -- Часовой пояс точки (IANA): запасной для бизнес-ланча, алкоголя и броней, если в их настройках пояс не задан
+  ALTER TABLE restaurants ADD COLUMN IF NOT EXISTS timezone VARCHAR(64) NOT NULL DEFAULT 'Europe/Samara';
+
+  -- Однократные шаги миграции (DELETE/UPDATE/DROP/смена типов): выполняются один раз и записываются сюда
+  CREATE TABLE IF NOT EXISTS schema_steps (
+    name VARCHAR(100) PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+
+  -- Дневной расход запросов к LLM (services/ai-llm.js): scope 'total' — вся сеть, 'guest:<id>' — на гостя/визит
+  CREATE TABLE IF NOT EXISTS ai_llm_usage (
+    day DATE NOT NULL,
+    scope VARCHAR(100) NOT NULL,
+    count INT NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, scope)
+  );
 `;
 
 const DEFAULT_CHIPS = [
@@ -652,46 +652,156 @@ const DEFAULT_CHIPS = [
   { label: 'Напитки', query: 'напитки', emoji: '🥤', sort: 8 },
 ];
 
-// Уникальные индексы на старых данных могут не создаться из-за дублей — не валим миграцию.
-const SOFT_INDEXES = [
-  // Старые данные: оставить по одному отзыву на визит и одну успешную оплату, иначе индекс не создастся
-  `DELETE FROM visit_feedback a USING visit_feedback b
-     WHERE a.session_id = b.session_id AND (a.created_at, a.id::text) > (b.created_at, b.id::text)`,
-  'CREATE UNIQUE INDEX IF NOT EXISTS idx_visit_feedback_session ON visit_feedback(session_id)',
+/**
+ * Однократные шаги: всё, что удаляет, переписывает данные или меняет типы колонок. Выполняются в порядке списка,
+ * каждый — в своей транзакции вместе с записью в schema_steps; повторный запуск миграции их пропускает.
+ * soft: true — сбой не останавливает деплой (громкое предупреждение), шаг повторится при следующей миграции.
+ * Новый деструктивный шаг — только сюда и под новым именем; имена уже выполненных шагов не менять.
+ */
+const STEPS = [
+  // product_id в каталоге prod-API не совпадает с products.id → убираем FK, если он был
+  { name: 'order_items_product_id_varchar', sql: `
+    ALTER TABLE table_order_items DROP CONSTRAINT IF EXISTS table_order_items_product_id_fkey;
+    ALTER TABLE table_order_items ALTER COLUMN product_id TYPE VARCHAR(100) USING product_id::text;` },
+  // Роль «Маркетинг»: только контент меню (баннеры, подсказки AI, карточки блюд)
+  { name: 'staff_role_check_marketing', sql: `
+    ALTER TABLE staff_users DROP CONSTRAINT IF EXISTS staff_users_role_check;
+    ALTER TABLE staff_users ADD CONSTRAINT staff_users_role_check CHECK (role IN ('admin', 'manager', 'waiter', 'marketing'));` },
+  // Несколько меток у блюда (через запятую)
+  { name: 'badge_varchar120', sql: 'ALTER TABLE menu_overrides ALTER COLUMN badge TYPE VARCHAR(120)' },
+  // Разделы кухни и бара с одним названием настраиваются отдельно: у раздела бара ключ «название|bar», старый ключ — у кухни.
+  // Раздел, который есть только в баре, переезжает на новый ключ со своими настройками (копия; старая строка остаётся)
+  { name: 'category_content_bar_keys', soft: true, sql: `
+    INSERT INTO category_content (key, name, image_url, title, sort_order, tab, is_hidden)
+    SELECT cc.key || '|bar', cc.name, cc.image_url, cc.title, cc.sort_order, cc.tab, cc.is_hidden
+      FROM category_content cc
+     WHERE cc.key NOT LIKE '%|bar'
+       AND EXISTS (SELECT 1 FROM products p JOIN categories c ON c.id = p.category_id
+                    WHERE p.source <> 'main' AND btrim(regexp_replace(replace(lower(c.name), 'ё', 'е'), '[^a-zа-я0-9]+', ' ', 'g')) = cc.key)
+       AND NOT EXISTS (SELECT 1 FROM products p JOIN categories c ON c.id = p.category_id
+                        WHERE p.source = 'main' AND btrim(regexp_replace(replace(lower(c.name), 'ё', 'е'), '[^a-zа-я0-9]+', ' ', 'g')) = cc.key)
+    ON CONFLICT (key) DO NOTHING` },
+  // Старые данные: оставить по одному отзыву на визит, иначе уникальный индекс не создастся
+  { name: 'visit_feedback_dedupe', soft: true, sql: `
+    DELETE FROM visit_feedback a USING visit_feedback b
+     WHERE a.session_id = b.session_id AND (a.created_at, a.id::text) > (b.created_at, b.id::text)` },
   // Онлайн-оплат на визит может быть несколько (гости платят каждый за себя) — двойную запись одного
   // платежа исключает уникальный invoice_id. Прежний индекс «одна успешная оплата на визит» ломал оплату
   // второго гостя: деньги списаны, а платёж не засчитан. Оплата официанту (закрытие счёта) — одна на визит.
-  'DROP INDEX IF EXISTS idx_table_payments_one_completed',
-  `UPDATE table_payments a SET status = 'duplicate' FROM table_payments b
+  { name: 'table_payments_drop_one_completed', sql: 'DROP INDEX IF EXISTS idx_table_payments_one_completed' },
+  { name: 'table_payments_dedupe_waiter', soft: true, sql: `
+    UPDATE table_payments a SET status = 'duplicate' FROM table_payments b
      WHERE a.session_id = b.session_id AND a.status = 'completed' AND b.status = 'completed'
        AND a.method <> 'cloudpayments' AND b.method <> 'cloudpayments'
-       AND (a.created_at, a.id::text) > (b.created_at, b.id::text)`,
-  // Поиск блюда по ID из iiko в тексте (карточки админки, стоп-лист, кассы) — по индексу, а не перебором
-  'CREATE INDEX IF NOT EXISTS idx_products_iiko_text ON products ((iiko_id::text))',
+       AND (a.created_at, a.id::text) > (b.created_at, b.id::text)` },
   // Стоп-лист по кассе и размеру: старый ключ (точка + товар) смешивал кухню и бар
-  'ALTER TABLE stop_lists DROP CONSTRAINT IF EXISTS stop_lists_pkey',
-  'CREATE UNIQUE INDEX IF NOT EXISTS idx_stop_lists_key ON stop_lists(restaurant_id, source, product_id, size_key)',
-  // Онлайн-оплаты до учёта по строкам: строки, отправленные до платежа, помечаем им оплаченными (повторный запуск ничего не меняет)
-  `UPDATE table_order_items i SET paid_payment_id = p.id FROM table_payments p
+  { name: 'stop_lists_drop_pkey', sql: 'ALTER TABLE stop_lists DROP CONSTRAINT IF EXISTS stop_lists_pkey' },
+  // Онлайн-оплаты до учёта по строкам: строки, отправленные до платежа, помечаем им оплаченными
+  { name: 'order_items_paid_payment_backfill', soft: true, sql: `
+    UPDATE table_order_items i SET paid_payment_id = p.id FROM table_payments p
      WHERE p.session_id = i.session_id AND p.method = 'cloudpayments' AND p.status = 'completed'
        AND i.paid_payment_id IS NULL AND i.is_locked AND COALESCE(i.source, 'main') = 'main' AND i.sent_at <= p.created_at
        AND (p.guest_ids IS NULL OR i.guest_id::text IN (SELECT jsonb_array_elements_text(p.guest_ids)))
-       AND NOT EXISTS (SELECT 1 FROM table_payments q WHERE q.item_ids IS NOT NULL AND q.session_id = p.session_id)`,
+       AND NOT EXISTS (SELECT 1 FROM table_payments q WHERE q.item_ids IS NOT NULL AND q.session_id = p.session_id)` },
   // Вебхуки CloudPayments: одна транзакция — один платёж. Старые дубли (и пустые строки) не мешают индексу:
   // пустое → NULL, у повторов номер получает суффикс «#dup-…» (след в базе остаётся)
-  `UPDATE table_payments SET transaction_id = NULL WHERE transaction_id = ''`,
-  `UPDATE table_payments a SET transaction_id = LEFT(a.transaction_id, 50) || '#dup-' || LEFT(a.id::text, 8)
-     FROM table_payments b
+  { name: 'table_payments_transaction_unique', soft: true, sql: `
+    UPDATE table_payments SET transaction_id = NULL WHERE transaction_id = '';
+    UPDATE table_payments a SET transaction_id = LEFT(a.transaction_id, 50) || '#dup-' || LEFT(a.id::text, 8)
+      FROM table_payments b
      WHERE a.transaction_id IS NOT NULL AND a.transaction_id = b.transaction_id
-       AND (a.created_at, a.id::text) > (b.created_at, b.id::text)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_table_payments_transaction
-     ON table_payments(transaction_id) WHERE transaction_id IS NOT NULL`,
+       AND (a.created_at, a.id::text) > (b.created_at, b.id::text);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_table_payments_transaction
+      ON table_payments(transaction_id) WHERE transaction_id IS NOT NULL;` },
   // Не больше одного свежего счёта на один набор строк визита (вторая линия защиты от дублей счетов)
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_table_payments_pending_lines
-     ON table_payments(session_id, lines_key) WHERE status = 'pending' AND lines_key IS NOT NULL`,
+  { name: 'table_payments_pending_lines_unique', soft: true, sql: `
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_table_payments_pending_lines
+      ON table_payments(session_id, lines_key) WHERE status = 'pending' AND lines_key IS NOT NULL` },
+  // TIMESTAMP → TIMESTAMPTZ: прежние значения записаны по часовому поясу сервера БД (NOW() в сессии) — так и читаем.
+  // Новые базы создаются уже с поясом, шаг трогает только колонки, которые остались без него.
+  { name: 'timestamptz_v1', fn: convertTimestamps },
+];
+
+const TIMESTAMP_COLUMNS = [
+  ['cities', 'created_at'], ['restaurants', 'created_at'], ['categories', 'created_at'], ['products', 'created_at'],
+  ['settings', 'updated_at'], ['restaurant_table_cache', 'updated_at'],
+  ['table_sessions', 'created_at'], ['table_sessions', 'updated_at'],
+  ['table_order_items', 'created_at'], ['table_order_items', 'updated_at'], ['table_order_items', 'ready_notified_at'],
+  ['table_order_items', 'ready_wait_notified_at'], ['table_order_items', 'sent_at'], ['table_order_items', 'served_at'],
+];
+
+async function convertTimestamps(client) {
+  for (const [table, col] of TIMESTAMP_COLUMNS) {
+    const { rows } = await client.query(
+      `SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = $1 AND column_name = $2 AND data_type = 'timestamp without time zone'`,
+      [table, col],
+    );
+    if (!rows.length) continue;
+    await client.query(`ALTER TABLE ${table} ALTER COLUMN ${col} TYPE TIMESTAMPTZ USING ${col} AT TIME ZONE current_setting('TimeZone')`);
+    console.log(`  timestamptz: ${table}.${col}`);
+  }
+}
+
+// Индексы. Уникальные на старых данных могут не создаться из-за дублей — не валим миграцию, но предупреждаем громко
+// (без такого индекса защита от дублей не работает: найдите дубли и создайте индекс вручную).
+const SOFT_INDEXES = [
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_visit_feedback_session ON visit_feedback(session_id)',
+  // Поиск блюда по ID из iiko в тексте (карточки админки, стоп-лист, кассы) — по индексу, а не перебором
+  'CREATE INDEX IF NOT EXISTS idx_products_iiko_text ON products ((iiko_id::text))',
+  'CREATE UNIQUE INDEX IF NOT EXISTS idx_stop_lists_key ON stop_lists(restaurant_id, source, product_id, size_key)',
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_table_payments_one_waiter
      ON table_payments(session_id) WHERE status = 'completed' AND method <> 'cloudpayments'`,
+  // Внешние ключи и выборки по гостю / по времени
+  'CREATE INDEX IF NOT EXISTS idx_table_sessions_guest ON table_sessions(guest_id)',
+  'CREATE INDEX IF NOT EXISTS idx_table_order_items_guest ON table_order_items(guest_id)',
+  'CREATE INDEX IF NOT EXISTS idx_guests_fuji_user ON guests(fuji_user_id)',
+  'CREATE INDEX IF NOT EXISTS idx_guest_push_guest ON guest_push_subscriptions(guest_id)',
+  'CREATE INDEX IF NOT EXISTS idx_table_sessions_restaurant_created ON table_sessions(restaurant_id, created_at)',
+  'CREATE INDEX IF NOT EXISTS idx_visit_feedback_created ON visit_feedback(created_at DESC)',
+  // Вебхук iiko и импорт открытых заказов ищут визит по ID заказа iiko: главный заказ, строки и дополнительные заказы (iiko_orders)
+  'CREATE INDEX IF NOT EXISTS idx_table_sessions_iiko_order ON table_sessions(iiko_order_id) WHERE iiko_order_id IS NOT NULL',
+  'CREATE INDEX IF NOT EXISTS idx_table_order_items_iiko_order ON table_order_items(iiko_order_id) WHERE iiko_order_id IS NOT NULL',
+  `CREATE INDEX IF NOT EXISTS idx_table_sessions_iiko_orders_gin
+     ON table_sessions USING GIN ((jsonb_path_query_array(iiko_orders, '$.*.orderId')) jsonb_path_ops)`,
 ];
+
+/** Громкое предупреждение: в журнал деплоя и (если настроено) в Telegram. */
+async function warnLoud(text) {
+  const bar = '!'.repeat(72);
+  console.warn(`\n${bar}\n!!! МИГРАЦИЯ: ${text}\n${bar}\n`);
+  try {
+    const { sendAlert } = await import('../lib/alerts.js');
+    await sendAlert('migrate', `Миграция БД: ${text}`);
+  } catch { /* уведомление необязательно */ }
+}
+
+async function runSteps(pool) {
+  // Одна миграция за раз (два деплоя или рестарт параллельно): блокировка держится на отдельном соединении
+  const client = await pool.connect();
+  try {
+    await client.query('SELECT pg_advisory_lock(727001)');
+    const { rows } = await client.query('SELECT name FROM schema_steps');
+    const done = new Set(rows.map((r) => r.name));
+    for (const step of STEPS) {
+      if (done.has(step.name)) continue;
+      try {
+        await client.query('BEGIN');
+        if (step.fn) await step.fn(client); else await client.query(step.sql);
+        await client.query('INSERT INTO schema_steps (name) VALUES ($1) ON CONFLICT DO NOTHING', [step.name]);
+        await client.query('COMMIT');
+        console.log(`step: ${step.name} — выполнен`);
+      } catch (e) {
+        await client.query('ROLLBACK').catch(() => {});
+        if (!step.soft) throw new Error(`шаг «${step.name}»: ${e.message}`);
+        await warnLoud(`шаг «${step.name}» не выполнен (${e.message}); повторится при следующей миграции`);
+      }
+    }
+    await client.query('SELECT pg_advisory_unlock(727001)');
+  } finally {
+    client.release();
+  }
+}
 
 async function seedDefaults(pool) {
   const { rows: rc } = await pool.query('SELECT COUNT(*)::int AS n FROM restaurants');
@@ -732,8 +842,11 @@ async function migrate() {
   await ensureDatabase();
   const { default: pool } = await import('./pool.js');
   await pool.query(SCHEMA);
+  await runSteps(pool);
   for (const sql of SOFT_INDEXES) {
-    try { await pool.query(sql); } catch (e) { console.warn('index skipped:', e.message); }
+    try { await pool.query(sql); } catch (e) {
+      await warnLoud(`индекс не создан: ${sql.replace(/\s+/g, ' ').slice(0, 110)} — ${e.message}`);
+    }
   }
   await seedDefaults(pool);
   console.log('Migration complete.');

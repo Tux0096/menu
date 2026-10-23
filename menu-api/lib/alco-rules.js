@@ -24,7 +24,7 @@ const validTz = (tz) => {
 };
 
 /** Правила из БД/запроса → { enabled, from, to, tz, text, requireAgeConfirm, requireDocCheck }; пустое или битое — по умолчанию. */
-export function normalizeAlcoRules(raw) {
+export function normalizeAlcoRules(raw, fallbackTz = DEFAULT_TZ) {
   const r = raw && typeof raw === 'object' ? raw : {};
   const from = toMinutes(r.from);
   const to = toMinutes(r.to);
@@ -33,7 +33,7 @@ export function normalizeAlcoRules(raw) {
     enabled: r.enabled !== false,
     from: hours ? fmt(from) : '',
     to: hours ? fmt(to) : '',
-    tz: typeof r.tz === 'string' && r.tz && validTz(r.tz) ? r.tz : DEFAULT_TZ,
+    tz: typeof r.tz === 'string' && r.tz && validTz(r.tz) ? r.tz : (fallbackTz && validTz(fallbackTz) ? fallbackTz : DEFAULT_TZ),
     text: String(r.text ?? '').trim().slice(0, TEXT_MAX),
     requireAgeConfirm: r.requireAgeConfirm !== false,
     requireDocCheck: r.requireDocCheck === true,
@@ -41,7 +41,7 @@ export function normalizeAlcoRules(raw) {
 }
 
 /** Проверка правил из админки: 400 с понятным текстом вместо молчаливой подмены. */
-export function validateAlcoRules(raw) {
+export function validateAlcoRules(raw, fallbackTz = DEFAULT_TZ) {
   if (!raw || typeof raw !== 'object') throw httpError(400, 'Нет правил продажи алкоголя');
   const hasFrom = String(raw.from ?? '').trim() !== '';
   const hasTo = String(raw.to ?? '').trim() !== '';
@@ -49,7 +49,7 @@ export function validateAlcoRules(raw) {
   if (hasFrom && (toMinutes(raw.from) == null || toMinutes(raw.to) == null)) throw httpError(400, 'Время — в формате ЧЧ:ММ, например 10:00');
   if (raw.tz && !validTz(raw.tz)) throw httpError(400, 'Неизвестный часовой пояс');
   if (String(raw.text ?? '').length > TEXT_MAX) throw httpError(400, `Текст правил — не длиннее ${TEXT_MAX} символов`);
-  return normalizeAlcoRules(raw);
+  return normalizeAlcoRules(raw, fallbackTz);
 }
 
 /** Попадает ли момент в часы продажи. Окно через полночь (22:00–02:00) — одно окно; «с 10:00 до 10:00» — весь день. */

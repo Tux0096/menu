@@ -8,6 +8,7 @@ import { httpError, securityHeaders, sendError } from './lib/http.js';
 import { ADMIN_WEB_DIR, MEDIA_DIR, WEB_DIR } from './lib/paths.js';
 import { guestPage } from './lib/guest-page.js';
 import { isIikoDemo } from './iiko-client.js';
+import { initMonitoring } from './lib/monitor.js';
 import { isLlmEnabled } from './services/ai-llm.js';
 import { startBackgroundJobs } from './services/background-jobs.js';
 import { encryptStoredPaySecrets } from './services/payments.js';
@@ -18,6 +19,8 @@ import guestRoutes from './routes/guest.js';
 import staffRoutes from './routes/staff.js';
 import adminRoutes from './routes/admin.js';
 import legacyRoutes from './routes/legacy.js';
+
+await initMonitoring(); // обработчики unhandledRejection/uncaughtException, Sentry (SENTRY_DSN)
 
 const app = express();
 const PORT = process.env.PORT || 3101;

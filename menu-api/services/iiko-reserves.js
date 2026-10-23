@@ -15,7 +15,7 @@ import pool from '../db/pool.js';
 import { getReservesByIds, getReservesWorkload, getRestaurantSections, asBackground, iikoCoolingDown, isIikoDemo, withIikoCreds } from '../iiko-client.js';
 import { tableNumbersBySections } from '../lib/iiko-order-sync.js';
 import {
-  collectReserves, collectStatuses, formatIikoTime, reserveWindow, sectionIdsOf,
+  collectReserves, collectStatuses, formatIikoTime, reserveTz, reserveWindow, sectionIdsOf,
 } from '../lib/iiko-reserve-sync.js';
 import { getSource } from './sources.js';
 import { applyStatuses, cancelMissing, processReserves, upsertReserves } from './reservations.js';
@@ -57,9 +57,10 @@ async function loadRestaurant(restaurant) {
       note(restaurant, { ok: false, seen: 0, sections: 0, error: 'iiko не отдал залы точки (reserve/available_restaurant_sections)' });
       return;
     }
-    const w = reserveWindow();
-    const response = await getReservesWorkload(sectionIds, formatIikoTime(w.from), formatIikoTime(w.to));
-    const list = collectReserves(response);
+    const tz = reserveTz(restaurant); // время брони в iiko — местное время точки
+    const w = reserveWindow(new Date(), tz);
+    const response = await getReservesWorkload(sectionIds, formatIikoTime(w.from, tz), formatIikoTime(w.to, tz));
+    const list = collectReserves(response, { tz });
     seen = list.length;
     await upsertReserves(restaurant, list, map);
     await cancelMissing(restaurant.id, w);

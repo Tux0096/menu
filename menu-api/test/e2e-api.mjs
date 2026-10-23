@@ -781,7 +781,7 @@ assert.equal(r.status, 401); step('токен персонала в адресе
     const sid2 = t2.sessionId;
     assert.equal(t2.waiterId, null); assert.equal(t2.waiterName, null);
     const mine = (list) => list.filter((n) => n.session_id === sid2);
-    const wn = (who) => api('GET', '/api/v1/waiter/notifications?restaurant=novo-sadovaya&limit=200', null, who).then((x) => ok(x, 'notes'));
+    const wn = (who) => api('GET', '/api/v1/waiter/notifications?restaurant=novo-sadovaya&limit=200', null, who).then((x) => { const d = ok(x, 'notes'); return Array.isArray(d) ? d : d.items; });
     assert.ok(mine(await wn(WA)).some((n) => n.type === 'cart_ready') && mine(await wn(WB)).some((n) => n.type === 'cart_ready'));
     step('стол без официанта («Общие»): новый заказ виден обоим официантам');
     // короткое событие вместо всего заказа

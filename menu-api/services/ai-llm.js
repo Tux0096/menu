@@ -10,6 +10,8 @@
  * При таймауте/ошибке вызывающий код использует мгновенный keyword-подбор (fallback по ТЗ).
  */
 import axios from 'axios';
+import pool from '../db/pool.js';
+import { sendAlert } from '../lib/alerts.js';
 
 const OPENROUTER_URL = process.env.OPENROUTER_URL || 'https://openrouter.ai/api/v1/chat/completions';
 const MODEL = process.env.OPENROUTER_MODEL || 'openai/gpt-4o-mini';
@@ -99,24 +101,62 @@ const SYSTEM_RULES = `Ты — AI-официант японского ресто
  * @param {object[]} products — доступные блюда (без стоп-листа)
  * @returns {Promise<{answer: string, picks: {product, reason, score, qty}[]} | null>}
  */
-// Дневной бюджет платных вызовов модели: сверх него — мгновенный подбор без LLM (гость ответ всё равно получит)
+// Дневной бюджет платных вызовов модели хранится в БД (ai_llm_usage: день × «total» / «guest:…»): переживает перезапуск
+// сервера и деплой. Сверх лимита сети (AI_LLM_DAILY_LIMIT) или лимита гостя (AI_LLM_GUEST_DAILY_LIMIT, по умолчанию 40) —
+// мгновенный подбор без LLM (гость ответ всё равно получит). На 80% и 100% лимита сети — запись в журнал и оповещение в Telegram.
 const DAILY_LIMIT = parseInt(process.env.AI_LLM_DAILY_LIMIT || '3000', 10);
-const budget = { day: '', used: 0 };
-function takeBudget() {
-  const day = new Date().toISOString().slice(0, 10);
-  if (budget.day !== day) { budget.day = day; budget.used = 0; }
-  if (budget.used >= DAILY_LIMIT) {
-    if (budget.used === DAILY_LIMIT) console.warn(`AI: дневной лимит ${DAILY_LIMIT} запросов к модели исчерпан — до полуночи UTC подбор без LLM`);
-    budget.used += 1;
-    return false;
+const GUEST_LIMIT = parseInt(process.env.AI_LLM_GUEST_DAILY_LIMIT || '40', 10);
+const memory = { day: '', total: 0, guests: new Map() }; // запасной счёт, если БД недоступна
+
+const bump = async (day, scope) => (await pool.query(
+  `INSERT INTO ai_llm_usage (day, scope, count) VALUES ($1, $2, 1)
+   ON CONFLICT (day, scope) DO UPDATE SET count = ai_llm_usage.count + 1 RETURNING count`,
+  [day, scope],
+)).rows[0].count;
+
+function notifyThreshold(count) {
+  const at80 = Math.ceil(DAILY_LIMIT * 0.8);
+  if (count === at80 && at80 < DAILY_LIMIT) {
+    console.warn(`AI: израсходовано 80% дневного лимита запросов к модели (${count} из ${DAILY_LIMIT})`);
+    sendAlert('ai-limit-80', `AI: израсходовано 80% дневного лимита запросов к LLM (${count} из ${DAILY_LIMIT}).`, { gapMs: 0 });
+  } else if (count === DAILY_LIMIT) {
+    console.warn(`AI: дневной лимит ${DAILY_LIMIT} запросов к модели исчерпан — до полуночи UTC подбор без LLM`);
+    sendAlert('ai-limit-100', `AI: дневной лимит запросов к LLM (${DAILY_LIMIT}) исчерпан — до полуночи UTC подбор без модели.`, { gapMs: 0 });
   }
-  budget.used += 1;
-  return true;
 }
 
-export async function llmSuggest(query, products, { limit = 5, guest = null } = {}) {
+/** Взять один вызов модели из бюджета. key — гость/адрес (лимит на гостя); false — лимит исчерпан. */
+export async function takeBudget(key = null) {
+  const day = new Date().toISOString().slice(0, 10);
+  try {
+    if (key) {
+      const mine = await bump(day, `guest:${String(key).slice(0, 80)}`);
+      if (mine > GUEST_LIMIT) {
+        if (mine === GUEST_LIMIT + 1) console.warn(`AI: гость ${String(key).slice(0, 12)}… исчерпал дневной лимит ${GUEST_LIMIT} запросов к модели`);
+        return false;
+      }
+    }
+    const total = await bump(day, 'total');
+    if (total === 1) pool.query("DELETE FROM ai_llm_usage WHERE day < CURRENT_DATE - 7").catch(() => {});
+    notifyThreshold(total);
+    return total <= DAILY_LIMIT;
+  } catch (e) {
+    console.warn('AI: счётчик в БД недоступен, считаю в памяти:', e.message);
+    if (memory.day !== day) { memory.day = day; memory.total = 0; memory.guests.clear(); }
+    if (key) {
+      const mine = (memory.guests.get(key) || 0) + 1;
+      memory.guests.set(key, mine);
+      if (mine > GUEST_LIMIT) return false;
+    }
+    memory.total += 1;
+    notifyThreshold(memory.total);
+    return memory.total <= DAILY_LIMIT;
+  }
+}
+
+export async function llmSuggest(query, products, { limit = 5, guest = null, limitKey = null } = {}) {
   if (!isLlmEnabled() || !products.length) return null;
-  if (!takeBudget()) return null;
+  if (!(await takeBudget(limitKey))) return null;
   const { list, text } = buildMenu(products);
 
   // Имя, аллергены и история заказов уходят в OpenRouter (за рубеж) только с отдельного согласия гостя (guests.ai_consent);
