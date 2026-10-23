@@ -328,8 +328,7 @@ async function setAll(visible: boolean) {
                 :key="t.value"
                 type="button"
                 class="rounded-full px-3 py-1 text-xs font-semibold ring-2 transition"
-                :class="tags.includes(t.value) ? 'ring-brand-500' : 'opacity-60 ring-transparent hover:opacity-100'"
-                :style="{ background: t.bg, color: t.color }"
+                :class="[t.cls, tags.includes(t.value) ? 'ring-brand-500' : 'opacity-60 ring-transparent hover:opacity-100']"
                 :aria-pressed="tags.includes(t.value)"
                 @click="toggleTag(t.value)"
               >
@@ -400,7 +399,7 @@ async function setAll(visible: boolean) {
         <div ref="phoneBox" class="flex min-h-0 w-full flex-1 items-start justify-center">
           <div :style="{ width: `${PHONE.w * phoneScale}px`, height: `${PHONE.h * phoneScale}px` }" class="shrink-0">
             <div
-              class="origin-top-left overflow-hidden rounded-[54px] border-[12px] border-[#2b2523] bg-white shadow-2xl"
+              class="origin-top-left overflow-hidden rounded-[54px] border-[12px] border-bezel bg-white shadow-2xl"
               :style="{ width: `${PHONE.w}px`, height: `${PHONE.h}px`, transform: `scale(${phoneScale})` }"
             >
               <iframe ref="previewFrame" :src="previewSrc" title="Превью карточки блюда" class="block h-full w-full" @load="sendPreview" />

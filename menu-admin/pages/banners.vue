@@ -291,7 +291,7 @@ async function toggleActive(b: Banner) {
                 <div class="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent" />
                 <div class="absolute bottom-2 left-3 right-3 text-white">
                   <div class="truncate text-sm font-semibold">{{ form.title || 'Заголовок баннера' }}</div>
-                  <div v-if="form.text" class="truncate text-[11px] opacity-90">{{ form.text }}</div>
+                  <div v-if="form.text" class="truncate text-2xs opacity-90">{{ form.text }}</div>
                 </div>
               </div>
               <div class="mt-3 space-y-1.5">

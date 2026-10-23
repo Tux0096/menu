@@ -268,7 +268,7 @@ const rating = computed(() => {
               <div class="min-w-0 flex-1">
                 <div class="truncate text-sm">
                   {{ (t.guests ?? []).map((g) => g.name).join(', ') || t.guest?.name || (t.openedInIiko ? 'Заказ на кассе' : 'Гость') }}
-                  <span v-if="t.openedInIiko" class="ml-1 rounded-md bg-brand-50 px-1.5 py-0.5 text-[11px] font-medium text-slate-600" title="Заказ открыт официантом на кассе iiko">открыт на кассе</span>
+                  <span v-if="t.openedInIiko" class="ml-1 rounded-md bg-brand-50 px-1.5 py-0.5 text-2xs font-medium text-slate-600" title="Заказ открыт официантом на кассе iiko">открыт на кассе</span>
                 </div>
                 <div class="truncate text-xs" :class="t.waiterId ? 'text-slate-500' : 'font-medium text-amber-700'">
                   {{ t.waiterId ? `Официант: ${t.waiterName || '—'}` : 'без официанта' }}

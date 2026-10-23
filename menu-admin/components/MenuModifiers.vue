@@ -140,7 +140,7 @@ const rule = (g: ModGroup) => [
           </div>
           <div class="min-w-0 flex-1">
             <UInput :model-value="i.title" size="sm" :placeholder="i.auto" maxlength="120" :aria-label="`Название варианта ${i.iikoName}`" @update:model-value="(v: string) => setItemTitle(i, v)" />
-            <div class="mt-0.5 truncate text-[11px] text-slate-500">
+            <div class="mt-0.5 truncate text-2xs text-slate-500">
               {{ i.price ? `+${i.price} ₽` : 'без доплаты' }}<template v-if="i.title"> · в iiko: «{{ i.iikoName }}»</template>
             </div>
           </div>

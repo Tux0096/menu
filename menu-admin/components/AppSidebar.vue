@@ -76,7 +76,7 @@ const initials = computed(() => {
 
     <!-- Ресторан: все разделы показывают данные выбранного -->
     <div v-if="!collapsed && restaurants.list.length" class="px-3 pb-3">
-      <label class="mb-1 block px-1 text-[11px] font-medium uppercase tracking-wider text-brand-300" for="sidebar-restaurant">Ресторан</label>
+      <label class="mb-1 block px-1 text-2xs font-medium uppercase tracking-wider text-brand-300" for="sidebar-restaurant">Ресторан</label>
       <USelect
         id="sidebar-restaurant"
         :model-value="restaurants.slug"
@@ -89,7 +89,7 @@ const initials = computed(() => {
 
     <nav class="flex-1 overflow-y-auto px-3 pb-4" aria-label="Разделы">
       <div v-for="group in groups" :key="group.key" class="mt-3 first:mt-0">
-        <div v-if="group.title && !collapsed && !(group.items.length === 1 && group.items[0]!.label === group.title)" class="px-3 pb-1.5 pt-2 text-[11px] font-medium uppercase tracking-wider text-brand-300">
+        <div v-if="group.title && !collapsed && !(group.items.length === 1 && group.items[0]!.label === group.title)" class="px-3 pb-1.5 pt-2 text-2xs font-medium uppercase tracking-wider text-brand-300">
           {{ group.title }}
         </div>
         <div v-else-if="group.title" class="mx-3 my-2 border-t border-white/10" :class="!collapsed && 'mt-3'" />
@@ -115,7 +115,7 @@ const initials = computed(() => {
                   <span class="flex-1 truncate">{{ item.label }}</span>
                   <span
                     v-if="badgeValue(item)"
-                    class="rounded-full bg-red-500 px-2 py-0.5 text-[11px] font-semibold text-white"
+                    class="rounded-full bg-red-500 px-2 py-0.5 text-2xs font-semibold text-white"
                     :title="`В стоп-листе: ${badgeValue(item)}`"
                   >{{ badgeValue(item) }}</span>
                 </template>
